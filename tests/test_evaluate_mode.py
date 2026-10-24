@@ -20,8 +20,9 @@ from composer.pipeline import run_mode as run_mode_mod
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM
 from composer.pipeline.modes import (
-    ModeContext, ModeResult, RunModeImpl, RunModeLoader, load_run_mode,
+    ModeContext, ModeResult, ModeSupport, ProjectBuild, RunModeImpl, RunModeLoader, load_run_mode,
 )
+from composer.prover.core import ProverOptions
 from composer.pipeline.plugin_api import AnyEcosystem, ForEcosystem
 from composer.pipeline.plugins import PLUGIN_ENTRY_POINT_GROUP
 from composer.pipeline.run_mode import (
@@ -258,15 +259,26 @@ class _Unit:
     def feature_json(self) -> dict: return {}
 
 
+_OPTS = ProverOptions(app="evm")
+
+
 class _Prepared:
     main = "main-unit"
 
-    def __init__(self) -> None:
+    def __init__(self, build: ProjectBuild | None = None) -> None:
         self.prepared = 0
+        self.external = 0
+        self._build = build if build is not None else ProjectBuild(
+            succeeded=True, compilation_config={"solc": "solc8.28"}, solc_versions=["solc8.28"],
+        )
 
     async def prepare_formalization(self, _run):
         self.prepared += 1
         raise AssertionError("an external mode must never start prepare_formalization")
+
+    async def prepare_external_mode(self, _run):
+        self.external += 1
+        return ModeSupport(build=self._build, prover_options=_OPTS)
 
 
 class _Backend:
@@ -274,8 +286,8 @@ class _Backend:
     core_phases = {"analysis": 1, "extraction": 2, "formalization": 3, "report": 4}
     backend_guidance = "guidance"
 
-    def __init__(self) -> None:
-        self.prepared = _Prepared()
+    def __init__(self, build: ProjectBuild | None = None) -> None:
+        self.prepared = _Prepared(build)
         self.artifact_store = _Store()
 
     async def preflight(self, _run): return None
@@ -357,6 +369,7 @@ async def test_evaluate_hands_the_batches_to_the_mode_and_writes_its_report(monk
     result = await run_pipeline(backend, run, max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
 
     assert backend.prepared.prepared == 0
+    assert backend.prepared.external == 1
     assert events == ["constructed", "enter", "exit"]
 
     [ctx] = impl.seen
@@ -368,6 +381,11 @@ async def test_evaluate_hands_the_batches_to_the_mode_and_writes_its_report(monk
     assert [f.unit.display_name for f in ctx.extraction_failures] == ["farms"]
     assert ctx.artifact_store is backend.artifact_store
     assert ctx.active_plugins == []
+    # The backend's build and prover options reach the mode, and its work is tagged with the
+    # formalization phase when the backend names no phase of its own for it.
+    assert ctx.project_build is not None and ctx.project_build.solc_versions == ["solc8.28"]
+    assert ctx.prover_options is _OPTS
+    assert ctx.phase == 3
 
     # The driver stamps the run's mode on the report the mode returned, then writes it.
     [written] = backend.artifact_store.reports
@@ -423,3 +441,51 @@ async def test_the_driver_refuses_an_external_mode_without_its_implementation():
         await core.run_pipeline_inner(
             _Backend(), _Run(RunMode.EVALUATE), None, ecosystem=EVM,  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_build_is_reported_and_the_mode_still_runs(monkeypatch):
+    impl = _Impl(failures=["3 confs did not compile"])
+    _install(monkeypatch, _EntryPoint("evaluate", _loader_for(impl, [])))
+    _patch_front_half(monkeypatch, {"deposits": ["a"]})
+
+    build = ProjectBuild(succeeded=False, error="solc8.30 is not installed")
+    result = await run_pipeline(_Backend(build), _Run(RunMode.EVALUATE), max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
+
+    [ctx] = impl.seen
+    assert ctx.project_build is build
+    assert result.failures == ["project build: solc8.30 is not installed", "3 confs did not compile"]
+    # The mode's verdict, not the build, decides the exit status.
+    assert not result.all_failed
+
+
+@pytest.mark.asyncio
+async def test_the_backends_external_mode_phase_tags_the_modes_work(monkeypatch):
+    impl = _Impl()
+    _install(monkeypatch, _EntryPoint("evaluate", _loader_for(impl, [])))
+    _patch_front_half(monkeypatch, {"deposits": ["a"]})
+
+    backend = _Backend()
+    backend.core_phases = {**_Backend.core_phases, "external_mode": 7}  # type: ignore[assignment]
+    await run_pipeline(backend, _Run(RunMode.EVALUATE), max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
+    assert impl.seen[0].phase == 7
+
+
+@pytest.mark.asyncio
+async def test_a_backend_with_nothing_to_build_hands_over_nothing():
+    class _Plain(core.PreparedSystem[Any, Any, Any]):
+        async def prepare_formalization(self, run):  # pragma: no cover - never called
+            raise AssertionError
+
+    support = await _Plain(main="m").prepare_external_mode(_Run(RunMode.EVALUATE))  # type: ignore[arg-type]
+    assert support == ModeSupport()
+
+
+def test_the_failure_headline_fits_the_mode():
+    evaluate = core.CorePipelineResult(1, 1, [], [], RunMode.EVALUATE, mode_succeeded=False)
+    assert evaluate.all_failed
+    assert evaluate.failure_headline == "RUN FAILED: the evaluation produced no usable result."
+    assert "every component" not in evaluate.failure_headline
+
+    formalizing = core.CorePipelineResult(1, 1, [], [], RunMode.COMPREHENSIVE)
+    assert formalizing.failure_headline == "RUN FAILED: every component failed to generate or gave up."

@@ -27,8 +27,9 @@ pre-work, the formalizer itself, per-unit verdicts — is contributed through th
 objects, and never inspected by the driver.
 
 A run in an external mode (``evaluate``; see :mod:`composer.pipeline.modes`) takes the chain only
-as far as ``PreparedSystem`` and extraction. It never calls ``prepare_formalization``: the mode
-implementation receives the extracted batches and returns the report, which the driver writes.
+as far as ``PreparedSystem`` and extraction. It never calls ``prepare_formalization``; it calls
+``PreparedSystem.prepare_external_mode`` (the project build) instead. The mode implementation
+receives the extracted batches and the build, and returns the report, which the driver writes.
 """
 
 import asyncio
@@ -95,7 +96,7 @@ from .plugin_api import (
     PluginToolContext, ProvidedTools,
 )
 from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
-from .modes import ModeContext, RunModeImpl, load_run_mode
+from .modes import ModeContext, ModeSupport, RunModeImpl, load_run_mode
 
 _log = logging.getLogger(__name__)
 
@@ -268,6 +269,13 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         the two a backend returns is its own declared signature, so a backend with no shared artifact
         never mentions staging at all."""
         ...
+
+    async def prepare_external_mode(self, run: PipelineRun) -> ModeSupport:
+        """What a run in an external mode gets from the backend in place of
+        :meth:`prepare_formalization`: the project build and the backend's prover options (see
+        :class:`~composer.pipeline.modes.ModeSupport`). The driver runs it alongside extraction
+        and passes the result to the mode. A backend with nothing to build returns nothing."""
+        return ModeSupport()
 
 
 class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
@@ -579,13 +587,18 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     # An external mode works on the project's own verification artifacts, so the backend's
     # pre-formalization setup (AutoSetup, summaries) is never started: it is the most
     # expensive step of the front half, and its specs and summaries are not what the mode
-    # measures. For the prover backend this also skips the project build, because AutoSetup
-    # is the only step that installs dependencies, picks solc versions and writes the
-    # compilation config, and ``preflight`` does none of it. The mode therefore runs on the
-    # project as checked out, and a conf that needs that build does not compile. See
-    # MODES.md, "Project build".
+    # measures. The backend's ``prepare_external_mode`` runs instead, alongside extraction as
+    # ``prepare_formalization`` would: for the prover backend it builds the project, so the
+    # project's confs compile. A task group, so a failure in either cancels the other.
     if mode_impl is not None:
-        extracted = await _extract()
+        async def _prepare_external_mode() -> ModeSupport:
+            with named_budget_or_nop("formalization_preparation"):
+                return await prepared.prepare_external_mode(run)
+
+        async with asyncio.TaskGroup() as tg:
+            support_task = tg.create_task(_prepare_external_mode())
+            extract_task = tg.create_task(_extract())
+        support, extracted = support_task.result(), extract_task.result()
         return await _hand_off_to_mode(
             mode_impl, backend.artifact_store, run,
             ModeContext(
@@ -593,6 +606,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 batches=extracted.batches, extraction_failures=extracted.failed,
                 threat_model=threat_model, extra_context=extra_context,
                 artifact_store=backend.artifact_store,
+                phase=phases.get("external_mode", phases["formalization"]),
+                project_build=support.build,
+                prover_options=support.prover_options,
                 active_plugins=plugin_manager.plugin_manifest,
             ),
         )
@@ -839,7 +855,8 @@ async def _hand_off_to_mode[P: enum.Enum, H, U: FeatureUnit, FormT: BackendResul
 
     The mode's spend is charged to the formalization cap: it takes the place of formalization in
     the run. The driver stamps the run's mode and plugin manifest onto the report, the way it does
-    for a report it builds itself, so the provenance cannot disagree with the run. Unlike the
+    for a report it builds itself, so the provenance cannot disagree with the run. A failed project
+    build is listed among the run's failures, ahead of the mode's own. Unlike the
     report a formalizing run builds, this one is the run's whole deliverable, so a failure to
     produce or write it fails the run."""
     with named_budget_or_nop("formalization"):
@@ -848,7 +865,12 @@ async def _hand_off_to_mode[P: enum.Enum, H, U: FeatureUnit, FormT: BackendResul
         "run_mode": run.run_mode.value, "active_plugins": ctx.active_plugins,
     })
     store.write_report(report)
+    build_failures = (
+        [f"project build: {ctx.project_build.error or 'failed'}"]
+        if ctx.project_build is not None and not ctx.project_build.succeeded else []
+    )
     failures = [
+        *build_failures,
         *(f"{f.unit.display_name}: {f.error}" for f in ctx.extraction_failures),
         *result.failures,
     ]

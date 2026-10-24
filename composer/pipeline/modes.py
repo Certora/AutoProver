@@ -1,8 +1,10 @@
 """Run modes implemented outside this package.
 
 A run mode in :data:`~composer.pipeline.run_mode.EXTERNAL_MODES` shares the pipeline's front half
-with every other mode (system analysis, ``prepare_system``, property extraction with plugins) and
-then hands what it extracted to an implementation registered under the entry-point group
+with every other mode (system analysis, ``prepare_system``, property extraction with plugins). In
+place of ``prepare_formalization`` the driver runs the backend's ``prepare_external_mode`` (for
+the prover backend: the project build), alongside extraction. It then hands what it extracted to
+an implementation registered under the entry-point group
 :data:`~composer.pipeline.run_mode.MODE_ENTRY_POINT_GROUP`. The driver never runs
 ``prepare_formalization`` or the per-component formalization for such a run. The implementation
 returns the report and its verdict on the run; the driver writes the report and derives the exit
@@ -17,11 +19,13 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, ClassVar, cast
 
 from pydantic import BaseModel, Field
 
 from composer.input.files import Document
+from composer.prover.core import ProverOptions
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.source.report.schema import AutoProverReport
 from composer.spec.system_model import FeatureUnit
@@ -29,6 +33,38 @@ from .plugin_api import PluginScope
 from .plugins import applies_to
 from .ptypes import ExtractedBatch, ExtractionFailure, PipelineRun
 from .run_mode import EXTERNAL_MODES, MODE_ENTRY_POINT_GROUP, RunMode
+
+
+class ProjectBuild(BaseModel):
+    """The project build the driver runs for an external mode before the hand-off.
+
+    A failed build does not stop the run: the mode receives this record and decides what an
+    unbuildable project means for its report."""
+    succeeded: bool
+    #: The compilation settings under which the project compiles: the build keys of a conf
+    #: (``solc`` or ``compiler_map``, ``packages``, the via-ir / optimizer / evm-version keys and
+    #: their per-contract maps), never ``files`` or ``verify``. Empty when the build failed.
+    compilation_config: dict[str, Any] = Field(default_factory=dict)
+    #: Every solc the settings select, spelled as the conf spells it (``solc8.28``). The build
+    #: picks among the compilers installed on the machine; it installs none.
+    solc_versions: list[str] = Field(default_factory=list)
+    #: True when the build rewrote project sources (import fixes) to make the scene compile.
+    sources_patched: bool = False
+    #: The build's full output.
+    log_path: Path | None = None
+    #: Why the build failed. ``None`` when it succeeded.
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class ModeSupport:
+    """What a backend's :meth:`~composer.pipeline.core.PreparedSystem.prepare_external_mode`
+    hands the driver for an external mode, in place of a formalizer."""
+    #: ``None`` for a backend with no build step.
+    build: ProjectBuild | None = None
+    #: The prover options the backend runs with (cloud or local, server, global timeout).
+    #: ``None`` for a backend that runs no prover.
+    prover_options: ProverOptions | None = None
 
 
 @dataclass(frozen=True)
@@ -48,8 +84,16 @@ class ModeContext[P: enum.Enum, H, U: FeatureUnit, Main]:
     extraction_failures: Sequence[ExtractionFailure[U]]
     threat_model: Document | None
     extra_context: Sequence[Document]
-    #: Where the run's deliverables live. The driver writes the returned report through it.
+    #: Where the run's deliverables live. The driver writes the returned report through it;
+    #: the mode writes anything else it delivers through ``write_deliverable``.
     artifact_store: ArtifactStore[Any, Any]
+    #: The backend's phase for the mode's own work: tag the mode's tasks with it.
+    phase: P
+    #: The project build the driver ran before the hand-off, or ``None`` for a backend that has
+    #: no build step.
+    project_build: ProjectBuild | None = None
+    #: The prover options the backend runs with, or ``None`` for a backend that runs no prover.
+    prover_options: ProverOptions | None = None
     #: The plugin manifest the extraction ran with (the same list the report records).
     active_plugins: list[str] = field(default_factory=list)
 
@@ -154,6 +198,8 @@ async def load_run_mode[U: FeatureUnit](
 
 __all__ = [
     "ModeContext",
+    "ModeSupport",
+    "ProjectBuild",
     "ModeResult",
     "RunModeImpl",
     "RunModeLoader",

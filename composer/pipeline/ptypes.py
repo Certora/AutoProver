@@ -3,7 +3,7 @@ import asyncio
 import enum
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, Callable, Awaitable, NamedTuple, TypedDict
+from typing import Protocol, Callable, Awaitable, NamedTuple, NotRequired, TypedDict
 
 from pydantic import BaseModel
 
@@ -95,6 +95,9 @@ class CorePhases[P: enum.Enum](TypedDict):
     extraction: P
     formalization: P
     report: P
+    #: The phase an external run mode's work is tagged with (see ``composer.pipeline.modes``).
+    #: A backend without one has its mode's work tagged ``formalization``, the phase it replaces.
+    external_mode: NotRequired[P]
 
 
 @dataclass(frozen=True)
@@ -228,6 +231,17 @@ class CorePipelineResult[FormT: BackendResult]:
         if self.mode_succeeded is not None:
             return not self.mode_succeeded
         return bool(self.outcomes) and self.n_delivered == 0
+
+    @property
+    def failure_headline(self) -> str:
+        """The end-of-run line every entry point prints when :attr:`all_failed`. A run handed
+        to an external mode formalized nothing, so "every component failed" would misdescribe
+        it; its line names what the mode was for instead."""
+        if self.mode_succeeded is not None:
+            if self.run_mode is RunMode.EVALUATE:
+                return "RUN FAILED: the evaluation produced no usable result."
+            return f"RUN FAILED: the {self.run_mode.value} run reported failure."
+        return "RUN FAILED: every component failed to generate or gave up."
 
 class PhaseBudget(TypedDict):
     """Per-phase spending *caps* (USD). Ceilings, not allotments: they bound

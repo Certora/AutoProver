@@ -13,5 +13,7 @@ DESIGN_DOC_DISCOVERY_TASK_ID = "doc-finder"
 SYSTEM_ANALYSIS_TASK_ID = "system-analysis"
 HARNESS_TASK_ID = "harness"
 AUTOSETUP_TASK_ID = "autosetup"
+#: The project build an external run mode gets in place of AutoSetup.
+PROJECT_BUILD_TASK_ID = "project-build"
 SUMMARIES_TASK_ID = "summaries"
 REPORT_TASK_ID = "report"
