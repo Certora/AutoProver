@@ -94,7 +94,7 @@ class ModeContext[P: enum.Enum, H, U: FeatureUnit, Main]:
     project_build: ProjectBuild | None = None
     #: The prover options the backend runs with, or ``None`` for a backend that runs no prover.
     prover_options: ProverOptions | None = None
-    #: The plugin manifest the extraction ran with (the same list the report records).
+    #: The active-plugin list the extraction ran with (the same list the report records).
     active_plugins: list[str] = field(default_factory=list)
 
 
@@ -181,7 +181,7 @@ async def load_run_mode[U: FeatureUnit](
     duration, or ``None`` for a mode this package implements itself.
 
     Nothing is looked up for the built-in modes, so an installed external mode costs those runs
-    nothing. The mode is not in the plugin manifest and does not enter any cache key."""
+    nothing. The mode is not in the active-plugin list and does not enter any cache key."""
     if mode not in EXTERNAL_MODES:
         yield None
         return

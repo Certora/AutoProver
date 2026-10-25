@@ -854,7 +854,7 @@ async def _hand_off_to_mode[P: enum.Enum, H, U: FeatureUnit, FormT: BackendResul
     """Run an external mode and persist its report.
 
     The mode's spend is charged to the formalization cap: it takes the place of formalization in
-    the run. The driver stamps the run's mode and plugin manifest onto the report, the way it does
+    the run. The driver stamps the run's mode and active-plugin list onto the report, the way it does
     for a report it builds itself, so the provenance cannot disagree with the run. A failed project
     build is listed among the run's failures, ahead of the mode's own. Unlike the
     report a formalizing run builds, this one is the run's whole deliverable, so a failure to

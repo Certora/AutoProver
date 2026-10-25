@@ -111,7 +111,7 @@ Contract:
 * `initialize()` is entered before the pipeline body starts and exited when
   the run returns or raises. It is never entered for another mode, so an
   installed mode costs `comprehensive` and `prioritized` runs nothing.
-* A mode is not a plugin. It is not in the plugin manifest and does not enter
+* A mode is not a plugin. It is not in the active-plugin list and does not enter
   any cache key.
 
 ## `ModeContext`
@@ -130,7 +130,7 @@ dataclass):
 | `phase` | the backend's phase for the mode's work. Tag the mode's tasks with it. The prover backend's is `AutoProvePhase.EVALUATION` ("Evaluation" in the UIs). A backend that names none gives its `formalization` phase |
 | `project_build` | the `ProjectBuild` the driver ran, or `None` for a backend with no build step |
 | `prover_options` | the backend's `ProverOptions` (`app`, `server`: set for a cloud run, `global_timeout`; `cloud`, `cli_args()`), or `None` for a backend that runs no prover |
-| `active_plugins` | the plugin manifest extraction ran with |
+| `active_plugins` | the active-plugin list extraction ran with |
 
 `ProjectBuild` (`composer.pipeline.modes.ProjectBuild`, a pydantic model):
 
