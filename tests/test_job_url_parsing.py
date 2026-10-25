@@ -31,7 +31,7 @@ LEGACY_LINK = f"https://prover.certora.com/output/12345/{JOB_HASH}"
         f"https://app.certora.com/orgs/some-org/jobs/{JOB_UUID.upper()}/report",
         f"https://app.certora.com/orgs/some-org/jobs/{JOB_UUID}/report?tab=rules",
         f"https://prover.certora.com/orgs/some-org/jobs/{JOB_UUID}/report",
-        f"https://vaas-stg.certora.com/orgs/some-org/jobs/{JOB_UUID}/report",
+        f"https://prover.certora.com/orgs/other-org/jobs/{JOB_UUID}/report",
     ],
 )
 def test_app_link_parses_to_the_job_hash(url: str) -> None:
@@ -96,8 +96,8 @@ def test_outputs_url_from_app_link() -> None:
 
 
 def test_outputs_url_keeps_a_prover_host_app_link() -> None:
-    link = f"https://vaas-stg.certora.com/orgs/some-org/jobs/{JOB_HASH}/report"
-    assert to_outputs_url(link) == f"https://vaas-stg.certora.com/v1/domain/jobs/{JOB_HASH}/f/outputs"
+    link = f"https://prover.certora.com/orgs/some-org/jobs/{JOB_HASH}/report"
+    assert to_outputs_url(link) == f"https://prover.certora.com/v1/domain/jobs/{JOB_HASH}/f/outputs"
 
 
 def test_outputs_url_rejects_unknown_hosts() -> None:

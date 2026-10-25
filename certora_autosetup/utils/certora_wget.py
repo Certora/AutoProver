@@ -270,12 +270,15 @@ def run_wget_or_curl(url: str, cookie_map: Dict[str, str], outpath: str, retry_o
 
 # ---------- Utility Function for Direct Invocation ----------
 
-_OUTPUT_URL_RE = re.compile(r"https://(?:prover|vaas-dev|vaas-stg)\.certora\.com/output/(?:\d+/)?([0-9A-Fa-f]+)/?")
+# Subdomains that serve the job API (/v1/domain/jobs/...).
+_PROVER_SUBDOMAINS = "prover|vaas-dev|vaas-stg"
+
+_OUTPUT_URL_RE = re.compile(rf"https://(?:{_PROVER_SUBDOMAINS})\.certora\.com/output/(?:\d+/)?([0-9A-Fa-f]+)/?")
 
 # App report link: /orgs/ORG/jobs/UUID[/report]. The UUID is the job id, written with or without
 # dashes; the job API takes it as 32 lowercase hex characters.
 _APP_REPORT_URL_RE = re.compile(
-    r"https://(?:app|prover|vaas-dev|vaas-stg)\.certora\.com/orgs/[^/]+/jobs/"
+    rf"https://(?:app|{_PROVER_SUBDOMAINS})\.certora\.com/orgs/[^/]+/jobs/"
     r"([0-9A-Fa-f]{8}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{4}-?[0-9A-Fa-f]{12})(?:/report)?/?"
 )
 
