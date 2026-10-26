@@ -186,6 +186,7 @@ def main():
         additional_contracts=args.additional_contracts or [],
         extra_args=extra_args,
         skip_llm=args.skip_llm,
+        skip_llm_summaries=args.skip_llm_summaries,
         force_llm_regenerate=args.force_llm_regenerate,
         stop_after_summaries=args.stop_after_summaries,
         stop_after_compilation_analysis=args.stop_after_compilation_analysis,
@@ -234,7 +235,8 @@ def main():
             requested_profile=args.profile,
             skip_sanity_setup=args.skip_sanity_setup,
             skip_call_resolution=args.skip_call_resolution,
-            skip_proxy_detection=args.skip_proxy_detection,
+            # Proxy detection is an LLM agent with no static fallback.
+            skip_proxy_detection=args.skip_proxy_detection or args.skip_llm,
             skip_harnessing=args.skip_harnessing,
             skip_test_run=args.skip_test_run,
             composer_output=getattr(args, 'composer_setup', None),
