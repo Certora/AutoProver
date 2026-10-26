@@ -210,6 +210,8 @@ Investigated in the Prover's source, and recorded as upstream defects P16 to P19
   512 bytes for an allocation of unknown size. Every `msg!` or `xmsg!` with arguments is one of
   those, and klend's program has 435 logging calls, many of them formatted. One crashed job's sources, rebuilt and resubmitted, failed
   as submitted and succeeded with `-solanaHeapSize 262144`, in 3.5 minutes (P17).
+  Since [EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773), on the Prover's master
+  branch, the overflowing rule's error names the option and a size to pass.
 - **One rule's crash failed the whole job.** The translator's internal errors escape the per-rule
   error handling, so a single overflowing rule discarded every verdict in its unit (P16). That,
   more than the crash itself, is what made each failure expensive. Fixed on the Prover's master
