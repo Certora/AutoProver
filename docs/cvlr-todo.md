@@ -401,7 +401,8 @@ needed, never in a ledger answer.
 
 **L1. Is the starting layer sound?** *Closed. Investigated 2026-09-29 by reading the Prover
 (`EVMVerifier`, `origin/master` a852161573): three items closed, three measured by a Prover run
-(below), and two Prover bugs filed, CERT-10183 and CERT-10184. Still open from it, each marked
+(below), and two Prover bugs filed, CERT-10183 and CERT-10184 (fixed on the Prover's master branch by
+[EVMVerifier#8696](https://github.com/Certora/EVMVerifier/pull/8696)). Still open from it, each marked
 below: a faithful model of a system transfer; a report channel for a unit's assumptions; an
 `inline_for_prover` tool; and two leads, the [3308] at address 1 and multi-field `#[type]`
 summaries.*
@@ -439,7 +440,10 @@ function that *writes* state a rule asserts over, not only one whose result it r
     `TACTranslationError` that fails the whole job, so every rule in the submission loses its
     verdict. Left external, it is reachable, and its writes are dropped (canary VERIFIED, companion
     VIOLATED), as `realloc`'s were. A direct `realloc(n, true)` now reaches the same crash, where
-    before it passed silently. Reported as **CERT-10184**.
+    before it passed silently. Reported as **CERT-10184**, and fixed on the Prover's master branch
+    by [EVMVerifier#8696](https://github.com/Certora/EVMVerifier/pull/8696), which also stopped every memory splitter from dropping a non-stack
+    memset of unknown length, leaving the destination's old contents. **TODO:** inline `resize`,
+    rerun this probe, and update its expected verdicts and the inlining file's comment.
   * **A lamport transfer by `invoke`: the write is dropped.** Reachable, canary VERIFIED, companion
     VIOLATED: after a successful transfer of 2, the payer still has `2^64 - 1`. This is broader than
     the starting layer. `invoke_signed_unchecked` is summarized as its `Result`, and the syscall
@@ -482,8 +486,8 @@ function that *writes* state a rule asserts over, not only one whose result it r
     **TODO, after the tuning-file rework (separate branch):** an `inline_for_prover` tool, so the
     author can act on the list itself instead of only working around it. This widens the action
     space (a channel in the recipe legend, the author and judge prompts), so it should wait until
-    the report shows which gaps recur. Inlining can also crash the whole job (CERT-10184), so the
-    tool needs a way back.
+    the report shows which gaps recur. Inlining can also reach a Prover translation error, as
+    CERT-10184 did, so the tool needs a way back.
   * **Found on the way, fixed:** a rule the Prover decides by static analysis arrives as a bare
     tree-view root, and `composer/prover/results.py` dropped it. The CVLR gate counts only the rules
     it gets verdicts for, so a statically FAILED rule would have let a draft be stamped with "every

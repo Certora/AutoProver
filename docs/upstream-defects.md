@@ -10,7 +10,7 @@ Prover's own source names. P15, P16 and P17 have no tickets and are fixed on mas
 [EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773). Two more Prover bugs,
 CERT-10183 (float comparisons) and CERT-10184 (a memory-partitioning crash on `realloc`'s
 zero-fill), were filed from the starting-layer investigation in [cvlr-todo.md](./cvlr-todo.md) L1
-and are recorded there, not here. P18 and P19 are open as [EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776) and
+and are recorded there, not here; CERT-10184 is fixed on master by [EVMVerifier#8696](https://github.com/Certora/EVMVerifier/pull/8696). P18 and P19 are open as [EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776) and
 [EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777). C1's fix is released as a commit and not yet published (below).
 The rest are not filed, and this document exists so that routing is a decision somebody makes rather than one I guess at, since the
 groups below belong in different places and one of them cannot be public.
