@@ -41,6 +41,8 @@ class AutosetupConfig:
     max_loop_iter: int = 5
     skip_call_resolution: bool = False
     skip_proxy_detection: bool = False
+    # Proxy contract name -> implementation contract names, from --proxy-mapping.
+    proxy_mappings: dict[str, list[str]] = field(default_factory=dict)
     skip_harnessing: bool = False
     skip_test_run: bool = False
     no_strip_contracts: bool = False

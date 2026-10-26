@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 from certora_autosetup.autosetup.autosetup import Autosetup
-from certora_autosetup.autosetup.cli_args import create_parser
+from certora_autosetup.autosetup.cli_args import create_parser, parse_proxy_mappings
 from certora_autosetup.autosetup.types import AutosetupConfig
 from certora_autosetup.cache.cache_fs import get_fs, init_cache_fs
 from certora_autosetup.harnesser.swap import swap_library_main_contract, with_harnessed_library
@@ -148,6 +148,7 @@ def main():
 
     # Parse extra args
     extra_args = shlex.split(args.extra_args) if args.extra_args else []
+    proxy_mappings = parse_proxy_mappings(args.proxy_mapping)
 
     project_root = Path.cwd()
     certora_dir = Path("certora")
@@ -237,6 +238,7 @@ def main():
             skip_call_resolution=args.skip_call_resolution,
             # Proxy detection is an LLM agent with no static fallback.
             skip_proxy_detection=args.skip_proxy_detection or args.skip_llm,
+            proxy_mappings=proxy_mappings,
             skip_harnessing=args.skip_harnessing,
             skip_test_run=args.skip_test_run,
             composer_output=getattr(args, 'composer_setup', None),
