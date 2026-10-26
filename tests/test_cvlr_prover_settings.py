@@ -7,7 +7,7 @@ the prover flags are not on it.
 """
 
 from composer.spec.cvlr.author_tools import AdjustProverConfig
-from composer.spec.cvlr.conf import OptimisticLoop, TunableConf
+from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.state import tuning_history
 
 DRAFT = "#[rule] pub fn rule_a() {}\n"
@@ -59,20 +59,19 @@ def test_a_setting_that_is_already_what_you_asked_for_is_refused():
 def test_optimistic_loop_goes_on_and_the_whole_conf_comes_back():
     out = _adjust(_state(), optimistic_loop=True)
     assert not isinstance(out, str), out
-    # The setting keeps the call's `why`: the judge weighs the setting by it.
-    assert out.update["prover_settings"].optimistic_loop == OptimisticLoop(why=WHY)
+    assert out.update["prover_settings"].optimistic_loop is True
     assert out.update["prover_settings"].loop_iter == 2
     assert '"optimistic_loop": true' in out.update["messages"][0].content
 
 
 def test_optimistic_loop_already_on_is_refused():
-    state = _state(TunableConf(optimistic_loop=OptimisticLoop(why="w")))
+    state = _state(TunableConf(optimistic_loop=True))
     out = _adjust(state, optimistic_loop=True)
     assert isinstance(out, str) and "already on" in out
 
 
-def test_optimistic_loop_goes_off_and_takes_its_reason_with_it():
-    state = _state(TunableConf(optimistic_loop=OptimisticLoop(why="w")))
+def test_optimistic_loop_goes_off():
+    state = _state(TunableConf(optimistic_loop=True))
     out = _adjust(state, optimistic_loop=False)
     assert not isinstance(out, str), out
     assert out.update["prover_settings"] == TunableConf()
@@ -81,9 +80,7 @@ def test_optimistic_loop_goes_off_and_takes_its_reason_with_it():
 def test_two_settings_in_one_call_both_land():
     out = _adjust(_state(), loop_iter=4, optimistic_loop=True)
     assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == TunableConf(
-        loop_iter=4, optimistic_loop=OptimisticLoop(why=WHY)
-    )
+    assert out.update["prover_settings"] == TunableConf(loop_iter=4, optimistic_loop=True)
 
 
 def test_one_refused_setting_lands_neither():
@@ -95,17 +92,16 @@ def test_one_refused_setting_lands_neither():
 
 
 def test_turning_optimistic_loop_on_without_a_reason_is_refused():
-    """The reason is stored with the setting. The conf records only that the setting is on."""
     out = _adjust(_state(), optimistic_loop=True, why="  ")
     assert isinstance(out, str) and "non-empty `why`" in out
 
 
 def test_a_loop_bound_change_does_not_require_a_reason():
-    """A loop bound does not change what a green verdict means, and the call's `why` is not stored."""
+    """A loop bound does not change what a green verdict means."""
     out = _adjust(_state(), loop_iter=4, why="")
     assert not isinstance(out, str), out
     assert out.update["prover_settings"].loop_iter == 4
-    assert out.update["prover_settings"].optimistic_loop is None
+    assert out.update["prover_settings"].optimistic_loop is False
 
 
 def test_a_config_change_invalidates_the_prover_stamp():

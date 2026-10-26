@@ -43,17 +43,6 @@ BASE_CONF: Conf = {
 
 
 @dataclass(frozen=True)
-class OptimisticLoop:
-    """``optimistic_loop`` on, with the author's account of why.
-
-    The setting is unsound: every verdict in the unit depends on it. The account
-    is not part of the conf, so rewording it does not change the stamp.
-    """
-
-    why: str
-
-
-@dataclass(frozen=True)
 class TunableConf:
     """The conf settings the author may change. The defaults are where every unit starts."""
 
@@ -65,7 +54,7 @@ class TunableConf:
     #: count first, then summarize or munge the code that holds the loop, then raise ``loop_iter``,
     #: and finally turn it on only for a trip count that no bound discharges. Once it is on, every
     #: rule in the submission is verified under that assumption.
-    optimistic_loop: OptimisticLoop | None = None
+    optimistic_loop: bool = False
 
 
 def tunable_conf(tunable: TunableConf) -> Conf:
@@ -73,7 +62,7 @@ def tunable_conf(tunable: TunableConf) -> Conf:
     return {
         **BASE_CONF,
         "loop_iter": str(tunable.loop_iter),
-        "optimistic_loop": tunable.optimistic_loop is not None,
+        "optimistic_loop": tunable.optimistic_loop,
     }
 
 

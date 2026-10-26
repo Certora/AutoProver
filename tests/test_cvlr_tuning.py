@@ -18,7 +18,6 @@ from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
 from composer.spec.cvlr.tuning import (
     ENV_FAMILIES,
     INLINING,
-    SUMMARIES,
     SummaryDirective,
     TuningFiles,
     merge_summaries,
@@ -46,21 +45,16 @@ def tuning(tmp_path: Path) -> TuningFiles:
 
 
 def test_the_directive_reaches_the_file_the_conf_names(tuning: TuningFiles):
-    """The directive is in the layer and in the composite the conf names.
-
-    A directive only in the layer would not reach the next submission.
-    """
     tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
-    for path in (tuning.unit_layer_path(SUMMARIES), tuning.composite_path()):
-        assert _DISPLAY in path.read_text(), path
+    assert _DISPLAY in tuning.composite_path().read_text()
 
 
 def test_the_layer_is_rewritten_rather_than_appended_to(tuning: TuningFiles):
-    """Each write replaces the layer. Appending would keep directives the state no longer has."""
+    """Each write replaces the file. Appending would keep directives the state no longer has."""
     tuning.write((SummaryDirective(pattern="^a$", why="w"),))
     tuning.write((SummaryDirective(pattern="^b$", why="w"),))
-    layer = tuning.unit_layer_path(SUMMARIES).read_text()
-    assert "^b$" in layer and "^a$" not in layer
+    composite = tuning.composite_path().read_text()
+    assert "^b$" in composite and "^a$" not in composite
 
 
 def test_the_inlining_family_is_left_alone(tuning: TuningFiles):

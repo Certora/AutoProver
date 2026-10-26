@@ -1,4 +1,4 @@
-"""The author's tools that change what the prover gate checks.
+"""The author's tools that change what the Prover checks.
 
 * ``summarize_for_prover`` replaces a function with an unconstrained stand-in.
 * ``adjust_prover_config`` changes the unit's prover settings.
@@ -22,7 +22,7 @@ from graphcore.tools.schemas import (
 )
 
 from composer.prover.conf import dump_conf
-from composer.spec.cvlr.conf import OptimisticLoop, tunable_conf
+from composer.spec.cvlr.conf import tunable_conf
 from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.ui.tool_display import tool_display
@@ -122,8 +122,7 @@ class AdjustProverConfig(
 
     The list is closed. ``loop_iter`` decides how far the prover unrolls a loop
     and does not change what a green verdict means. ``optimistic_loop`` does,
-    and it applies to every rule in the unit. ``rule_sanity`` and the
-    memory-model flags are not settings here.
+    and it applies to every rule in the unit.
 
     Omit a field to leave it. A call that sets neither is refused. A change
     invalidates the prover stamp. Re-run ``verify_rules``.
@@ -150,14 +149,13 @@ class AdjustProverConfig(
         "summary directive can name the loop. Check that first by moving the bound and reading "
         "what comes back. A loop that discharges at 3 is not this case. If the property is about "
         "the loop, use `record_skip` and name the loop. With the setting on, the rest of the "
-        "handler is reachable again. Say in `why` which bounds you tried and what they reported. "
-        "A reader weighs every verdict in the unit against that account.",
+        "handler is reachable again. Say in `why` which bounds you tried and what they reported.",
     )
     why: str = Field(
         default="",
         description="Required when turning `optimistic_loop` on. What you tried first, and why "
-        "assuming every loop finishes within `loop_iter` is sound for this batch. Stored with the "
-        "setting, and not written into the conf. A loop-bound change does not use it.",
+        "assuming every loop finishes within `loop_iter` is sound for this batch. Not written into "
+        "the conf. A loop-bound change does not use it.",
     )
 
     @override
@@ -165,10 +163,7 @@ class AdjustProverConfig(
         if self.loop_iter is None and self.optimistic_loop is None:
             return "No edits given."
         if self.optimistic_loop is True and not self.why.strip():
-            return (
-                "A non-empty `why` is required to turn `optimistic_loop` on. The reason is stored "
-                "with the setting. The conf records only that the setting is on."
-            )
+            return "A non-empty `why` is required to turn `optimistic_loop` on."
         settings = self.state["prover_settings"]
         if self.loop_iter is not None:
             if self.loop_iter < 1:
@@ -177,17 +172,12 @@ class AdjustProverConfig(
                 return f"`loop_iter` is already {self.loop_iter}."
         if self.optimistic_loop is not None:
             on = self.optimistic_loop
-            if (settings.optimistic_loop is not None) == on:
+            if settings.optimistic_loop == on:
                 return "`optimistic_loop` is already " + ("on" if on else "off") + " in this conf."
         if self.loop_iter is not None:
             settings = dataclasses.replace(settings, loop_iter=self.loop_iter)
         if self.optimistic_loop is not None:
-            settings = dataclasses.replace(
-                settings,
-                optimistic_loop=(
-                    OptimisticLoop(why=self.why) if self.optimistic_loop else None
-                ),
-            )
+            settings = dataclasses.replace(settings, optimistic_loop=self.optimistic_loop)
         return tool_state_update(
             self.tool_call_id,
             "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"

@@ -213,7 +213,7 @@ class _RunAccounting(RunAccounting):
 
 @dataclass(frozen=True)
 class VerifyDeps:
-    """What the prover gate needs beyond the draft."""
+    """What ``verify_rules`` needs beyond the draft."""
 
     target: HarnessTarget
     submission: Submission

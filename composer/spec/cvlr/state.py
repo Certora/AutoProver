@@ -1,4 +1,4 @@
-"""State the CVLR prover gate reads.
+"""State ``verify_rules`` reads.
 
 The generic authoring state (:mod:`composer.authoring.state`) supplies the
 buffer, the skip list, and the validation stamps. A verdict also depends on
