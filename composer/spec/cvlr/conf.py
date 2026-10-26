@@ -37,6 +37,12 @@ from composer.spec.util import string_hash
 #: ``-solanaTACMathInt`` (P8) are on the Prover's master branch and not yet released, hence
 #: ``prover_version``.
 #:
+#: ``-solanaHeapSize`` is 256 KB, eight times the default. The bound is not the program's runtime
+#: heap: the Prover charges each allocation site in a rule's inlined program, frees nothing, and
+#: charges 512 bytes for a size it cannot read, which every formatted log message is. A rule over the
+#: bound gets an error, not a weaker proof. A large Anchor program's rules overflow the default
+#: (``docs/upstream-defects.md`` P17).
+#:
 #: TODO(cvlr-todo U25): remove ``prover_version`` before the Solana AutoProver ships.
 BASE_CONF: Conf = {
     "smt_timeout": "6000",
@@ -47,6 +53,7 @@ BASE_CONF: Conf = {
         "-solanaSkipCallRegInst true",
         "-solanaTACOptimize 2",
         "-solanaStackSize 8192",
+        "-solanaHeapSize 262144",
         "-solanaTACMathInt true",
         "-solanaTACSoundSignedMath true",
     ],

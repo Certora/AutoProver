@@ -373,6 +373,19 @@ same function. PreAudit does read them: it treats `HALTED` as complete and calls
 `parse_rule_results_from_job`. Seen as 18 jobs on the 2026-10-16 stake run
 ([stake-benchmark.md](./stake-benchmark.md)). Not a Solana gap to fix on its own.
 
+**U33. `-solanaHeapSize` could be a setting the author may change.** `BASE_CONF` raises it to 256 KB,
+enough for the one crashed job of the lending benchmark that was resubmitted
+([klend-benchmark.md](./klend-benchmark.md)). A larger program could still overflow it. Since
+[EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773) the overflowing rule's error
+names the option and a size to pass, so the author's response is mechanical: a
+`TunableConf.heap_size: int` defaulting to 262144, rendered by `tunable_conf`. Raising it is sound
+(over the bound is an error, not a weaker proof), so unlike `optimistic_loop` it needs no
+justification. Before building it, check the error reaches the author: an `ERROR` rule's tree-view
+messages are collected (`flatten_tree_view` in [results.py](../composer/prover/results.py)), but no
+run has shown the 6001 text arriving. `-solanaStackSize` is a separate question: the Prover takes
+only multiples of 4096, and frame size interacts with what the program was compiled for. See
+[upstream-defects.md](./upstream-defects.md) P17.
+
 ---
 
 ## Leads from the certora-cvlr-kb ledger

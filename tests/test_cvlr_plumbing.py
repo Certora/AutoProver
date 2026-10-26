@@ -423,6 +423,13 @@ def test_the_base_models_top_bit_constants_soundly():
     assert "-solanaTACSoundSignedMath true" in flags
 
 
+def test_the_base_raises_the_tac_heap_bound():
+    """The default 32 KB TAC heap is overflowed by a large Anchor program's rules (upstream-defects
+    P17)."""
+    flags = cvlr_conf.tunable_conf(cvlr_conf.TunableConf())["prover_args"]
+    assert "-solanaHeapSize 262144" in flags
+
+
 def test_the_master_prover_pin_is_still_tracked_as_a_ship_blocker():
     """``prover_version: master`` is for development only. This fails once the pin is removed, so
     whoever removes it also closes cvlr-todo U25."""
