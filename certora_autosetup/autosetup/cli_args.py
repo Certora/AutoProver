@@ -56,8 +56,11 @@ Usage Examples:
   # Debug summaries generation by stopping after that phase
   certora-autosetup--stop-after-summaries Contract.sol
 
-  # Skip LLM analysis for faster debugging (static analysis only)
+  # Skip every LLM call (static analysis only)
   certora-autosetup--skip-llm Contract.sol
+
+  # Skip the LLM summaries
+  certora-autosetup --skip-llm-summaries Contract.sol
 
   # Skip generating harness wrappers for contracts behind indexed storage paths
   certora-autosetup --skip-harnessing Contract.sol
@@ -270,7 +273,14 @@ Default Behavior: By default, all configurations must be successfully submitted.
     parser.add_argument(
         '--skip-llm',
         action='store_true',
-        help='Skip LLM analysis entirely for faster debugging (only use static analysis)'
+        help='Skip every LLM call (summaries, ERC-7201 annotation patching, proxy detection); '
+             'static analysis only'
+    )
+
+    parser.add_argument(
+        '--skip-llm-summaries',
+        action='store_true',
+        help='Skip the LLM summary generation'
     )
 
 
