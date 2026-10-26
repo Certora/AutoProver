@@ -964,6 +964,7 @@ class Autosetup:
                 max_prover_invocations=10,
                 verbose=bool(self.config.verbose),
                 skip_proxy_detection=self.config.skip_proxy_detection,
+                proxy_mappings=self.config.proxy_mappings,
                 skip_harnessing=self.config.skip_harnessing,
                 summary_setup=self.setup_prover.summary_setup,
                 library_resolver=self.libraries_for_contracts,
