@@ -443,7 +443,7 @@ function that *writes* state a rule asserts over, not only one whose result it r
     before it passed silently. Reported as **CERT-10184**, and fixed on the Prover's master branch
     by [EVMVerifier#8696](https://github.com/Certora/EVMVerifier/pull/8696), which also stopped every memory splitter from dropping a non-stack
     memset of unknown length, leaving the destination's old contents. **TODO:** inline `resize`,
-    rerun this probe, and update its expected verdicts and the inlining file's comment.
+    rerun this probe, and update its expected verdicts.
   * **A lamport transfer by `invoke`: the write is dropped.** Reachable, canary VERIFIED, companion
     VIOLATED: after a successful transfer of 2, the payer still has `2^64 - 1`. This is broader than
     the starting layer. `invoke_signed_unchecked` is summarized as its `Result`, and the syscall
