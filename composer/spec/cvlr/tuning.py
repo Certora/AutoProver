@@ -29,14 +29,13 @@ A pattern that matches nothing is not an error. The directive does not apply, an
 with a different configuration than the file appears to describe. Most of the care taken below
 is about that failure.
 
-Each file is split into layers. The starting layers live only under :data:`ENV_DIR`. The rest
-are in the target's ``envs/`` directory::
+Each file is split into layers. The starting layers live only under :data:`ENV_DIR`. A unit's
+layer lives only in the run's state. The composites are in the target's ``envs/`` directory::
 
     <stem>_core.txt           starting configuration: the Rust runtime and the Solana platform
     <stem>_anchor.txt         starting configuration: the Anchor framework (inlining only)
-    <stem>_<unit>_run.txt     one unit's own directives
     <stem>.txt                generated from the starting layers, named by the package
-    <stem>_<unit>.txt         generated from those plus the unit's, named by one unit's conf
+    <stem>_<unit>.txt         generated from those plus the unit's layer, named by one unit's conf
 
 When to change which layer:
 
@@ -112,17 +111,13 @@ class EnvFamily:
         """The file the package declares. Generated from the starting layers."""
         return f"{self.stem}.txt"
 
-    def unit_layer(self, unit: str) -> str:
-        """The file name for one unit's own directives.
+    def unit_composite(self, unit: str) -> str:
+        """The file one unit's conf names. Generated from the starting layers and the unit's.
 
         A summary is a symbol pattern the prover applies to the whole build, not something a cargo
         feature can scope. Lines added to a file every unit's conf names would apply to every
         unit's submission.
         """
-        return f"{self.stem}_{unit}_run.txt"
-
-    def unit_composite(self, unit: str) -> str:
-        """The file one unit's conf names. Generated from the starting layers and the unit's."""
         return f"{self.stem}_{unit}.txt"
 
 
@@ -168,7 +163,7 @@ def compose_env(
 
     The scaffold writes the package-level composite, which has no ``unit_layer``. A unit layer is
     one unit's directives, so they are not applied to another unit's submission (see
-    :meth:`EnvFamily.unit_layer`). Those are the project's own symbols, so the dialect leaves them
+    :meth:`EnvFamily.unit_composite`). Those are the project's own symbols, so the dialect leaves them
     alone.
     """
     header = _GENERATED_HEADER.format(
@@ -183,7 +178,7 @@ def compose_env(
             f"crates this project resolves\n"
         )
     parts += [starting_env(name, dialect) for name in family.starting]
-    if unit_layer is not None:
+    if unit_layer:
         parts.append(unit_layer)
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"
 
@@ -192,13 +187,6 @@ def compose_env(
 #: the return is unconstrained, which is the usual case for a formatting path
 #: nothing asserts over.
 _TYPE_ANNOTATION = "#[type({body})]"
-
-#: Header of the per-unit layer. The next build rewrites the file from state.
-_UNIT_LAYER_HEADER = (
-    ";;; Summaries added by the CVLR authoring loop for unit `{unit}`.\n"
-    ";;; DO NOT EDIT: rewritten from the run's state on every build."
-)
-
 
 @dataclass(frozen=True)
 class SummaryDirective:
@@ -223,17 +211,13 @@ class SummaryDirective:
         return "\n".join(lines)
 
 
-def render_layer(header: str, directives: tuple[SummaryDirective, ...]) -> str:
-    return "\n\n".join([header.rstrip("\n"), *(d.render() for d in directives)]) + "\n"
+def render_layer(directives: tuple[SummaryDirective, ...]) -> str:
+    return "".join(f"{d.render()}\n\n" for d in directives).removesuffix("\n")
 
 
 @dataclass(frozen=True)
 class TuningFiles:
     """Where one unit's tuning files are, and how paths in them are spelled.
-
-    Held on its own, not derived from the harness path. The envs directory and
-    the specs directory are siblings by convention, and reconstructing one from
-    the other would encode that convention twice.
 
     ``unit`` names the file this unit's directives land in. Every unit shares
     one working tree. A summary is a regex over symbols that the prover applies
@@ -248,33 +232,26 @@ class TuningFiles:
     #: The harness module name. It is what makes these files this unit's.
     unit: str
 
-    def unit_layer_path(self, family: EnvFamily = SUMMARIES) -> Path:
-        """This unit's own layer. Rewritten from state on every build."""
-        return self.envs_dir / family.unit_layer(self.unit)
-
     def composite_path(self, family: EnvFamily = SUMMARIES) -> Path:
         """The composite this unit's conf names."""
         return self.envs_dir / family.unit_composite(self.unit)
 
     def write(self, directives: tuple[SummaryDirective, ...]) -> None:
-        """Rewrite this unit's summaries layer and recompose the file its conf names.
+        """Recompose the summaries file this unit's conf names.
 
         Rewritten from ``directives``, not appended. The recorded state and the
-        file then cannot drift. A run with no directives leaves a layer that is
-        only the header, which composes to the starting configuration. Dropping
-        a directive from state removes it from disk.
+        file then cannot drift. A run with no directives composes to the
+        starting configuration. Dropping a directive from state removes it from
+        disk.
 
         Called from the build path. The tool that records a directive does not
         write the file. One writer reads state the reducer has already merged.
         A tool writing its own view of the list would race another call and
         drop one of the two.
         """
-        header = _UNIT_LAYER_HEADER.format(unit=self.unit)
-        layer = render_layer(header, directives)
         self.envs_dir.mkdir(parents=True, exist_ok=True)
-        self.unit_layer_path(SUMMARIES).write_text(layer)
         self.composite_path(SUMMARIES).write_text(
-            compose_env(SUMMARIES, unit_layer=layer, dialect=self.dialect)
+            compose_env(SUMMARIES, unit_layer=render_layer(directives), dialect=self.dialect)
         )
 
     def ensure_composite(self) -> None:
