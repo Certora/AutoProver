@@ -11,9 +11,9 @@ the prover. Tests that run it skip when it is not installed.
 :func:`composer.cargo.symbols.prover_function_names` is covered by the expensive gate.
 """
 
+import asyncio
 import shutil
 import struct
-import subprocess
 
 import pytest
 
@@ -55,7 +55,8 @@ needs_rustfilt = pytest.mark.skipif(shutil.which("rustfilt") is None, reason="re
 
 
 @needs_rustfilt
-def test_real_symbols_demangle_to_the_spelling_the_tuning_files_use():
+@pytest.mark.asyncio
+async def test_real_symbols_demangle_to_the_spelling_the_tuning_files_use():
     """``rustfilt`` without ``-h`` strips the hash and undoes the escapes.
 
     An unmangled name, such as a ``#[rule]``'s ``#[no_mangle]`` symbol, comes
@@ -63,7 +64,7 @@ def test_real_symbols_demangle_to_the_spelling_the_tuning_files_use():
     """
     mangled = [m for m, _ in _REAL] + ["rule_authority_matches_signer"]
     expected = [e for _, e in _REAL] + ["rule_authority_matches_signer"]
-    assert demangle(mangled) == expected
+    assert await demangle(mangled) == expected
 
 
 def test_a_name_held_by_several_symbols_is_numbered_like_the_prover_numbers_it():
@@ -100,24 +101,37 @@ def test_the_suggestion_points_at_what_the_build_does_define():
     assert "<anchor_lang::error::ErrorCode as core::fmt::Display>::fmt" in suggestions
 
 
-def test_a_rustfilt_result_with_the_wrong_number_of_lines_is_refused(monkeypatch):
+@pytest.mark.asyncio
+async def test_a_rustfilt_result_with_the_wrong_number_of_lines_is_refused(monkeypatch):
     """The prover discards a result whose line count differs from the names it sent."""
     monkeypatch.setattr(shutil, "which", lambda _name: "rustfilt")
 
-    def run(*_args, **_kwargs):
-        return subprocess.CompletedProcess(args=["rustfilt"], returncode=0, stdout="only-one\n")
+    class OneLine:
+        async def communicate(self, _input: bytes) -> tuple[bytes, bytes]:
+            return b"only-one\n", b""
 
-    monkeypatch.setattr(subprocess, "run", run)
+        async def wait(self) -> int:
+            return 0
+
+    async def spawn(*_args, **_kwargs):
+        return OneLine()
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
     with pytest.raises(RustfiltMismatch):
-        demangle(["_ZN3foo", "_ZN3bar"])
+        await demangle(["_ZN3foo", "_ZN3bar"])
 
 
-def test_an_undefined_function_symbol_counts_in_the_collision(tmp_path, monkeypatch):
+@pytest.mark.asyncio
+async def test_an_undefined_function_symbol_counts_in_the_collision(tmp_path, monkeypatch):
     """A defined function that demangles like an undefined call is numbered, and the bare name is dropped."""
-    monkeypatch.setattr(symbols_mod, "demangle", lambda names: ["shared"] * len(names))
+
+    async def demangle_all_alike(names: list[str]) -> list[str]:
+        return ["shared"] * len(names)
+
+    monkeypatch.setattr(symbols_mod, "demangle", demangle_all_alike)
     path = tmp_path / "prog.so"
     path.write_bytes(_elf_with_functions(defined=("_ZN3fooE",), undefined=("_ZN3barE",)))
-    assert prover_function_names(path) == ("shared_0", "shared_1")
+    assert await prover_function_names(path) == ("shared_0", "shared_1")
 
 
 _SHT_STRTAB = 3

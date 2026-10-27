@@ -8,9 +8,9 @@ This module does the same. A result with a different number of lines than
 names is refused: the prover discards that result and keeps the mangled names.
 """
 
+import asyncio
 import re
 import shutil
-import subprocess
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
@@ -37,12 +37,17 @@ class NoSymbolTable(SymbolsUnavailable):
         super().__init__(f"{shared_object} has no symbol table; was it stripped?")
 
 
+class RustfiltFailed(SymbolsUnavailable):
+    def __init__(self, returncode: int, stderr: str):
+        super().__init__(f"rustfilt exited with status {returncode}: {stderr.strip()}")
+
+
 class RustfiltMismatch(SymbolsUnavailable):
     def __init__(self, names: int, lines: int):
         super().__init__(f"rustfilt returned {lines} lines for {names} names.")
 
 
-def prover_function_names(shared_object: Path) -> tuple[str, ...]:
+async def prover_function_names(shared_object: Path) -> tuple[str, ...]:
     """Names the prover gives this program's functions and call targets, sorted.
 
     Defined function symbols and undefined ones both count. The prover numbers
@@ -50,7 +55,7 @@ def prover_function_names(shared_object: Path) -> tuple[str, ...]:
     the call the object file records. A name shared by several of them becomes
     ``name_0`` … ``name_{n-1}``.
     """
-    demangled = demangle(_mangled_functions(shared_object))
+    demangled = await demangle(_mangled_functions(shared_object))
     return tuple(sorted(as_the_prover_names(demangled)))
 
 
@@ -82,7 +87,7 @@ def _mangled_functions(shared_object: Path) -> list[str]:
         })
 
 
-def demangle(names: list[str]) -> list[str]:
+async def demangle(names: list[str]) -> list[str]:
     """``names`` as ``rustfilt`` spells them, in the same order.
 
     A name that is not mangled comes back unchanged. Callers match by position.
@@ -93,10 +98,17 @@ def demangle(names: list[str]) -> list[str]:
     rustfilt = shutil.which("rustfilt")
     if rustfilt is None:
         raise RustfiltMissing()
-    run = subprocess.run(
-        [rustfilt], input="".join(f"{n}\n" for n in names), capture_output=True, text=True, check=True
+    proc = await asyncio.create_subprocess_exec(
+        rustfilt,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
-    lines = run.stdout.splitlines()
+    stdout, stderr = await proc.communicate("".join(f"{n}\n" for n in names).encode())
+    returncode = await proc.wait()
+    if returncode != 0:
+        raise RustfiltFailed(returncode, stderr.decode(errors="replace"))
+    lines = stdout.decode().splitlines()
     if len(lines) != len(names):
         raise RustfiltMismatch(len(names), len(lines))
     return lines

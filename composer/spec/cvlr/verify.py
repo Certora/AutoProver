@@ -10,7 +10,6 @@ reports the compiler error and submits nothing
 import asyncio
 from dataclasses import dataclass, replace
 import logging
-import subprocess
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -440,10 +439,8 @@ class VerifyRules(
         if not directives or not isinstance(build.verdict, Built):
             return None
         try:
-            symbols = await asyncio.to_thread(
-                prover_function_names, build.verdict.manifest.artifact
-            )
-        except (SymbolsUnavailable, ELFError, OSError, subprocess.CalledProcessError):
+            symbols = await prover_function_names(build.verdict.manifest.artifact)
+        except (SymbolsUnavailable, ELFError, OSError):
             _log.warning("could not read symbols to check summary directives", exc_info=True)
             return (
                 "The build's function names could not be read, so summary directives "
