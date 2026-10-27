@@ -386,10 +386,6 @@ class VerifyDeps:
         )
 
 
-def _author_text(template: str, /, **values: object) -> str:
-    return load_jinja_template(template, **values).rstrip("\n")
-
-
 def _incomplete_kind(stopped: IncompleteCheck) -> str:
     match stopped:
         case LoopUnwound():
@@ -403,10 +399,12 @@ def _incomplete_kind(stopped: IncompleteCheck) -> str:
 def _incomplete_note(incomplete: Mapping[str, IncompleteCheck]) -> str:
     ordered = sorted(incomplete.items())
     kinds = list(dict.fromkeys(_incomplete_kind(stopped) for _, stopped in ordered))
-    return _author_text(
+    return load_jinja_template(
         "cvlr/incomplete_check.j2",
         rules=[{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
-        advice="\n".join(_author_text("cvlr/incomplete_advice.j2", kind=kind) for kind in kinds),
+        advice="\n".join(
+            load_jinja_template("cvlr/incomplete_advice.j2", kind=kind) for kind in kinds
+        ),
     )
 
 
@@ -425,7 +423,7 @@ def _externals_note(externals: Sequence[str]) -> str | None:
     if not externals:
         return None
     _log.info("prover treated functions as external:\n%s", "\n".join(externals))
-    return _author_text("cvlr/external_functions.j2", warnings="\n\n".join(externals))
+    return load_jinja_template("cvlr/external_functions.j2", warnings="\n\n".join(externals))
 
 
 def _unverdicted(declared: Sequence[str], status: Mapping[str, bool]) -> list[str]:
@@ -682,7 +680,7 @@ class VerifyRules(
         missed = unmatched(directives, symbols)
         if not missed:
             return None
-        return _author_text(
+        return load_jinja_template(
             "cvlr/inert_summaries.j2",
             missed_count=len(missed),
             total=len(directives),
@@ -730,14 +728,20 @@ class VerifyRules(
                     lines.append(inert)
                 if surprising:
                     lines.append(
-                        _author_text("cvlr/expected_verified.j2", names=", ".join(surprising))
+                        load_jinja_template(
+                            "cvlr/expected_verified.j2", names=", ".join(surprising)
+                        )
                     )
                 if incomplete:
                     lines.append(_incomplete_note(incomplete))
                 if unverdicted:
-                    lines.append(_author_text("cvlr/no_verdict.j2", names=", ".join(unverdicted)))
+                    lines.append(
+                        load_jinja_template("cvlr/no_verdict.j2", names=", ".join(unverdicted))
+                    )
                 if unexcused:
-                    lines.append(_author_text("cvlr/unaccounted.j2", names=", ".join(unexcused)))
+                    lines.append(
+                        load_jinja_template("cvlr/unaccounted.j2", names=", ".join(unexcused))
+                    )
                 if (externals := _externals_note(report.external_functions)) is not None:
                     lines.append(externals)
                 last = LastVerdicts(
