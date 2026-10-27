@@ -50,7 +50,7 @@ from composer.authoring.state import (
     validate_check_mapping,
 )
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
-from composer.spec.cvlr.conf import TunableConf, conf_history
+from composer.spec.cvlr.conf import TunableConf, conf_history, merge_settings
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.source.live_explorer import VersionedHistory
 from composer.spec.source.munge.edit_store import AppliedEdit
@@ -154,11 +154,6 @@ def validate_rule_subjects(subjects: list[RuleSubject], declared: Collection[str
     return "\n".join(errors) if errors else None
 
 
-def _latest_settings(_current: TunableConf, update: TunableConf) -> TunableConf:
-    """Last write wins. The settings edit tool writes every field, so there is nothing to merge."""
-    return update
-
-
 class LastVerdicts(BaseModel):
     """The last prover run that produced verdicts.
 
@@ -196,9 +191,9 @@ class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     #: The prover settings this unit submits under. Every unit starts from the
     #: defaults. One unit's change must not reach a sibling.
     #:
-    #: Last write wins. ``adjust_prover_config`` writes the whole settings, and
-    #: two writes in one graph step raise ``InvalidUpdateError`` on a plain field.
-    prover_settings: Annotated[TunableConf, _latest_settings]
+    #: ``adjust_prover_config`` writes only the fields it set, and the reducer
+    #: applies them, so several calls in one graph step each land.
+    prover_settings: Annotated[TunableConf, merge_settings]
     #: The last prover run's own warnings about functions it treated as external:
     #: neither analyzed nor summarized, so their writes were dropped. Absent until
     #: a run has reported.

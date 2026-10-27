@@ -10,7 +10,6 @@ prover stamp. ``verify_rules`` (:mod:`composer.spec.cvlr.verify`) is what
 builds with that state and earns the stamp.
 """
 
-import dataclasses
 from typing import Container, override
 
 from pydantic import Field
@@ -31,7 +30,7 @@ from composer.authoring.state import (
     merge_expected_failures,
 )
 from composer.prover.conf import dump_conf
-from composer.spec.cvlr.conf import OptimisticLoop, tunable_conf
+from composer.spec.cvlr.conf import OptimisticLoop, OptimisticLoopOff, SettingsEdit, tunable_conf
 from composer.spec.cvlr.state import (
     PROVER_VALIDATION_KEY,
     CvlrGenerationState,
@@ -159,6 +158,10 @@ class AdjustProverConfig(
     No other prover setting can be changed here. Both apply to every rule in
     the unit. Omit a field to leave it. A call that sets neither is refused. A
     change invalidates the prover stamp. Re-run ``verify_rules``.
+
+    To change both settings, set both in one call. Do not make parallel calls:
+    each reports the conf as if it were the only one, and of two that set the
+    same field only one takes effect.
     """
 
     loop_iter: int | None = Field(
@@ -198,20 +201,19 @@ class AdjustProverConfig(
             on = self.optimistic_loop
             if (settings.optimistic_loop is not None) == on:
                 return "`optimistic_loop` is already " + ("on" if on else "off") + " in this conf."
-        if self.loop_iter is not None:
-            settings = dataclasses.replace(settings, loop_iter=self.loop_iter)
-        if self.optimistic_loop is not None:
-            settings = dataclasses.replace(
-                settings,
-                optimistic_loop=(
-                    OptimisticLoop(why=self.why) if self.optimistic_loop else None
-                ),
-            )
+        match self.optimistic_loop:
+            case True:
+                optimistic: OptimisticLoop | OptimisticLoopOff | None = OptimisticLoop(why=self.why)
+            case False:
+                optimistic = OptimisticLoopOff()
+            case None:
+                optimistic = None
+        edit = SettingsEdit(loop_iter=self.loop_iter, optimistic_loop=optimistic)
         return tool_state_update(
             self.tool_call_id,
             "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"
-            f"```json\n{dump_conf(tunable_conf(settings))}```",
-            prover_settings=settings,
+            f"```json\n{dump_conf(tunable_conf(edit.apply(settings)))}```",
+            prover_settings=edit,
         )
 
 

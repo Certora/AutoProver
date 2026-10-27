@@ -42,8 +42,9 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
 * `adjust_prover_config(loop_iter=None, optimistic_loop=None, why)` — change the loop bound, or
   assume loops finish. The two prover settings you can move. The bound is sound while
   `optimistic_loop` is off; turning that on is not, and makes the bound part of what every verdict
-  means. Omit a field to leave it. Both sit at the end of the loop ladder below, and either
-  invalidates the prover stamp.
+  means. Omit a field to leave it, and to change both, set both in one call rather than two
+  parallel ones. Both sit at the end of the loop ladder below, and either invalidates the prover
+  stamp.
 * `code_editor(request)` — ask a dedicated editor to change the *program's* own source. You do not
   edit the program yourself. Describe the problem you hit, not the edit you want; what comes back has
   compiled and been reviewed, with its diff and a key, but is **not** applied yet.
