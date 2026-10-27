@@ -106,14 +106,20 @@ class SetupProver:
         get_build_system_config_dict=None,
         solc_default_version=DEFAULT_SOLC_VERSION,
         stop_after_compilation_analysis=False,
+        skip_llm_summaries=False,
     ):
-        """Initialize SetupProver with required dependencies."""
+        """Initialize SetupProver with required dependencies.
+
+        ``skip_llm`` turns off every LLM call made here; ``skip_llm_summaries`` turns off the
+        LLM summary generation.
+        """
         self.log = log
         self.certora_dir = certora_dir
         self.script_dir = script_dir
         self.additional_contracts = additional_contracts
         self.extra_args = extra_args
         self.skip_llm = skip_llm
+        self.skip_llm_summaries = skip_llm_summaries
         self.force_llm_regenerate = force_llm_regenerate
         self.stop_after_summaries = stop_after_summaries
         self.stop_after_compilation_analysis = stop_after_compilation_analysis
@@ -1523,7 +1529,7 @@ class SetupProver:
                     additional_contracts=self.additional_contracts,
                     include_test_files=False,
                     include_dependencies=True,
-                    enable_llm=not self.skip_llm,
+                    enable_llm=not (self.skip_llm or self.skip_llm_summaries),
                     custom_recipe=None,
                     excluded_library=excluded_library,
                 )
