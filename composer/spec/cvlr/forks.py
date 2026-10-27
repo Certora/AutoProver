@@ -191,8 +191,7 @@ class ForkRefused:
 
 
 #: Anchor. Branch names taken from the fork. Listed, not derived, so a release the fork has not
-#: been updated for is reported as uncovered. The fork has 0.30.1 and not 0.30.0, and nothing
-#: after 0.32.1.
+#: been updated for is reported as uncovered. The fork has nothing before 0.26.0 or after 1.2.1.
 ANCHOR_FORK = ForkOverride(
     repo="https://github.com/Certora/anchor.git",
     crates=("anchor-lang", "anchor-spl"),
@@ -201,10 +200,24 @@ ANCHOR_FORK = ForkOverride(
         "0.27.0": "certora-v0.27.0",
         "0.28.0": "certora-v0.28.0",
         "0.29.0": "certora-v0.29.0",
+        "0.30.0": "certora-v0.30.0",
         "0.30.1": "certora-v0.30.1",
+        "0.30.2": "certora-v0.30.2",
+        "0.31.0": "certora-v0.31.0",
         "0.31.1": "certora-v0.31.1",
+        "0.31.2": "certora-v0.31.2",
         "0.32.0": "certora-v0.32.0",
         "0.32.1": "certora-v0.32.1",
+        "0.32.2": "certora-v0.32.2",
+        "1.0.0": "certora-v1.0.0",
+        "1.0.1": "certora-v1.0.1",
+        "1.0.2": "certora-v1.0.2",
+        "1.0.3": "certora-v1.0.3",
+        "1.1.0": "certora-v1.1.0",
+        "1.1.1": "certora-v1.1.1",
+        "1.1.2": "certora-v1.1.2",
+        "1.2.0": "certora-v1.2.0",
+        "1.2.1": "certora-v1.2.1",
     },
     why=(
         "Use the Certora fork of Anchor. It avoids the boxing the official library does, which is "

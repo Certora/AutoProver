@@ -58,7 +58,9 @@ def _workspace(root: Path, *members: CratePackage) -> Workspace:
 def fake_cargo(monkeypatch):
     """``Workspace.read`` replaced by a canned answer, as in ``test_cvlr_scaffold``."""
     def install(workspace: Workspace):
-        async def fake(root, *, offline=False, features=(), toolchain=None, timeout_s=0):
+        async def fake(
+            root, *, offline=False, features=(), toolchain=None, cargo_home=None, timeout_s=0
+        ):
             return workspace
         monkeypatch.setattr(Workspace, "read", fake)
     return install
@@ -91,20 +93,22 @@ async def test_the_crate_owning_the_main_program_is_the_package(tmp_path, fake_c
 
 @pytest.mark.asyncio
 async def test_a_package_on_no_supported_generation_fails_before_the_run(tmp_path, fake_cargo):
-    """`solana-program` 1.18 defines its own `AccountInfo`, which neither CVLR line can take."""
+    """`solana-program` 1.17 is a generation of its own: `cvlr-solana` 0.4 requires `^1.18`."""
     farms = _package(tmp_path, "farms")
     workspace = _workspace(tmp_path, farms)
     (old,) = [p for p in workspace.packages if p.name == "solana-program"]
     fake_cargo(dataclasses.replace(
         workspace,
-        packages=(farms, dataclasses.replace(old, version="1.18.26")),
-        links={farms: (dataclasses.replace(old, version="1.18.26"),)},
+        packages=(farms, dataclasses.replace(old, version="1.17.18")),
+        links={farms: (dataclasses.replace(old, version="1.17.18"),)},
     ))
     with pytest.raises(preflight.PreflightFailed) as caught:
         await preflight.select_package(tmp_path, "farms", candidates=generations("solana"))
     message = str(caught.value)
-    assert "solana-program 1.18.26" in message
-    assert "solana-* 3.x" in message and "solana-program 2.x" in message
+    assert "solana-program 1.17.18" in message
+    assert all(
+        label in message for label in ("solana-* 3.x", "solana-program 2.x", "solana-program 1.18")
+    )
 
 
 @pytest.mark.asyncio

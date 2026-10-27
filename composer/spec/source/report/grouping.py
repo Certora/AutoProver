@@ -147,7 +147,7 @@ def build_groups(
 
 def build_fallback_grouping(properties: list[FormalizedProperty]) -> GroupingResult:
     """A single bucket holding every property, used when structured grouping is unavailable. The
-    reason is logged by the caller, not shown to the user."""
+    caller records why in the report's ``grouping_fallback_reason``."""
     return GroupingResult(groups=[
         PropertyGroupDraft(
             slug=FALLBACK_SLUG,

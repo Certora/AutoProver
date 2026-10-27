@@ -22,7 +22,7 @@ from composer.spec.cvlr.tuning import (
     compose_env,
     starting_env,
 )
-from composer.spec.cvlr.reference import SOLANA_V2, SOLANA_V3, SOROBAN, PathAlias
+from composer.spec.cvlr.reference import SOLANA_V1_18, SOLANA_V2, SOLANA_V3, SOROBAN, PathAlias
 
 #: Every crate the post-split Solana platform layer is spread across, as a target resolves them.
 SPLIT_CRATES = (
@@ -91,7 +91,7 @@ def split() -> PathDialect:
 @pytest.fixture
 def monolithic() -> PathDialect:
     """The dialect a 1.18 target gets, where the canonical paths are already the right ones."""
-    return dialect_for(_workspace("solana-program"), SOLANA_V2)
+    return dialect_for(_workspace("solana-program"), SOLANA_V1_18)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -466,6 +466,8 @@ def test_every_sdk3_alias_the_binary_exercises_names_a_path_it_defines() -> None
         "solana_program::program::invoke_signed_unchecked",
         "solana_program::instruction::get_stack_height",
         "solana_program::poseidon",
+        # Stake is not an Anchor program. The Anchor 1.x fixture below exercises it.
+        "anchor_lang::error::",
     ]
 
 
@@ -494,3 +496,86 @@ def test_the_sdk3_dialect_reaches_the_sysvar_reads_and_cpi_the_program_calls() -
     v3 = PathDialect(SOLANA_V3.platform.path_aliases)
     assert not calls & reached(starting_env("cvlr_inlining_core.txt"))
     assert calls <= reached(starting_env("cvlr_inlining_core.txt", v3))
+
+
+#: The 1.18 counterpart: a crate on the monolith whose one rule calls each platform function the
+#: tuning files address.
+V1_18_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "solana_1_18_sbf_symbols.txt"
+
+
+def test_the_starting_files_address_1_18_symbols_as_spelled(monolithic: PathDialect) -> None:
+    """1.18 has no aliases because the starting files are written in its spelling. Every platform
+    function the binary links is matched by a directive that names it, and not only by a blanket:
+    a blanket alone would mean the specific directive no longer names a real symbol. The `fmt`
+    impls are the exception, and are meant to be."""
+    import re
+
+    symbols = [
+        line.strip()
+        for line in V1_18_SYMBOLS_FIXTURE.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    blankets = {r"^solana_program::.*$", r"^.*::fmt$"}
+    patterns = [
+        pattern
+        for name in ("cvlr_inlining_core.txt", "cvlr_summaries_core.txt")
+        for line in starting_env(name, monolithic).splitlines()
+        if (s := line.strip()) and not s.startswith((";", "#[type("))
+        if (pattern := re.sub(r"^#\[inline(?:\(never\))?\]\s*", "", s).strip()) not in blankets
+    ]
+    assert monolithic.aliases == ()
+    unnamed = [s for s in symbols if not any(re.search(p, s) for p in patterns)]
+    assert unnamed == [
+        "<solana_program::program_error::ProgramError as core::fmt::Debug>::fmt",
+        "<solana_program::pubkey::PubkeyError as core::fmt::Debug>::fmt",
+    ]
+
+
+# ---------------------------------------------------------------------------------------------
+# Anchor's error crate
+
+
+#: The Anchor 1.1.0+ counterpart: `anchor_lang::error` is the `anchor-lang-error` crate there.
+ANCHOR_1_2_1_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "anchor_1_2_1_sbf_symbols.txt"
+
+ERROR_CODE_FROM = "<anchor_lang_error::Error as core::convert::From<anchor_lang_error::ErrorCode>>::from"
+
+
+def _inlined_by_a_specific_directive(text: str, symbol: str) -> bool:
+    """Whether an ``#[inline]`` directive other than a blanket matches ``symbol``. The anchor
+    blanket ``^.*anchor_lang.*$`` is ``#[inline(never)]``, so it never counts."""
+    import re
+
+    return any(
+        re.search(line.removeprefix("#[inline]").strip(), symbol)
+        for line in (raw.strip() for raw in text.splitlines())
+        if line.startswith("#[inline] ")
+    )
+
+
+def test_anchor_1_1_error_conversions_are_spelled_as_the_error_crate() -> None:
+    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), SOLANA_V3)
+    assert dialect.spellings(
+        "^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::ErrorCode>>::from$"
+    ) == (f"^{ERROR_CODE_FROM}$",)
+
+
+def test_anchor_1_0_keeps_the_canonical_error_spelling() -> None:
+    """Anchor 1.0.x is on the SDK 3 crates too, but its errors are still in ``anchor_lang``."""
+    dialect = dialect_for(_workspace(*SPLIT_CRATES), SOLANA_V3)
+    pattern = "^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::AnchorError>>::from$"
+    assert dialect.spellings(pattern) == (pattern,)
+
+
+def test_the_anchor_1_1_dialect_inlines_the_error_conversion_the_program_calls() -> None:
+    """Measured: left to the blanket, this conversion on ``Signer::try_from``'s error path is opaque,
+    and ``signer.key()`` in the handler fails with [3003]."""
+    symbols = [
+        line.strip()
+        for line in ANCHOR_1_2_1_SYMBOLS_FIXTURE.read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    ]
+    assert ERROR_CODE_FROM in symbols
+    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), SOLANA_V3)
+    assert not _inlined_by_a_specific_directive(compose_env(INLINING), ERROR_CODE_FROM)
+    assert _inlined_by_a_specific_directive(compose_env(INLINING, dialect=dialect), ERROR_CODE_FROM)

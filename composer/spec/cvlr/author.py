@@ -103,7 +103,7 @@ from composer.spec.source.munge.vfs_diff import diff_against_baseline
 from graphcore.graph import Builder
 from composer.spec.solana.model import SolanaComponentInstance
 from composer.spec.system_model import component_context
-from composer.spec.types import Curtailed, PropertyFormulation, PropertyTitle
+from composer.spec.types import Curtailed, PropertyFormulation, PropertyTitle, RuleName
 from composer.pipeline.ptypes import GaveUp
 from composer.ui.tool_display import ToolDisplay, suppress_ack, tool_display
 
@@ -317,6 +317,8 @@ class CvlrVersionParams(TypedDict):
     prompt is where that is said out loud."""
 
     cvlr_versions: str
+    #: :attr:`~composer.spec.cvlr.reference.ChainReference.caveats` of the run's generation.
+    caveats: list[str]
 
 
 class CvlrAuthorSystemParams(CvlrVersionParams):
@@ -382,6 +384,7 @@ def build_feedback_thunk(
     component: SolanaComponentInstance | None,
     program: str,
     cvlr_versions: str,
+    caveats: Sequence[str],
     editing: ProgramEditing,
 ) -> ContextualFeedbackThunk[Rebuttal, JudgeContext]:
     """The CVLR feedback judge.
@@ -444,7 +447,7 @@ def build_feedback_thunk(
         ctx=judge_ctx,
         host=EditingJudgeHost(env, editing),
         apply_system=lambda b: _JudgeSystemTemplate.bind(
-            {"cvlr_versions": cvlr_versions}
+            {"cvlr_versions": cvlr_versions, "caveats": list(caveats)}
         ).render_to(b.with_sys_prompt_template),
         apply_prompt=apply_prompt,
         input_parts=input_parts,
@@ -673,6 +676,7 @@ async def batch_cvlr_generation(
     program: str,
     module: str,
     cvlr_versions: str,
+    caveats: Sequence[str],
     target: HarnessTarget,
     verify: VerifyDeps,
     editing: ProgramEditing,
@@ -709,7 +713,7 @@ async def batch_cvlr_generation(
     judge_ctx = ctx.child(CVLR_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
         thunk=build_feedback_thunk(
-            judge_ctx, env, props, component, program, cvlr_versions, editing
+            judge_ctx, env, props, component, program, cvlr_versions, caveats, editing
         ),
         stamper=make_validation_stamper(FEEDBACK),
         editing=editing,
@@ -723,6 +727,7 @@ async def batch_cvlr_generation(
             {
                 "module": module,
                 "cvlr_versions": cvlr_versions,
+                "caveats": list(caveats),
                 "example": (
                     worked_example(component, props, read_surface(target.package_root))
                     if component
@@ -867,6 +872,8 @@ async def batch_cvlr_generation(
 
     draft = res_state["curr_spec"]
     assert draft is not None
+    last = res_state.get("last_verdicts")
+    listed = None if last is None else last.rules
     generated = GeneratedHarness(
         commentary=res_state["result"],
         harness=draft,
@@ -876,6 +883,8 @@ async def batch_cvlr_generation(
         summaries=res_state["summaries"],
         applied_edits=await applied_edits(editing.store, res_state["version_history"]),
         vfs=res_state["vfs"],
+        declared_rules=[RuleName(r) for r in listed or ()],
+        settings=res_state["prover_settings"],
         final_link=res_state.get("prover_link"),
     )
     if res_state["budget_curtailed"]:

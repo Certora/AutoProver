@@ -151,7 +151,7 @@ async def test_the_backend_opts_into_findings_and_reads_back_what_it_captured():
     ],
 )
 def test_the_report_records_how_the_builds_that_earned_its_verdicts_ran(sandbox, expected):
-    """``docs/cvlr-backend-plan.md`` §7.12 item 4: an unconfined run was marked on stderr and
+    """``docs/cvlr-backend-plan.md`` §7.8.4: an unconfined run was marked on stderr and
     nowhere in the deliverable, so a report read a week later could not be told from a production
     one. The backend answers this unconditionally — the base's ``None`` means "compiles nothing",
     and a reader who cannot distinguish that from "nobody recorded it" has no use for the field."""
@@ -216,6 +216,16 @@ def test_the_gate_tells_an_overflow_stop_how_to_get_past_it_and_not_a_loop_remed
     assert "Cannot overflow: inferred pointer" in note
     assert "cvlr_assume!(x < 1 << 63)" in note
     assert "trip count" not in note
+
+
+def test_the_gate_bounds_an_overflow_stop_once_and_then_moves_on():
+    """The bound is not always the lever: the stop follows the code's layout, so a rule that still
+    stops with it in place is restated below the handler or skipped, not reworded again."""
+    note = _incomplete_note({"r": OverflowUnproven("Cannot overflow: inferred pointer")})
+    assert "once" in note
+    assert "again with the bound in place" in note
+    assert "takes no AccountInfo" in note
+    assert "skip the property" in note
 
 
 def test_the_gate_gives_each_kind_its_remedy_once():

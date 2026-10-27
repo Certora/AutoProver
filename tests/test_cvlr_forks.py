@@ -128,14 +128,14 @@ def test_every_declared_version_maps_to_a_branch(tmp_path, version):
 
 
 def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path):
-    """The fork covers 0.30.1 and not 0.30.0, which is why versions are listed. A derived name
+    """The fork covers 0.26.0 and not 0.25.0, which is why versions are listed. A derived name
     would send cargo after a branch that does not exist, and the error would be about git."""
     refused = _refused(
-        plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.30.0")), SOLANA_V2.forks)
+        plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.25.0")), SOLANA_V2.forks)
     )
     (blocked,) = refused.blocked
-    assert "0.30.0" in blocked.problem
-    assert "0.30.1" in blocked.resolution
+    assert "0.25.0" in blocked.problem
+    assert "0.26.0" in blocked.resolution
 
 
 @pytest.mark.parametrize("fork", SOLANA_V2.forks, ids=lambda f: f.crates[0])
@@ -230,16 +230,18 @@ def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
 
 
 def test_the_branch_list_matches_what_the_fork_publishes():
-    """Read from ``Certora/anchor`` on 2026-09-01. The fork also has ``-pad-error`` and
-    ``-reduce-error`` branches of 0.29.0. Those are experiments and are not in this list."""
+    """Read from ``Certora/anchor`` on 2026-10-27. The fork also has ``-pad-error`` and
+    ``-reduce-error`` branches of 0.29.0 and ``v<version>+certora.1`` branches. Those are
+    experiments and are not in this list."""
     versions = list(ANCHOR_FORK.branches)
-    assert versions == sorted(versions), "keep the list ordered so a gap is visible"
+    as_tuples = [tuple(int(part) for part in v.split(".")) for v in versions]
+    assert as_tuples == sorted(as_tuples), "keep the list ordered so a gap is visible"
     assert len(set(versions)) == len(versions)
     for version, branch in ANCHOR_FORK.branches.items():
         assert branch == f"certora-v{version}"
-    # The gap that motivates listing rather than deriving.
-    assert "0.30.0" not in versions
-    assert "0.30.1" in versions
+    # A release outside the covered range, which motivates listing rather than deriving.
+    assert "0.26.0" in versions
+    assert "0.25.0" not in versions
 
 
 def test_every_override_says_why_it_exists_and_covers_at_least_one_version():

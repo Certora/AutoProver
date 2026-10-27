@@ -40,12 +40,13 @@ import enum
 import logging
 import shutil
 import tempfile
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Sequence, override
 
 
+from composer.cargo.sbf import sbf_check
 from composer.cargo.session import CargoSession, WarmFailed
 from composer.pipeline.core import (
     ComponentOutcome,
@@ -59,15 +60,22 @@ from composer.pipeline.core import (
     ToolBinder,
 )
 from composer.pipeline.ptypes import BackendJob, Curtailed, Delivered, GaveUp
+from composer.prover.conf import Conf, InheritRules, SelectRules
 from composer.prover.core import ProverOptions
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import CvlrGeneration, WorkflowContext
 from composer.spec.cvlr.author import batch_cvlr_generation
 from composer.spec.cvlr.editor import EditingServices, ProgramEditing, program_editing
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
+from composer.spec.cvlr.conf import (
+    DEFAULT_FEATURE,
+    HOST_RUST_TOOLCHAIN,
+    PLATFORM_TOOLS_VERSION,
+    delivered_conf,
+)
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
+from composer.spec.cvlr.patch import snapshot, write_component_patches, write_patch
 from composer.spec.cvlr.prover import Submission
 from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, declare_unit_features
 from composer.spec.cvlr.tree import SharedTree
@@ -96,7 +104,7 @@ from composer.spec.source.report.schema import (
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 from composer.spec.source.report_prover import make_run_link_fetcher
 from composer.spec.source.report.schema import RuleName
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import ComponentName, PropertyFormulation
 
 _log = logging.getLogger(__name__)
 
@@ -149,6 +157,9 @@ class CvlrDeps:
     #: ``cvlr 0.6.2, cvlr-solana 0.5.1, …`` — stated in the prompt, so a reader of a transcript can
     #: tell which release the advice in it was about.
     versions: str
+    #: What the manual gets wrong for this run's generation
+    #: (:attr:`~composer.spec.cvlr.reference.ChainReference.caveats`).
+    caveats: tuple[str, ...]
     #: Where each violated rule's analysis lands, for the report to reshape into findings.
     cex_analysis: CexAnalysisStore
     #: The source tools every unit's agents read the program through, and the store their edits
@@ -182,10 +193,50 @@ class SharedBuild:
     warm_failure: str | None = None
 
 
+type _Outcome = ComponentOutcome[GeneratedHarness, SolanaComponentInstance]
+
+
+def _delivered(outcome: _Outcome) -> GeneratedHarness | None:
+    match outcome.result:
+        case Delivered(result=harness):
+            return harness
+        case _:
+            return None
+
+
+def _partial(outcome: _Outcome) -> GeneratedHarness | None:
+    match outcome.result:
+        case Curtailed(partial=Delivered(result=harness)):
+            return harness
+        case _:
+            return None
+
+
+def _component_overlays(outcomes: list[_Outcome]) -> dict[str, dict[str, str]]:
+    """Harness-module name to the edited files of each unit that edited the program.
+
+    A curtailed partial is included: its verdicts are not claims, but without its edits the draft
+    the run kept cannot be rebuilt.
+    """
+    overlays: dict[str, dict[str, str]] = {}
+    for outcome in outcomes:
+        harness = _delivered(outcome) or _partial(outcome)
+        if harness is not None and harness.applied_edits:
+            overlays[HarnessModule(outcome.feat.slug).module] = harness.vfs
+    return overlays
+
+
 @dataclasses.dataclass
 class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
     deps: CvlrDeps
     build: SharedBuild
+    #: What :meth:`finalize` wrote, for the report to name.
+    patch: Path | None = dataclasses.field(default=None, init=False)
+    #: Harness-module name to the patch :meth:`finalize` wrote for that unit, relative to the
+    #: project. Empty until then, and empty when no unit edited the program.
+    component_patches: dict[str, Path] = dataclasses.field(default_factory=dict, init=False)
+    #: Component to the conf :meth:`finalize` wrote for it, relative to the project.
+    confs: dict[ComponentName, Path] = dataclasses.field(default_factory=dict, init=False)
 
     @override
     async def formalize(
@@ -252,6 +303,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             program=self.deps.preflight.package,
             module=identity.module,
             cvlr_versions=self.deps.versions,
+            caveats=self.deps.caveats,
             target=target,
             verify=verify,
             editing=self.deps.editing,
@@ -278,30 +330,45 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
         run: PipelineRun,
     ) -> list[SourceEditRecord]:
-        """The edits each delivered unit's verdicts were earned against, as one patch per unit.
+        """The edits each delivered unit's verdicts were earned against, as one record per unit.
 
         Reported through the shared hook rather than a CVLR-specific one, because an edit to the
         program *is* a source edit and the report already has a vocabulary for that —
         ``SourceEditRecord``'s own docstring says its presence means "the component's outcomes are
         claims about the modified code, not the code as shipped". The same shape EVM reports.
 
-        Each unit's diff is its own overlay against the project, so it is a patch the user can apply
-        on its own, and it survives the working tree being deleted. Two units' patches to one file
-        are not merged: that is left to the user. The harness module is never in an overlay — it is
-        a new file and this unit's own deliverable, not a modification of the program.
+        Each unit's diff is its own overlay against the project as the run left it, harness already
+        in place, and it survives the working tree being deleted. Two units' overlays are not
+        merged. The harness module is never in an overlay — it is a new file and this unit's own
+        deliverable, not a modification of the program. The patch that applies to the project as
+        shipped is the one :meth:`finalize` wrote for the unit, named here by ``patch_path``.
         """
+        # Delivered only. A curtailed partial's verdicts are unreliable by construction, and a
+        # SourceEditRecord here means "these outcomes are claims about the modified code" — which
+        # says nothing useful about outcomes that are not claims at all.
+        return await self._edit_records(outcomes, _delivered, Path(run.source.project_root))
+
+    @override
+    async def curtailed_source_edits(
+        self, outcomes: list[_Outcome], run: PipelineRun
+    ) -> list[SourceEditRecord]:
+        """The same records for the partials the budget cut short, so the kept draft can be rebuilt
+        from the deliverables."""
+        return await self._edit_records(outcomes, _partial, Path(run.source.project_root))
+
+    async def _edit_records(
+        self,
+        outcomes: list[_Outcome],
+        harness_of: Callable[[_Outcome], GeneratedHarness | None],
+        project: Path,
+    ) -> list[SourceEditRecord]:
         records: list[SourceEditRecord] = []
-        project = Path(run.source.project_root)
         for outcome in outcomes:
-            # Delivered only. A curtailed partial's edits are in its state, but its verdicts are
-            # unreliable by construction, and a SourceEditRecord means "these outcomes are claims
-            # about the modified code" — which says nothing useful about outcomes that are not
-            # claims at all.
-            if not isinstance(outcome.result, Delivered):
+            harness = harness_of(outcome)
+            if harness is None or not harness.applied_edits:
                 continue
-            harness = outcome.result.result
-            if not harness.applied_edits:
-                continue
+            stem = HarnessModule(outcome.feat.slug).module
+            patch = self.component_patches.get(stem)
             records.append(
                 SourceEditRecord(
                     component=outcome.feat.display_name,
@@ -311,9 +378,63 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                     cumulative_diff=await asyncio.to_thread(
                         diff_against_baseline, harness.vfs, project
                     ),
+                    patch_path=None if patch is None else patch.as_posix(),
                 )
             )
         return records
+
+    @override
+    async def finalize(
+        self, outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
+        run: PipelineRun,
+    ) -> None:
+        root = Path(run.source.project_root)
+        await asyncio.to_thread(self._write_confs, outcomes, root)
+        self.patch = await asyncio.to_thread(write_patch, root)
+        self.component_patches = await asyncio.to_thread(
+            write_component_patches, root, _component_overlays(outcomes)
+        )
+
+    def _write_confs(self, outcomes: list[_Outcome], root: Path) -> None:
+        """Write each delivered unit's conf, and the summaries file it names into the project.
+
+        The summaries file is otherwise only in the run's working tree. Written before the patches
+        are diffed, so both patches carry it.
+        """
+        confs: dict[HarnessModule, Conf] = {}
+        names: dict[HarnessModule, ComponentName] = {}
+        for outcome in outcomes:
+            harness = _delivered(outcome)
+            if harness is None or harness.settings is None:
+                continue
+            unit = HarnessModule(outcome.feat.slug)
+            TuningFiles(
+                envs_dir=root / self.deps.package_dir / ENVS_DIR,
+                dialect=self.deps.preflight.scaffold.dialect,
+                unit=unit.module,
+            ).write(tuple(harness.summaries))
+            confs[unit] = delivered_conf(
+                harness.settings,
+                features=(DEFAULT_FEATURE, unit.feature),
+                summaries=(ENVS_DIR / SUMMARIES.unit_composite(unit.module),),
+                rules=(
+                    SelectRules(tuple(harness.declared_rules))
+                    if harness.declared_rules
+                    else InheritRules()
+                ),
+                msg=f"{self.deps.preflight.package}: {outcome.feat.display_name}",
+            )
+            names[unit] = outcome.feat.display_name
+        written = self.deps.store.write_confs(confs)
+        self.confs = {names[unit]: path for unit, path in written.items()}
+
+    @override
+    def deliverable_patch(self) -> str | None:
+        return self.patch.as_posix() if self.patch is not None else None
+
+    @override
+    def deliverable_confs(self) -> dict[ComponentName, str]:
+        return {name: path.as_posix() for name, path in self.confs.items()}
 
     @override
     def build_environment(self) -> BuildEnvironment:
@@ -389,7 +510,10 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
         )
         await tree.materialize()
         session = CargoSession(
-            workdir=tree.root, sandbox=self.deps.sandbox, toolchain=HOST_RUST_TOOLCHAIN
+            workdir=tree.root,
+            sandbox=self.deps.sandbox,
+            toolchain=HOST_RUST_TOOLCHAIN,
+            check_with=sbf_check(PLATFORM_TOOLS_VERSION),
         )
         submission_dir = self.deps.work_dir / SUBMISSIONS_DIR
         submission_dir.mkdir(parents=True, exist_ok=True)
@@ -479,8 +603,12 @@ class CvlrBackend:
         stops the run having spent at most one partial analysis agent instead of surfacing as
         unfixable compiler errors after the whole extraction phase. The gate is a build, so it goes
         on the run's CPU budget rather than its agent budget."""
+        await asyncio.to_thread(snapshot, Path(run.source.project_root))
         pre = await prepare_workspace(
-            Path(run.source.project_root), package=self.package, reference=self.reference
+            Path(run.source.project_root),
+            package=self.package,
+            reference=self.reference,
+            sandbox=self.sandbox,
         )
 
         async def gate() -> None:
@@ -516,6 +644,7 @@ class CvlrBackend:
             preflight=preflight,
             package_dir=preflight.package_dir,
             versions=versions,
+            caveats=self.reference.caveats,
             cex_analysis=self.cex_analysis,
             editing=program_editing(
                 self.editing,

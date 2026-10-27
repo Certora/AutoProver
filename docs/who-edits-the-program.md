@@ -605,8 +605,7 @@ pub mod liquidity_layer;
 ```
 
 Nothing is aliased, so the resolution problem never arises: a different file is compiled in the
-module's place, carrying its own types and `impl` blocks. `docs/cvlr-backend-plan.md` §7.12 item 3
-has the evidence and the two instances it was read off.
+module's place, carrying its own types and `impl` blocks.
 
 ### 11.1 What the tool owns, and why
 
@@ -1288,8 +1287,12 @@ who writes the gate and how the edit is stored.
   wrote. Code the edit keeps is wrapped, never retyped.
 * **An edit is text.** There are no records, no replay onto the pristine project, and no union of
   units' edits in one file.
-* **The report hands the user one patch per unit**, as EVM's `source_edits` does
-  (`SourceEditRecord.cumulative_diff`). Merging two units' patches to one file is the user's job.
+* **The report hands the user one patch per unit.** `cumulative_diff` is that unit's edits against
+  the project as the run left it, the same record EVM writes. The file a user applies is
+  `certora/cvlr/components/<module>.patch`: the harness plus those edits, against the project as
+  shipped. Two units' patches are not merged, and they are applied one at a time to that clean
+  project. A unit the budget cut short gets the same patch, named from its budget-appendix record
+  rather than `source_edits`, so its kept draft can be rebuilt.
 
 That removed every piece of Rust reading the records needed — locating a function's signature and
 body, parsing `use` trees, recognizing a sibling's gate — along with the record vocabulary, its

@@ -171,6 +171,11 @@ class CurtailedComponent(BaseModel):
     drafted: list[DraftedProperty] = Field(default_factory=list)
     skipped: list[CurtailedSkip] = Field(default_factory=list)
     unattempted: list[PropertyFormulation] = Field(default_factory=list)
+    #: The edits to the program the partial was drafted against, and the patch that rebuilds it.
+    #: Kept here rather than in the report's ``source_edits``, whose entries say the component's
+    #: outcomes are claims about the edited code; a partial makes no claims. ``None`` when the
+    #: partial edited nothing, and on reports written before schema 3.7.
+    source_edits: "SourceEditRecord | None" = None
 
 
 class PropertyGroup(BaseModel):
@@ -227,6 +232,11 @@ class SourceEditRecord(BaseModel):
     component: ComponentName
     applied_edits: list[AppliedEditRecord]
     cumulative_diff: str
+    #: Project-relative path of a patch that applies this component's proved tree — the harness and
+    #: these edits — to the project as shipped. Set when the harness lives inside the program, where
+    #: ``cumulative_diff`` is the program edits alone and applies to the tree the run left behind.
+    #: ``None`` for every other backend, and on reports written before schema 3.6.
+    patch_path: str | None = None
 
 
 class VerificationArtifactRecord(BaseModel):
@@ -389,7 +399,7 @@ class HoistedClaim(BaseModel):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4"] = "3.4"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7"] = "3.7"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive" or
     #: "prioritized"). Absent on reports written before the mode existed, which are all
@@ -412,6 +422,11 @@ class AutoProverReport(BaseModel):
     properties: list[FormalizedProperty]
     rules: list[RuleVerdict]
     groups: list[PropertyGroup]
+    #: Why the properties were put in one ``general`` group instead of being grouped: the
+    #: grouping call failed, its result failed validation, or it grouped nothing. ``None`` when
+    #: grouping worked or there was nothing to group, and on reports written before schema 3.5.
+    #: Without it a fallback report looks like one whose single group was an editorial choice.
+    grouping_fallback_reason: str | None = None
     #: Formalization gaps — properties that exist but no rule formalizes (see the two gap types).
     skipped: list[SkippedClaim] = Field(default_factory=list)
     gave_up_components: list[GaveUpComponent] = Field(default_factory=list)
@@ -425,6 +440,15 @@ class AutoProverReport(BaseModel):
     #: nothing of the project, and on any report written before schema 3.3 — which is why the
     #: absent case must not be read as "confined".
     build_environment: BuildEnvironment | None = Field(default=None, discriminator="kind")
+    #: A unified diff, relative to the project root, that applies the run's verification
+    #: scaffolding (the harness and the manifest wiring it needs) to the project as shipped, for a
+    #: backend whose harness lives inside the program rather than beside it. ``None`` for every
+    #: other backend, when the run changed nothing, and on reports written before schema 3.5.
+    deliverable_patch: str | None = None
+    #: Component to a prover conf, relative to the project root, that checks that component's rules
+    #: again once ``deliverable_patch`` is applied. Empty for a backend whose confs need nothing
+    #: from the run, and on reports written before schema 3.7.
+    prover_confs: dict[ComponentName, str] = Field(default_factory=dict)
     #: Verification-supporting artifacts registered by plugin tools during
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)
@@ -433,3 +457,7 @@ class AutoProverReport(BaseModel):
     #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose
     #: is synthesized at report time — see ``report/findings.py``.
     findings: list[Finding] = Field(default_factory=list)
+    #: Violated rules whose finding could not be written, after retries. Each is still a ``BAD``
+    #: entry in ``rules``; this list is what keeps a missing write-up from reading as "nothing
+    #: was violated". Empty on reports written before schema 3.5.
+    findings_unwritten: list[RuleName] = Field(default_factory=list)

@@ -1,0 +1,15 @@
+# Demangled symbols from a minimal Anchor 1.2.1 program (anchor-lang/anchor-spl 1.2.1 from
+# Certora/anchor certora-v1.2.1, default `solana-v3` feature) scaffolded with cvlr-solana 0.6.0 and
+# built for SBF with platform-tools v1.53. One handler uses `require!`, `require_gte!` and
+# `require_keys_eq!(…, signer.key())`; its rule calls `Account::try_from` and `Signer::try_from`.
+# Filtered to `anchor_lang_error`, the crate Anchor 1.1.0 split `anchor_lang::error` into.
+# Regenerate with:
+#   cargo certora-sbf --tools-version v1.53 --features certora
+#   llvm-nm --defined-only target/sbpf-solana-solana/release/<program>.so \
+#     | awk '{ $1=""; $2=""; sub(/^[ \t]+/,""); print }' | rustfilt | sort -u | grep anchor_lang_error
+<anchor_lang_error::Error as core::convert::From<anchor_lang_error::ErrorCode>>::from
+<anchor_lang_error::Error as core::fmt::Debug>::fmt
+<anchor_lang_error::ErrorCode as core::fmt::Display>::fmt
+anchor_lang_error::ErrorCode::name
+core::ptr::drop_in_place<anchor_lang_error::Error>
+core::ptr::drop_in_place<core::option::Option<anchor_lang_error::ErrorOrigin>>

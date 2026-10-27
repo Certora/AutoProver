@@ -131,7 +131,7 @@ common Solana shape.
 None of this is safe to formalize on its own: with the prohibition lifted, several components
 will restate the same property. Step 3 has to land before a full run.
 
-**Status: done, uncommitted (2026-10-12).** The skip rule went into the CVLR author's prompt, where
+**Status: done.** The skip rule went into the CVLR author's prompt, where
 `record_skip` is taught, rather than the extraction guidance. Every new example is drawn from
 vaults, pools and lending, never staking: the step 2 experiment measures whether extraction finds
 the stake program's solvency condition, and an example that states it would leak the answer.
@@ -221,7 +221,7 @@ shared unit as a single property. Components keep what is specific to them.
 - **Caching.** The hoist's output is what formalization keys on, so it needs its own cache layer,
   like the prioritization step has.
 
-**Status: built, uncommitted (2026-10-12).** `composer/spec/hoist.py` holds the plan model,
+**Status: built.** `composer/spec/hoist.py` holds the plan model,
 its validation and the call; `_hoist` in `composer/pipeline/core.py` applies it after the pin is
 written, so a pinned replay hoists from the raw extraction. The opt-in is a `shared_unit`
 property on the backend: `None` everywhere except CVLR, so Crucible and EVM are unchanged. The
@@ -237,12 +237,7 @@ On arm 1's 145 properties the plan validated on its first attempt: 15 groups abs
 properties, leaving 96 to formalize (15 shared, 81 in their components). Solvency's representative
 stands for 8 properties and conservation's for 7.
 
-Open:
-
-- **The report does not yet say what was absorbed.** Resolved by schema 3.4; see the follow-up
-  below.
-- **The shared unit is large.** Fifteen properties over eighteen handlers. Step 5 measures whether
-  it fits a unit's budget.
+The shared unit is large: fifteen properties over eighteen handlers here. Step 5 measured it.
 
 ### 4. Show the extractor where the arithmetic lives
 
@@ -256,7 +251,7 @@ EVM has a coarser version of this: a Solidity `library` is modelled as a contrac
 becomes an extraction subject. Internal functions and dependency math are not surfaced there
 either. Build it Solana-first, shaped so it could move into the shared model.
 
-**Status: built, uncommitted (2026-10-12).** `Computation` (function path, crate, what it
+**Status: built.** `Computation` (function path, crate, what it
 computes, the instructions that use it) is an optional field on `ProgramComponent`, so every cached
 analysis still validates; `_solana_validate` checks that `used_by` names declared instructions.
 The shared unit carries every component's computations, once each.
@@ -349,7 +344,7 @@ that spans every instruction.
   `extract_function` for private handlers and stand-ins for CPIs. Munges are feature-gated per
   unit and `tree.replay` handles two units extracting the same function, so this works today.
   It does mean the unit re-establishes munges its siblings also make, which costs time.
-- **Scheduling:** this unit is dispatched first. U21 showed that units queued late under budget
+- **Scheduling:** this unit is dispatched first (`_hoist` puts the shared batch first). U21 showed that units queued late under budget
   pressure start, get told to wrap up immediately, and author nothing. The properties the
   reviewers care most about should not be the ones at risk.
 - **Size:** a unit that drives 18 handlers through several invariants is large. Start with one
@@ -366,23 +361,28 @@ spec. The baseline is the third stake run.
   rent_exempt_reserve <= lamports`; staker and withdrawer authority separation; lockup on
   Withdraw. Add the reviewers' stake-math bounds. Score each item as verified whole, verified in
   parts, or absent.
-- **Design versus implementation share,** with a fixed classifier prompt and a human spot-check.
-  The target is not 100%: some implementation properties are worth having.
 - **Delivery:** whether the shared unit publishes, and its per-handler verdicts.
 - **The reviewers.** Send them the new spec. Theirs is the judgment this plan is trying to
   satisfy.
 
+The design-versus-implementation share was dropped as a metric after step 4's result: it did not
+track the rubric.
+
+**Result: the fourth stake run (2026-10-16, on stake `main`).** Recorded in `stake-benchmark.md`,
+"The fourth run". The hoist folded 66 component properties into 19 shared ones. The shared unit
+published 16 of the 19, all verified, with 117 rules counted once per property they cover, in 8
+hours. Every rubric item has a verified property, R1 and R2 as single properties over every handler
+that writes the state. The stake-math bounds are verified as integer properties.
+
+**Open:** the vault regression run, and the reviewers' read of the new spec.
+
 ## Open questions
 
-1. **Does the synthetic unit belong in the analyzed model or only in the unit list?** Appending a
-   component to the model makes it visible to every consumer, including the report and Crucible.
-   Keeping it out means the report needs another way to name the unit. The first is simpler, and
-   the report would show "Protocol invariants" as a component.
-2. **What about applications with several programs?** The stake benchmark has one. Hoisting
-   and the dedicated pass are both per program here. Leave multi-program for later, and note it.
-3. **Who classifies properties for the metric?** An LLM classifier is cheap and repeatable but
-   shares the extractor's blind spots. A human pass over 100-odd properties takes about an hour.
-   I'd use both on the first comparison.
+1. **What about applications with several programs?** The stake benchmark has one. The hoist is
+   per program. Leave multi-program for later.
+
+The synthetic unit is a component of a copy of the analyzed model, so the report shows "Protocol
+invariants" as a component.
 
 ## Not in this plan
 

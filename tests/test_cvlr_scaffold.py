@@ -38,7 +38,8 @@ from composer.spec.cvlr.scaffold import (
     plan_scaffold,
 )
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
-from composer.spec.cvlr.reference import SOLANA_V2, SOLANA_V3, SOROBAN, generations
+from composer.spec.cvlr.reference import SOLANA_V1_18, SOLANA_V2, SOLANA_V3, SOROBAN, generations
+from composer.sandbox.config import SandboxConfig
 from tests.conftest import CVLR_SOLANA_0_5_1_COMMIT, read_from_commit
 
 PROGRAM = """\
@@ -46,6 +47,8 @@ use solana_program::account_info::AccountInfo;
 
 pub fn process(_accounts: &[AccountInfo]) {}
 """
+
+_UNCONFINED = SandboxConfig(provider="none")
 
 
 def _project(
@@ -787,10 +790,14 @@ class _FakeCargo:
         self.workspace = workspace
         self.calls: list[tuple[Path, tuple[str, ...]]] = []
         self.toolchains: list[str | None] = []
+        self.cargo_homes: list[Path | None] = []
 
-    async def __call__(self, root, *, offline=False, features=(), toolchain=None, timeout_s=0):
+    async def __call__(
+        self, root, *, offline=False, features=(), toolchain=None, cargo_home=None, timeout_s=0
+    ):
         self.calls.append((Path(root), tuple(features)))
         self.toolchains.append(toolchain)
+        self.cargo_homes.append(cargo_home)
         return self.workspace
 
 
@@ -816,7 +823,9 @@ async def test_preflight_resolves_the_verification_graph_from_the_packages_own_d
     )
     fake = fake_cargo(workspace)
 
-    result = await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, package="prog")
+    result = await preflight.prepare_workspace(
+        tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
+    )
 
     assert fake.calls[0] == (tmp_path, ())
     assert fake.calls[-1] == (package.root, ("certora",))
@@ -835,8 +844,28 @@ async def test_preflight_reads_the_project_with_the_host_toolchain_not_its_pin(
         tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, package_dir="programs/prog"
     )
     fake = fake_cargo(workspace)
-    await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, package="prog")
+    await preflight.prepare_workspace(
+        tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
+    )
     assert fake.toolchains and set(fake.toolchains) == {HOST_RUST_TOOLCHAIN}
+
+
+@pytest.mark.asyncio
+async def test_a_confined_preflight_fetches_into_the_cargo_home_the_gate_warms(
+    tmp_path, fake_cargo
+):
+    """A confined install's shared CARGO_HOME is not the runtime user's to write, so the reads
+    fetch where the gate's warm step will look."""
+    from composer.sandbox.recipes import sandbox_cargo_home
+
+    workspace, _ = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, package_dir="programs/prog"
+    )
+    fake = fake_cargo(workspace)
+    await preflight.prepare_workspace(
+        tmp_path, reference=SOLANA_V2, sandbox=SandboxConfig(provider="launcher"), package="prog"
+    )
+    assert fake.cargo_homes and set(fake.cargo_homes) == {sandbox_cargo_home(tmp_path)}
 
 
 @pytest.mark.asyncio
@@ -845,7 +874,7 @@ async def test_preflight_reports_what_cargo_said_when_the_project_cannot_be_read
 ):
     fake_cargo(CargoFailed("error: failed to parse manifest at `Cargo.toml`\n"))
     with pytest.raises(preflight.PreflightFailed, match="failed to parse manifest") as caught:
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2)
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED)
     assert str(caught.value).startswith(f"Could not read the Cargo project at {tmp_path}:")
 
 
@@ -857,7 +886,7 @@ async def test_preflight_refuses_to_choose_between_verifiable_packages(tmp_path,
     fake_cargo(replace(workspace, members=(package, second)))
 
     with pytest.raises(preflight.PreflightFailed, match="name the one to verify"):
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2)
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED)
 
 
 @pytest.mark.asyncio
@@ -868,7 +897,9 @@ async def test_preflight_names_the_members_when_asked_for_one_that_is_not_there(
     fake_cargo(workspace)
 
     with pytest.raises(preflight.PreflightFailed, match="members: prog"):
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, package="nope")
+        await preflight.prepare_workspace(
+            tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="nope"
+        )
 
 
 @pytest.mark.asyncio
@@ -883,7 +914,9 @@ async def test_a_blocked_plan_stops_preflight_with_the_resolution_in_the_message
     fake_cargo(workspace)
 
     with pytest.raises(preflight.PreflightFailed, match="crate-type"):
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, package="prog")
+        await preflight.prepare_workspace(
+            tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
+        )
     assert not (tmp_path / "src" / "certora").exists()
 
 
@@ -942,16 +975,16 @@ def test_redirecting_twice_is_a_no_op(tmp_path):
 
 
 def test_an_anchor_version_the_fork_does_not_cover_blocks_the_whole_plan(tmp_path):
-    """The fork has a branch for 0.30.1 and not 0.30.0. The plan blocks instead of scaffolding a
+    """The fork has a branch for 0.26.0 and not 0.25.0. The plan blocks instead of scaffolding a
     project that builds and then reports a pointer-analysis error with nothing about Anchor."""
     workspace, package = _project(
         tmp_path,
-        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.30.0"),
+        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.25.0"),
         workspace_manifest='[workspace]\nmembers = ["."]\n',
-        cvlr_resolved={"anchor-lang": "0.30.0"},
+        cvlr_resolved={"anchor-lang": "0.25.0"},
     )
     plan = plan_scaffold(workspace, package, SOLANA_V2)
-    assert any("0.30.0" in b.problem for b in plan.blocked), plan.blocked
+    assert any("0.25.0" in b.problem for b in plan.blocked), plan.blocked
     with pytest.raises(ScaffoldBlocked):
         apply(plan, tmp_path)
     # A blocked plan applies nothing at all, including the parts that were fine.
@@ -973,11 +1006,11 @@ def test_the_forks_planned_are_the_reference_chains_own(tmp_path):
     even one the Anchor fork does not cover."""
     workspace, package = _project(
         tmp_path,
-        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.30.0"),
+        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.25.0"),
         workspace_manifest='[workspace]\nmembers = ["."]\n',
         platform="22.0.0",
         platform_crate="soroban-sdk",
-        cvlr_resolved={"anchor-lang": "0.30.0"},
+        cvlr_resolved={"anchor-lang": "0.25.0"},
     )
     plan = plan_scaffold(workspace, package, SOROBAN)
     core_commits = {p.name for p in SOROBAN.from_commits()}
@@ -1074,7 +1107,8 @@ def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
         ("solana-account-info", "3.1.1", "solana-* 3.x"),
         ("solana-account-info", "2.3.0", "solana-program 2.x"),
         ("solana-program", "2.2.1", "solana-program 2.x"),
-        ("solana-program", "1.18.26", None),
+        ("solana-program", "1.18.26", "solana-program 1.18"),
+        ("solana-program", "1.17.18", None),
     ],
 )
 def test_a_project_is_set_up_with_the_generation_it_is_on(
@@ -1101,3 +1135,23 @@ def test_an_sdk3_project_scaffolds_on_its_generation_and_is_refused_by_the_other
     assert not plan_scaffold(workspace, package, SOLANA_V3).blocked
     refused = plan_scaffold(workspace, package, SOLANA_V2).blocked
     assert any("solana-account-info 3.1.1" in b.problem for b in refused)
+
+
+def test_a_1_17_project_is_refused_by_the_1_18_generation(tmp_path):
+    """Before 2.0 a minor release is a generation: `cvlr-solana` 0.4's `^1.18` cannot resolve
+    against a `~1.17` target, and the refusal has to say that rather than leave it to cargo."""
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, platform="1.17.18"
+    )
+    (blocked,) = plan_scaffold(workspace, package, SOLANA_V1_18).blocked
+    assert "solana-program 1.17.18" in blocked.problem
+    assert blocked.resolution == "move the project to solana-program 1.18"
+
+
+def test_a_1_18_project_scaffolds_without_program_models(tmp_path):
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, platform="1.18.26"
+    )
+    plan = plan_scaffold(workspace, package, SOLANA_V1_18)
+    assert not plan.blocked
+    assert not any("cvlr-spl-token" in str(c) or "cvlr-solana-stake" in str(c) for c in plan.changes)

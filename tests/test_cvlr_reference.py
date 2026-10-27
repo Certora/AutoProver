@@ -153,7 +153,28 @@ def test_a_commit_is_pinned_by_hash_and_never_by_a_name_that_can_move():
 
 
 def test_solana_has_one_reference_set_per_generation_newest_first():
-    assert ref.generations("solana") == (ref.SOLANA_V3, ref.SOLANA_V2)
+    assert ref.generations("solana") == (ref.SOLANA_V3, ref.SOLANA_V2, ref.SOLANA_V1_18)
+
+
+def test_the_1_18_line_shares_the_core_and_has_no_program_models():
+    """`cvlr-solana` 0.4.x requires `cvlr-*` `>=0.4, <1`, so it resolves onto the one 0.6.2 core.
+    The 0.4 line has no stake model and no separate token crate, so there is nothing to withhold."""
+    v1 = ref.SOLANA_V1_18
+    assert v1.core == ref.SOLANA_V2.core
+    assert (v1.chain_crate.name, v1.chain_crate.version) == ("cvlr-solana", "0.4.6")
+    assert v1.models == ()
+    assert {c.name for c in v1.scaffold_crates()} == {"cvlr", "cvlr-solana"}
+    assert 'solana-program = "1.18"' in v1.cargo_dependencies()
+    assert v1.platform.path_aliases == ()
+    with pytest.raises(ValueError, match="models: none"):
+        v1.withholding("cvlr-solana-stake")
+
+
+def test_only_the_1_18_line_warns_the_author_off_the_manual():
+    """The manual is written for the newest line. On 1.18 it names crates that do not exist."""
+    assert ref.SOLANA_V3.caveats == ref.SOLANA_V2.caveats == ()
+    caveats = " ".join(ref.SOLANA_V1_18.caveats)
+    assert "cvlr_spl_token" in caveats and "cvlr_solana::token" in caveats
 
 
 def test_the_sdk3_line_is_released_whole():

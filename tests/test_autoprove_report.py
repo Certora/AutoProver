@@ -39,8 +39,9 @@ from composer.spec.source.report.grouping import (
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
     AutoProverReport, ConfinedBuilds, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
-    GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
-    PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim, UnconfinedBuilds,
+    AppliedEditRecord, GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel,
+    Outcome, PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim, SourceEditRecord,
+    UnconfinedBuilds,
 )
 from composer.spec.source.report_prover import job_input, make_prover_fetcher, make_run_link_fetcher
 from composer.spec.source.report.collect import Abandoned, RuleEvidence
@@ -627,6 +628,40 @@ def _mini_report() -> AutoProverReport:
                             skipped=skipped, coverage=cov)
 
 
+def test_render_html_names_the_patch_that_applies_a_components_edits():
+    """A CVLR record carries the file to apply. An EVM record has none, and the diff is the record."""
+    edited = SourceEditRecord(
+        component="Vault",
+        applied_edits=[AppliedEditRecord(edit_id="e", executive_summary="s", why_sound="w")],
+        cumulative_diff="--- a/src/lib.rs\n",
+        patch_path="certora/cvlr/components/vault.patch",
+    )
+    named = render_html(_mini_report().model_copy(update={"source_edits": [edited]}))
+    assert "certora/cvlr/components/vault.patch" in named
+    plain = render_html(
+        _mini_report().model_copy(update={"source_edits": [edited.model_copy(update={"patch_path": None})]})
+    )
+    assert "certora/cvlr/components/vault.patch" not in plain
+    assert "Cumulative diff from on-disk source" in plain
+
+
+def test_render_html_names_the_patch_that_rebuilds_a_partial():
+    edits = SourceEditRecord(
+        component="D",
+        applied_edits=[AppliedEditRecord(edit_id="e", executive_summary="s", why_sound="w")],
+        cumulative_diff="--- a/src/lib.rs\n",
+        patch_path="certora/cvlr/components/d.patch",
+    )
+    cut = CurtailedComponent(component="D", artifact="src/certora/specs/d.rs.unverified")
+    plain = render_html(_mini_report().model_copy(update={"curtailed_components": [cut]}))
+    assert "certora/cvlr/components/d.patch" not in plain
+    edited = render_html(_mini_report().model_copy(
+        update={"curtailed_components": [cut.model_copy(update={"source_edits": edits})]}
+    ))
+    assert "certora/cvlr/components/d.patch" in edited
+    assert "Source modifications" not in edited
+
+
 def test_render_html_says_nothing_about_builds_it_was_not_told_about():
     """A report with no ``build_environment`` is either an EVM backend's — nothing of the project
     was compiled — or one written before the field existed. Neither is evidence of confinement, so
@@ -638,7 +673,7 @@ def test_render_html_says_nothing_about_builds_it_was_not_told_about():
 
 def test_render_html_marks_an_unconfined_run():
     """The whole point of the field: a result produced without confinement must not be mistaken for
-    a production one, and stderr on a machine nobody kept is not a record (§7.12 item 4)."""
+    a production one, and stderr on a machine nobody kept is not a record (§7.8.4)."""
     h = render_html(_mini_report().model_copy(update={"build_environment": UnconfinedBuilds()}))
     assert "<dt>Builds</dt>" in h
     assert "Unconfined builds:" in h
@@ -952,6 +987,8 @@ async def test_build_empty_grouping_falls_back(tmp_path):
     assert set(g.members) == {("C", "p1"), ("C", "p2")}
     assert g.status == GroupStatus.BAD  # r2 violated
     assert any("FALLBACK GROUPING APPLIED" in w for w in report.coverage.warnings)
+    assert report.grouping_fallback_reason is not None
+    assert "no high-level properties" in report.grouping_fallback_reason
 
 
 @pytest.mark.asyncio
@@ -1003,6 +1040,30 @@ async def test_build_curtailed_is_appendixed_not_grouped(tmp_path):
     assert any("cut short by the run budget" in w for w in report.coverage.warnings)
     # The curtailed partial's stale run link stays out of the header map.
     assert "D" not in report.prover_links
+
+
+@pytest.mark.asyncio
+async def test_build_puts_a_partials_edits_in_its_appendix_record_only():
+    """A partial's edits rebuild the draft, but a ``source_edits`` entry would say its outcomes are
+    claims about the edited code."""
+    edits = SourceEditRecord(
+        component="D",
+        applied_edits=[AppliedEditRecord(edit_id="e", executive_summary="s", why_sound="w")],
+        cumulative_diff="--- a/src/lib.rs\n",
+        patch_path="certora/cvlr/components/d.patch",
+    )
+    report = await build.build_report(
+        contract_name="C",
+        backend="prover",
+        components=[_curtailed_input("D", [_prop("q", "d")], _gen({"q": ["rq"]}), link="Lq")],
+        llm=_StructuredStubModel(output=GroupingResult(groups=[])),
+        fetch_verdicts=_fetcher({}),
+        curtailed_source_edits=[edits],
+    )
+
+    (c,) = report.curtailed_components
+    assert c.source_edits == edits
+    assert report.source_edits == []
 
 
 @pytest.mark.asyncio
@@ -1099,6 +1160,7 @@ async def test_build_report_synthesizes_one_finding_per_violation():
     )
 
     assert len(report.findings) == 1
+    assert report.grouping_fallback_reason is None
     f = report.findings[0]
     assert f.severity == "high"                            # computed: impact high × likelihood medium
     prov = f.provenance
@@ -1134,11 +1196,11 @@ async def test_build_findings_degrades_without_analysis():
     rules = [_rv("c.spec", "r_bad", Outcome.BAD)]
     props = [_fp("C", "p_bad", [("c.spec", "r_bad")], desc="balances stay solvent")]
     groups = [_pg("g", [("C", "p_bad")], status=GroupStatus.BAD)]
-    findings = await build_findings(
+    findings = (await build_findings(
         contract_name="Vault", rules=rules, properties=props, groups=groups,
         fetch_evidence=_evidence({}),  # fetcher present, but no evidence recorded for r_bad
         llm=_StructuredStubModel(output=_draft(impact_level="medium", likelihood_level="medium")),
-    )
+    )).findings
     assert len(findings) == 1
     assert findings[0].severity == "medium"               # medium × medium
     assert findings[0].content.proof_of_concept is None
@@ -1155,7 +1217,56 @@ async def test_build_findings_empty_without_evidence_fetcher():
         contract_name="V", rules=rules, properties=[], groups=[],
         fetch_evidence=None, llm=_StructuredStubModel(output=_draft()),
     )
-    assert findings == []
+    assert findings.findings == [] and findings.unwritten == []
+
+
+class _SlippingDraftModel(BaseChatModel):
+    """Structured output that raises on its first ``bad_answers`` calls, then returns ``output``.
+    ``asked`` records each call."""
+    output: Any
+    bad_answers: int
+    asked: list[int] = []
+
+    def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
+        def answer(_messages):
+            self.asked.append(len(self.asked))
+            if len(self.asked) <= self.bad_answers:
+                raise ValueError("FindingDraft: field required: title")
+            return self.output
+        return RunnableLambda(answer)
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        raise NotImplementedError("stub is structured-output only")
+
+    @property
+    def _llm_type(self) -> str:
+        return "slipping-draft-stub"
+
+
+def _one_bad_rule() -> dict[str, Any]:
+    return dict(
+        contract_name="Vault",
+        rules=[_rv("c.spec", "r_bad", Outcome.BAD)],
+        properties=[_fp("C", "p_bad", [("c.spec", "r_bad")], desc="balances stay solvent")],
+        groups=[_pg("g", [("C", "p_bad")], status=GroupStatus.BAD)],
+        fetch_evidence=_evidence({}),
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_finding_draft_is_asked_for_again():
+    llm = _SlippingDraftModel(output=_draft(), bad_answers=1, asked=[])
+    out = await build_findings(**_one_bad_rule(), llm=llm)
+    assert len(out.findings) == 1 and out.unwritten == []
+    assert len(llm.asked) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_finding_that_never_drafts_is_named_not_dropped():
+    llm = _SlippingDraftModel(output=_draft(), bad_answers=99, asked=[])
+    out = await build_findings(**_one_bad_rule(), llm=llm)
+    assert out.findings == [] and out.unwritten == ["r_bad"]
+    assert len(llm.asked) == 3
 
 
 def test_findings_prompt_lists_all_properties_a_rule_formalizes():
@@ -1336,3 +1447,13 @@ def test_the_run_link_fetcher_serves_any_reportable_result():
     """It reads nothing but ``run_link``, so nothing about it is backend-specific."""
     fetcher = make_run_link_fetcher(_FakeAPI({}))
     assert callable(fetcher)
+
+
+def test_render_html_names_violated_rules_with_no_finding():
+    h = render_html(_mini_report().model_copy(update={"findings_unwritten": ["r_bad"]}))
+    assert "No finding could be written for 1 violated rule: r_bad" in h
+
+
+def test_render_html_says_why_the_properties_share_one_group():
+    h = render_html(_mini_report().model_copy(update={"grouping_fallback_reason": "grouping failed: 529"}))
+    assert "because grouping them failed (grouping failed: 529)" in h

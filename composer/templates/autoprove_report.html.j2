@@ -399,6 +399,16 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
 </section>
 {%- endfor %}
 {%- endif %}
+{%- if findings_unwritten %}
+<section class="findings-head">
+  <div class="subtitle muted">No finding could be written for {{ findings_unwritten | length }} violated {{ terms.unit_plural if findings_unwritten | length > 1 else terms.unit_singular }}: {{ findings_unwritten | join(", ") }}. Each is still listed as violated below.</div>
+</section>
+{%- endif %}
+{%- if grouping_fallback_reason %}
+<section class="findings-head">
+  <div class="subtitle muted">These properties are in one group because grouping them failed ({{ grouping_fallback_reason }}), not because they belong together.</div>
+</section>
+{%- endif %}
 
 {%- for g in groups %}
 <section class="prop" id="{{ g.slug }}">
@@ -503,6 +513,22 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
     {%- if c.link.href %} &middot; <a href="{{ c.link.href }}" target="_blank" rel="noopener">last {{ c.link.label }}</a>{% endif %}</p>
   {%- endif %}
   {%- if c.detail %}<p class="note muted">{{ c.detail }}</p>{% endif %}
+  {%- if c.source_edits %}
+  {%- set se = c.source_edits %}
+  <p class="note">The draft was written against {{ se.applied_edits | length }} edit{{ "s" if se.applied_edits | length != 1 else "" }} to the program.
+  {%- if se.patch_path %} <code>{{ se.patch_path }}</code> applies them and the harness wiring to the
+  project as it was before the run; rename the draft over its module to build it.{% endif %}</p>
+  <details>
+    <summary>Edits and cumulative diff</summary>
+    {%- for e in se.applied_edits %}
+    <h4>Edit {{ loop.index }} — <span class="sort-tag">{{ e.edit_id }}</span></h4>
+    <div class="md">{{ e.executive_summary | markdown }}</div>
+    <p class="md-label">Soundness argument</p>
+    <div class="md">{{ e.why_sound | markdown }}</div>
+    {%- endfor %}
+    <pre class="diff">{{ se.cumulative_diff | diff_html }}</pre>
+  </details>
+  {%- endif %}
   <details>
     <summary>Per-property breakdown ({{ c.rows | length }})</summary>
     <table class="rules">
@@ -535,6 +561,11 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
   cumulative diff from the on-disk source follow.</p>
   {%- for se in source_edits %}
   <h3>{{ se.component }} ({{ se.applied_edits | length }} edit{{ "s" if se.applied_edits | length != 1 else "" }})</h3>
+  {%- if se.patch_path %}
+  <p>Apply <code>{{ se.patch_path }}</code> to the project as it was before the run, and build this
+  component. The patch contains the harness and these edits. Apply it on its own: a second
+  component's patch applies to that same clean project.</p>
+  {%- endif %}
   {%- for e in se.applied_edits %}
   <h4>Edit {{ loop.index }} — <span class="sort-tag">{{ e.edit_id }}</span></h4>
   <div class="md">{{ e.executive_summary | markdown }}</div>

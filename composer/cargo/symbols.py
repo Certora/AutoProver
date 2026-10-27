@@ -20,6 +20,10 @@ from elftools.elf.elffile import ELFFile
 from elftools.elf.sections import SymbolTableSection
 
 
+#: The ``rustfilt`` an image installs (:mod:`composer.scripts.solana_toolchain`).
+RUSTFILT_VERSION = "0.2.1"
+
+
 class SymbolsUnavailable(RuntimeError):
     """The build's function names cannot be read.
 

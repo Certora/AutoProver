@@ -92,7 +92,7 @@ def test_no_soroban_guidance_has_been_guessed():
 # --------------------------------------------------------------------------------------------
 
 
-def _author_system_prompt() -> str:
+def _author_system_prompt(caveats: tuple[str, ...] = ()) -> str:
     """Everything the author is told: the CVLR knowledge bundle that goes in front of every CVLR
     agent, plus this agent's own system prompt.
 
@@ -111,6 +111,7 @@ def _author_system_prompt() -> str:
 
     params: CvlrAuthorSystemParams = {
         "cvlr_versions": "cvlr 0.6.1",
+        "caveats": list(caveats),
         "module": "spec",
         "example": None,
         "conf": tunable_conf(TunableConf()),
@@ -284,11 +285,26 @@ def _author_task_prompt() -> str:
     return _PropertyGenTemplate.bind(params).render_to(load_jinja_template)
 
 
-def _judge_system_prompt() -> str:
+def _judge_system_prompt(caveats: tuple[str, ...] = ()) -> str:
     from composer.spec.cvlr.author import _JudgeSystemTemplate
 
-    params: CvlrVersionParams = {"cvlr_versions": "cvlr 0.6.1"}
+    params: CvlrVersionParams = {"cvlr_versions": "cvlr 0.6.1", "caveats": list(caveats)}
     return _JudgeSystemTemplate.bind(params).render_to(load_jinja_template)
+
+
+def test_an_older_generation_tells_the_author_and_the_judge_where_the_manual_is_wrong():
+    """The manual sends token CPIs to `cvlr_spl_token`, which the 1.18 line does not have. A run on
+    that line has to hear so from both agents' system prompts, and a run on the newest line hears
+    nothing extra."""
+    from composer.spec.cvlr.reference import SOLANA_V1_18
+
+    caveats = SOLANA_V1_18.caveats
+    for prompt in (_author_system_prompt(caveats), _judge_system_prompt(caveats)):
+        flat = _flat(prompt)
+        assert "Where the manual is wrong for this build" in flat
+        assert all(_flat(c) in flat for c in caveats)
+    assert "Where the manual is wrong" not in _author_system_prompt()
+    assert "Where the manual is wrong" not in _judge_system_prompt()
 
 
 def test_the_author_is_told_the_subject_of_a_rule_is_the_programs_code():

@@ -9,13 +9,14 @@
 ; CVT functions
 #[inline(never)] ^([^:]+::)*CVT_.*$
 
-; Rust memory allocation functions 
-#[inline(never)] ^__rust_alloc$
-#[inline(never)] ^__rust_dealloc$
-#[inline(never)] ^__rust_alloc_zeroed$
-#[inline(never)] ^__rg_alloc$
-#[inline(never)] ^__rg_dealloc$
-#[inline(never)] ^__rg_oom$
+; Rust memory allocation functions. rustc 1.89 and later put them under `__rustc::`.
+#[inline(never)] ^(__rustc::)?__rust_alloc$
+#[inline(never)] ^(__rustc::)?__rust_dealloc$
+#[inline(never)] ^(__rustc::)?__rust_alloc_zeroed$
+#[inline(never)] ^(__rustc::)?__rust_realloc$
+#[inline(never)] ^(__rustc::)?__rg_alloc$
+#[inline(never)] ^(__rustc::)?__rg_dealloc$
+#[inline(never)] ^(__rustc::)?__rg_oom$
 
 ;; We want to inline wrappers that call the global allocator
 #[inline] ^alloc::alloc::exchange_malloc$
@@ -128,11 +129,11 @@
 #[inline] ^solana_program::sysvar::clock::<impl solana_program::sysvar::Sysvar for solana_program::clock::Clock>::get$
 #[inline] ^solana_program::poseidon::PoseidonHash::new$
 #[inline] ^solana_program::account_info::AccountInfo::assign$
-;; A resize writes the account's length twice, into the serialized data and into the borrowed
-;; slice. A call the Prover does not analyze drops both writes, so the length would read as the
-;; old one afterwards. `resize` is not inlined: it zero-fills, and the Prover's memory partitioning
-;; fails on that `sol_memset_` with an internal error that ends the whole job (CERT-10184).
+;; A realloc or resize writes the account's length twice, into the serialized data and into the
+;; borrowed slice. A call the Prover does not analyze drops both writes, so the length would read as
+;; the old one afterwards.
 #[inline] ^solana_program::account_info::AccountInfo::realloc$
+#[inline] ^solana_program::account_info::AccountInfo::resize$
 #[inline] ^solana_program::account_info::AccountInfo::original_data_len$
 #[inline] ^solana_program::incinerator::check_id$
 #[inline] ^solana_program::system_program::check_id$

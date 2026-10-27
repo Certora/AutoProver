@@ -46,32 +46,14 @@ by hand is in scope, or is part of what is being measured. Those are different e
 
 ## The blocker: the CVLR line is behind the Solana SDK
 
-> **Resolved 2026-10-14.** AutoProver supports both platform generations, and the benchmark has
-> moved to stake `main`. See *Moving the benchmark to stake `main`* at the end of this document,
-> and `docs/cvlr-sdk3-support.md`.
+Stake `main` builds against the split `solana-*` 3.x crates, and when the benchmark started the
+newest `cvlr-solana` on crates.io (0.5.0) declared `solana-program = "2.2"`. `_check_platform`
+refused the pairing, since each generation has its own `AccountInfo` type, and the first three runs
+used the snapshot below. Every current Foundation program, `solana-program/token-wrap` included,
+hit the same refusal.
 
-`plan_scaffold` refuses current `main` outright:
-
-```
-BLOCKED Cargo.toml: this project builds solana-account-info 3.1.1, but the CVLR releases the
-reference set names are bound to solana-program 2.x (the last monolithic line) — and each
-generation has its own AccountInfo type, so the pairing does not compile rather than merely
-warning.
-```
-
-This is [`_check_platform`](../composer/spec/cvlr/scaffold.py) doing its job — one of the two cases
-`docs/cvlr-backend-plan.md` §7.4.1 records as wanting a human rather than a model, because it is a
-decision about how the project builds for everyone. A plan carrying a `Blocked` applies nothing.
-
-The block names two resolutions. **Only one of them exists.** `cvlr-solana` 0.5.0's own manifest
-declares `solana-program = "2.2"`, and 0.5.0 is the newest release on crates.io (2026-01-16), so
-"pin the CVLR line that matches 3.1.1" is not available.
-
-**This is not a stake-specific problem.** `solana-program/token-wrap`, the other live Foundation
-program shortlisted for this slot, pins `solana-account-info = "3.1.1"` and would produce the same
-refusal. The corpus never hit it because every project in it is on `solana-program` 2.x or 1.18.
-Pointing the backend at any current Foundation program is what surfaced it, and it will block the
-next one too.
+AutoProver now supports both generations (`docs/cvlr-sdk3-support.md`), and the benchmark runs on
+`main` (*Moving the benchmark to stake `main`*).
 
 ## The workaround, and what it costs
 
@@ -144,28 +126,21 @@ the *passing* rules may be passing for the wrong reason, and refused the launder
 *"summarising them would produce a green rule that checked nothing"*. That is P5's failure mode
 caught in the act, by the loop rather than by a human.
 
-**Three plumbing defects, which is what an unseen target is for.** Two are fixed; one is not.
+**Three plumbing defects, which is what an unseen target is for.** All three are fixed.
 
 1. **`cargo --package <name>` is ambiguous** when the program under verification is also a published
    crate that its own dev-dependencies pull back in. Fixed — the compile checks now name the package
    by manifest path.
 2. **A dangling symlink kills the run after extraction is paid for.** `program/tests/fixtures/*.so`
-   is a git-tracked symlink the project's own test build populates; `SharedTree.materialize()` calls
-   `shutil.copytree` without `symlinks=True`, dereferences it, and raises — at the first step of
-   formalization, with every extraction agent already billed. **Not fixed**; the call is in the
-   graphcore submodule. Worked around by populating the link's target.
+   is a git-tracked symlink the project's own test build populates; `SharedTree.materialize()`
+   dereferenced it and raised at the first step of formalization, with every extraction agent
+   already billed. Worked around for this run by populating the link's target; fixed since
+   (cvlr-todo U19).
 3. **Withholding a specialization had no control.** Fixed — see below.
 
-## Open, and not worked around
+## Withholding the stake model
 
-**The SDK 3.x gap.** *Closed 2026-10-14; see the last section.* A `cvlr-solana` release targeting the post-split platform generation unblocks
-every current Foundation program at once. Until there is one, this workaround is the only route and
-it expires as targets age out. This belongs with whoever owns CVLR releases.
-
-**The dangling-symlink crash** (item 2 above) is unfixed and will bite the next target that ships
-one. `symlinks=True` — or skipping links that do not resolve — is the fix, in graphcore.
-
-**`cvlr-solana-stake` is withheld from this target, and that now has a control.** The crate ships
+**`cvlr-solana-stake` is withheld from this target, and that has a control.** The crate ships
 572 lines implementing `process_withdraw`, `process_split`, `process_merge`, `process_authorize`,
 `process_delegate` and `process_deactivate` — a behavioral model of the exact instructions the
 benchmark asks the backend to specify. For any other target it is dependency modeling, which is what
@@ -254,8 +229,8 @@ under two.
 The pipeline kept dispatching queued units after the run pool was exhausted. Withdrawals, Stake &
 Lamport Movement, Deprecated Instructions and Protocol Parameter Queries each began, met the wrap-up
 order immediately and finished in about thirty seconds having authored nothing — **63 properties
-recorded as skipped for budget exhaustion without a line written**. The final report then counts
-them as failed components beside the four that did real work. Filed as [[U21]].
+recorded as skipped for budget exhaustion without a line written**. The final report then counted
+them as failed components beside the four that did real work (cvlr-todo U21, fixed since).
 
 ### What the surviving units published, and why the rule counts are low
 
@@ -288,7 +263,7 @@ cannot stand behind, is behaving correctly — that is P5's failure mode being a
 ### What the run actually established
 
 Not rule counts. The agents spent their prover budget on **diagnostics**, which is what
-[the previous run's judge](#open-and-not-worked-around) said a resumed run should do first, and the
+[the previous run's judge](#the-first-run-2026-09-23) said a resumed run should do first, and the
 answer came back.
 
 The standing hypothesis was that `Pubkey` equality on SBF (`sol_memcmp_`) was the unconstrained
@@ -351,9 +326,9 @@ container limit seen from the other side. `rule_diag_signer_set_membership` pinn
 
 The run ended with the cache holding its final drafts (1,609 lines, 12 rules), overwriting the 6,176
 lines seeded that morning. Those final drafts are the considered ones, so this is not damage — but
-the write is unconditional, so a run that achieves nothing and dies would degrade the cache the same
-way. Filed as [[U22]]. `ap-trail recover-drafts --draft largest` restored 6,463 lines and 158 rules
-from the checkpoints.
+the write was unconditional, so a run that achieves nothing and dies would degrade the cache the
+same way (cvlr-todo U22, fixed since on the CVLR side). `ap-trail recover-drafts --draft largest`
+restored 6,463 lines and 158 rules from the checkpoints.
 
 **What a resumed run should do first.** The vacuity is the live question, and the judge already
 named the experiment: add `clog!`s to the owner comparison so the counterexample is readable, and
@@ -461,8 +436,8 @@ a different trap.
 | | fix | where |
 |---|---|---|
 | 1 | Stop never-inlining the split `solana-*` crates, matching what Stake Pool runs on the same generation; teach the sysvar idiom | **done**: the blanket is back to `^solana_program::.*$`; recipe K3 |
-| 2 | Extract protocol-wide invariants once, across components (solvency, conservation, the stake math as bounds); steer the attack-vector category toward design consequences | property extraction prompts and pipeline |
-| 3 | Teach the unwrap-and-negate form for revert properties | CVLR authoring guidance |
+| 2 | Extract protocol-wide invariants once, across components (solvency, conservation, the stake math as bounds); steer the attack-vector category toward design consequences | **done**: `docs/cvlr-design-properties-plan.md` |
+| 3 | Teach the unwrap-and-negate form for revert properties | **done**: the CVLR author's prompt |
 
 **The point 1 fix, checked on the Prover.** A hand-written probe against the pristine snapshot,
 scaffolded with the corrected tuning files
@@ -552,9 +527,246 @@ used. It has the same 18 instructions as the snapshot.
 **What it costs.** `main` is a new project root, so no cache from the snapshot carries over.
 Discovery, analysis and extraction are paid again, under the cache namespace `stake-main`.
 
-**The run, set up and not launched.** The worktree is `~/src/stake-benchmark/run-main`, on branch
-`eric/autoprover-main` of the local stake checkout, clean at `bed72d0`; AutoProver scaffolds it
-itself. `~/src/stake-benchmark/run-main.sh <budget>` launches it. It withholds `cvlr-solana-stake`,
-as every run here has, and writes the extraction pin beside the log. The budget is a required
-argument. The third run spent its $600, and this one formalizes a shared protocol unit as well.
+**The run.** The worktree is `~/src/stake-benchmark/run-main`, on branch `eric/autoprover-main` of
+the local stake checkout, clean at `bed72d0`; AutoProver scaffolds it itself. It withholds
+`cvlr-solana-stake`, as every run here has. `run-main.sh <budget>` launches it on the host. The run
+below went through the Solana container instead, on a copy of the worktree, so that it would double
+as the alpha's container check.
+
+## The fourth run, on `main`, 2026-10-16
+
+`feature/solana` at `ed4ad526`, in the Solana container as the host UID, with a **$600** budget,
+cache namespace `stake-main` and `--withhold-crate cvlr-solana-stake`. It ran for **20 hours 58
+minutes** and exited 0. Priced from its token totals it cost **$454–525** (6.55M output tokens,
+362M cache reads), and the run's own accounting reached the cap. The log, the extraction pin
+(`pin-main-2026-10-16.json`), the deliverables and the failed jobs' archives are in
+`~/src/stake-benchmark/run-main-2026-10-16-output/` and `run-main-2026-10-16.out`.
+
+| unit | properties | rules | formalization |
+|---|---|---|---|
+| Protocol invariants (shared) | 16 of 19 | 117 | 8h 02m |
+| Account Initialization | 5 of 5 | 10 | 2h 58m |
+| Authority Management | 7 of 7 | 29 | 3h 54m |
+| Lockup Management | 7 of 7 | 21 | 11h 08m |
+| Delegation & Deactivation | 12 of 13 | 18 | 13h 50m |
+| Split & Merge | 8 of 10 | 9 | 6h 38m |
+| Stake & Lamport Movement | 9 of 9 | 16 | 10h 37m |
+| Protocol Parameters / Queries | 5 of 5 | 11 | 15h 33m |
+| Withdrawals | curtailed by budget | partial | 20h 30m |
+
+Rules count once per property they cover; the report holds **145 distinct rules, all verified**,
+no findings, 6 properties skipped with reasons and 8 program edits. The hoist folded 66 component
+properties into the 19 protocol-wide ones before formalization. Formalization times include waiting
+for a slot, since units ran four at a time, and Prover jobs were most of the rest.
+
+**Graded against the criteria at the top:**
+
+1. **Machinery survival: yes, on SDK 3.** Preflight read the workspace and passed the confined
+   compile gate in 4 seconds. The scaffold forwarded `certora` into `solana-stake-interface`, and 4
+   of the 8 units' program edits reach into the interface crate.
+2. **Non-vacuity.** Every rule passed its sanity check. The lamport-observation check is recorded
+   under *What to check before trusting the conservation rules*: the protocol-invariants harness
+   and Stake & Lamport Movement's `move_lamports` path both see a balance change, and the
+   Withdrawals harness does not.
+3. **The rubric:** each item has a verified property. Lamport conservation is
+   `lamports_conserved_by_every_handler` (18 rules); `delegation.stake + rent_exempt_reserve <=
+   lamports` is `live_stake_accounts_rent_exempt_and_delegation_lamport_backed` (17 rules);
+   staker-versus-withdrawer separation is Authority Management's
+   `staker_reassignment_requires_staker_or_withdrawer_signature` and
+   `withdrawer_reassignment_requires_withdrawer_signature`; lockup on `Withdraw` is
+   `in_force_lockup_blocks_withdrawal_and_withdrawer_change`.
+4. **Seeded mutants: both caught.** Checked on copies of this run's tree with that unit's patch
+   applied, one rule each, submitted to the cloud prover.
+
+   The Split mutant inverts the inactive-path rent check in `process_split`: the handler rejects a
+   split when either resulting balance is at or above the rent floor, and accepts one when both are
+   below it. `rule_split_leaves_both_accounts_backed`, the split case of
+   `live_stake_accounts_rent_exempt_and_delegation_lamport_backed`, is violated in 180 seconds. The
+   witness moves 15 lamports. The floor for a 200-byte account is 2,282,880. The source goes from
+   2,282,881 to 2,282,866 with no effective stake, and the assertion that the source stays backed
+   fails.
+   [Job](https://prover.certora.com/output/37632/2278fbf3a90c4954b6828663dbf53d9c?anonymousKey=9a68219c2ccee3864b735ce196933e29031da0cf).
+
+   The withdrawer mutant deletes `Authorized::check` for `StakeAuthorize::Withdrawer` inside
+   `Authorized::authorize`. The lockup gate stays. At `loop_iter` 2,
+   `rule_integrity_authorize` stops on the unwinding assertion in `collect_signers` — the harness's
+   account lists run to length 4 — and never reaches the signature assertion. At `loop_iter` 4 the
+   same rule is violated in 78 seconds: the staker is unchanged, the withdrawer changes, neither
+   authority signed, and `cvlr_assert!(by_withdrawer)` fails. That rule is one of the four that
+   state `withdrawer_reassignment_requires_withdrawer_signature`.
+   [Job](https://prover.certora.com/output/37632/7abdfe6dca0f415bb516b88da75eaa17?anonymousKey=5344c01fdf2fb7f8a723aeec3a6fa76e315814eb).
+
+**On the expert review's points.** Point 1 did not arise, as predicted: no unit rewrote around
+`Clock` or `Rent`. Point 2's bounds are there as integer properties:
+`warmup_cooldown_schedule_never_overstates_effective_stake`, `deactivation_epoch_set_at_most_once`
+and `delegate_never_grants_instant_effective_stake`. Point 3 holds on the delivered rules: a
+rejection is `.unwrap()` and then an assertion of the condition a success must have met, with that
+condition left free. That is how `initialize` requires the program's owner and the stake-state
+length, how `delegate` and `deactivate` require a staker signature, how `merge`, `move_stake` and
+`move_lamports` refuse transient stake, and how
+`source_equal_to_destination_rejected_by_all_two_account_handlers` is stated — the key inequality
+is an assertion after `.unwrap()` in the merge, split, withdraw, move-stake and move-lamports
+rules. Split & Merge, which held 14 of the third run's 26 `is_err` assertions, has none.
+
+What still asserts `is_err()` is a property the contrapositive cannot state, plus a few rules that
+could have used it. `rule_initialize_writes_nothing_when_rejected` and its checked twin assume a
+bad owner or length and assert both the error and that nothing was written; the rejection half is
+already the contrapositive pair, and the "nothing written" half needs the error path.
+`rule_set_lockup_checked_new_custodian_must_cosign` asserts `signed || res.is_err()`. Four other
+lockup rules (`rule_set_lockup_in_force_requires_custodian` and its three siblings) keep the
+`Result` and assert `unchanged || signed`. The `check_*_minimum_delegation` and
+`validate_delegated_amount` assertions call those functions on a fixed refusing input, where
+`.unwrap()` would prune every path; each accepting boundary is a separate `is_ok()` assertion.
+`rule_activating_destination_is_mergeable` asserts `move_stake_new_states(...).is_err()` on one
+fixed activating destination. The four `rule_custodian_cannot_*` rules assume the custodian is the
+only signer and assert that the account is unchanged, without asserting an error.
+
+The third run's main finding does not recur: `main` rejects a source equal to the destination in
+every two-account handler (`processor.rs:240`, `:502`, `:758`, `:934`), and the hoisted
+`source_equal_to_destination_rejected_by_all_two_account_handlers` verifies.
+
+**The six skips.** Each names what blocked it, not merely that it was hard. The Prover treats the
+`sol_get_epoch_rewards_sysvar` syscall as external, so the rewards gate cannot be stated. Two
+acceptance properties need authorization by signer-set membership, which the model leaves
+unconstrained. Redelegate's "permanently dead" needs the dispatcher. Two Split & Merge properties
+are about handler-level validation or side effects, with no function below the handler to restate
+them on, which is the overflow advice's fallback working as intended.
+
+### What the Prover did to the run
+
+Of 93 Prover calls, **11 ended FAILED and 18 HALTED** at the 25-minute global timeout. At least two
+halts were the authors' own probe jobs of four and five rules.
+
+- **Four FAILED jobs were a Prover crash on `Clock::get()`**, "TAC Clock::get expected to extract 5
+  TAC variables from call sol_get_clock_sysvar" (upstream-defects P15; a fix is in flight at
+  [EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762)): three Delegation &
+  Deactivation jobs, one of them a resubmit, and Protocol Parameters / Queries. The Queries harness
+  never calls `Clock::get()` itself, so the program's own calls trigger it too.
+- **At least three were pointer-analysis failures in Lockup Management's rules**, `[3308] illegal
+  dereference of an absolute address` and `[3003] dereference of a register with unknown provenance`,
+  on `rule_custodian_cannot_delegate`, `rule_lockup_does_not_block_delegate` and
+  `rule_custodian_cannot_withdraw`. These reasons are only in the archive's `Results.txt`, not its
+  `alertReport.json`. [EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765) has
+  merged: a later Prover build writes them as `Solana Encoding` alerts, and `Results.txt` stays.
+- **The authors saw neither.** A FAILED job reached the author as its status and a link, so Lockup
+  resubmitted rules of the same kind three times. A `FAILED` or `HALTED` job now includes the
+  `ERROR` entries from `Reports/alertReport.json` in that text (`hint` when it is non-empty,
+  otherwise `message`). For the Clock crash the text says resubmitting the same draft will fail the
+  same way. For a global-timeout halt, an `Out of Resources` error, it says to rerun the unfinished
+  rules separately. Verdicts for rules that finished before the halt are not included. The CVL
+  author path has the same gap, so that is deferred as parity with CVL
+  ([cvlr-todo.md](./cvlr-todo.md) U32). On this run, `[3308]` / `[3003]` were only in `Results.txt`.
+  [EVMVerifier#8765](https://github.com/Certora/EVMVerifier/pull/8765) has merged, so a later Prover
+  build writes them as `Solana Encoding` alerts and the author text includes the hint. When every
+  error alert is that type or `Out of Resources`, and at least one is the encoding alert, the advice
+  says the prover could not encode the rules and that resubmitting fails until those rules or the
+  program change. A `General` error alongside one is still an internal error.
+- **9 "Cannot overflow: inferred pointer" stops** (P12), 5 of them in Withdrawals. The authors bound
+  once and moved on, as the prompt now says. `rule_probe_withdraw_bounded` is the bound failing,
+  which matches the probes in P12.
+- 11 rules stopped on the loop-unwinding check, 5 of them Account Initialization's first submission.
+
+The author prompt now says what cleared a timeout on this run. A halted job has no per-rule verdicts,
+so the next submission drops the newest rule or submits that rule alone, and `loop_iter` and
+summaries wait until that says which rule it was. Split & Merge halted four times on handler rules
+(`8dcd1289` at `loop_iter` 4, `40c54aff` at 2, `e3a2f12e` at 3 with summaries, `ca8c602d` at 3 with
+the assertions already weakened) and the other nine rules verified in minutes once those rules were
+gone. Queries (`bbe56a8e`, `af531b4d`) and Lockup (one extra `split` rule on an otherwise verified
+draft) were the same experiment. A `HashSet` insert, a bincode walk of a `[u8; 32]`, and a `Vec`
+filled by an allocator the prover leaves external are named as loops whose iteration count moves
+with the bound; the first draft asks for a loop-free replacement, a value stand-in, or the
+program's own function below the handler. A `u64` multiplied into a `u128` is bounded below `2^32`
+before the first submission, and a rule over several account-list lengths is one rule per length.
+`loop_iter` moves only to a trip count the rule chose, as Authority Management did for
+`collect_signers` over a 5-account list. The text is in
+`composer/templates/cvlr_property_generation_prompt.j2` and on `AdjustProverConfig`.
+
+### What to check before trusting the conservation rules
+
+The curtailed Withdrawals unit wrote, in a skip reason, that **writes a handler makes through
+`AccountInfo` are not observed by reads through the same handles afterwards**. It built three
+positive controls, and all failed:
+
+- a full-balance withdraw whose `resize(0)` left `data_len()` at 200;
+- a partial withdraw that returned `Ok` with both balances unchanged;
+- a `Deactivate` that never reached its assertion, stopping on `set_stake_state`'s loop bound.
+
+If that were true in general, every post-equals-pre rule in this report would verify whatever the
+handler did, and conservation is exactly that shape.
+
+For lamports, the cause is local to this unit: it mocked `relocate_lamports` onto a recorder that
+moves nothing, and `get_stake_state` onto a stand-in that reads no bytes, both to get past timeouts
+and an overflow stop. The other units were checked on 2026-10-20, on copies of this run's tree with
+that unit's patch applied, and submitted to the cloud prover.
+
+On a handler that writes lamports, the control asserts that a balance changes. Verified, with the
+assertion reached, means a later read sees the write, and a sum-equality in that harness can be
+cited. Violated with the balance unchanged is the Withdrawals outcome above, and the equality
+cannot be cited. A second rule on the same call asserts that the two balances' sum changes.
+Violated, on a witness where one balance moved and the other took the difference, means the sum is
+conserved on a writing path. A handler that writes no lamports is a different case: a verified
+post-equals-pre rule already implies that "a balance changes" is violated, and that violation does
+not show that a write would be visible.
+
+**Protocol invariants**, the harness of `lamports_conserved_by_every_handler`. The control is a
+full withdraw of an uninitialized account with a positive balance: the amount is the whole balance,
+both balances are at most 2^60, the accounts are distinct, and the withdraw authority is the source
+and a signer. The published `rule_withdraw_full_closes_account` allows a zero starting balance, so
+it does not settle this.
+[Job](https://prover.certora.com/output/37632/0e45ebf2169040c789a4c831b3d8e440?anonymousKey=57cfdf0cdb8509319207076da9d569e990e270dc).
+
+- `rule_control_source_balance_changes` verified, and its reachability check verified. Static
+  analysis discharged it, with no solver query. Every successful call changes the source balance.
+- `rule_control_lamport_sum_changes` violated. The witness is source 1 and destination 0 before
+  the call, source 0 and destination 1 after, so the sum stays 1.
+
+The harness sees a positive-balance write, and the sum stays equal when the lamports move.
+`lamports_conserved_by_every_handler` in this harness may be cited. The same `AccountInfo` and the
+same unmocked `relocate_lamports` serve the harness's other handlers. This control is one withdraw
+of an uninitialized account; the other seventeen rules are the same harness on the other handlers.
+
+**Stake & Lamport Movement.** The control drives `move_lamports_after_shared_checks` on
+`MergeKind::Inactive`, keeping only the calls that return `Ok`, with a positive amount and both
+balances at most 2^60. `Rent::minimum_balance` stays the unconstrained summary.
+[Job](https://prover.certora.com/output/37632/ced8cf9a4dbc4fe48b06cceb7a2e8402?anonymousKey=6f9adaf06217ccb81e9c801479fcddbf8ae088a9).
+
+- `rule_control_source_balance_changes` verified, and its reachability check verified. One reached
+  path starts with both balances at 2^60 and moves 2^60 − 6656: the source ends at 6656 and the
+  destination at 2^61 − 6656.
+
+The lamport deltas in `rule_move_lamports_leaves_stake_state_untouched`, and the accepting-path
+deltas in `rule_move_lamports_accepts_oversized_account_data`, are about a write this harness sees,
+and an `Ok` path of a positive move exists. No rule in this unit drives `process_move_stake`'s
+`relocate_lamports`.
+
+**Withdrawals** was not re-run. Its `relocate_lamports` records the request and moves nothing, and
+the partial-withdraw control came back violated with both balances unchanged (source 7, destination
+4, amount 3). That unit's lamport results stay uncited.
+
+**Authority Management, Lockup Management, and Protocol Parameters / Queries** do not write
+lamports. The authorize rules and the set-lockup rules assert that the balances are unchanged, and
+`rule_min_delegation_query_mutates_no_account` asserts that sixteen accounts' lamports, data
+length, and owner are unchanged, with the call returning `Ok`. A rule asserting that a balance
+changes would be violated because those equalities hold. No job was spent on them.
+
+**Split & Merge, Delegation & Deactivation, and Account Initialization** do not read an account's
+lamports after a handler that moves them. Split and merge conservation is
+`rule_split_conserves_lamports` and `rule_merge_conserves_lamports_and_closes_source` in the
+protocol-invariants harness. Delegation reads the stake account's lamports before
+`process_delegate` and asserts `lamports >= delegation.stake`. Account Initialization assumes the
+balance equals the modelled reserve. A balance-change control does not apply to these three units.
+
+A component that edited the program is now one patch. The run writes
+`certora/cvlr/components/<module>.patch`, the harness plus that unit's edits, and `git apply` lays
+it onto the project as shipped. `harness.patch` stays the rules-only diff. This run's output is the
+older pair: `harness.patch` applies to a clean `bed72d0` and does not build, because the harnesses
+call functions only the program edits expose (`process_authorize*` made public, a new
+`certora_entry`). The harness patch plus Authority Management's `cumulative_diff` built with
+`cargo certora-sbf --features "certora unit_authority_management"`. The unit diffs do not stack:
+after Authority Management, the other seven fail to apply.
+
+### What it left for AutoProver
+
+- **Verdicts from a `HALTED` job.** Deferred: parity with the CVL author path (cvlr-todo U32).
+- U19's dangling fixture symlink does not exist on `main`, so this run did not exercise that fix.
 

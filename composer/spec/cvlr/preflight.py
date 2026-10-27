@@ -21,9 +21,11 @@ from pathlib import Path
 
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
+from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
 from composer.sandbox.config import SandboxConfig
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN
+from composer.sandbox.recipes import sandbox_cargo_home
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.crates import CvlrSources, Divergence
 from composer.spec.cvlr.scaffold import (
     ScaffoldBlocked,
@@ -131,6 +133,7 @@ async def select_package(
     *,
     candidates: Sequence[ChainReference],
     main_source: Path | None = None,
+    cargo_home: Path | None = None,
 ) -> SelectedPackage:
     """Resolve ``package`` against the workspace at ``project_root``, and the reference set in
     ``candidates`` for the platform generation it is on.
@@ -140,8 +143,11 @@ async def select_package(
     library crates, which :func:`_pick_package` refuses on its own, needs no second flag.
     When neither a name nor a source file is available, the single-library rule applies,
     including its refusal.
+
+    ``cargo_home`` is where the read fetches the graph to (:meth:`Workspace.read`). It should not
+    be under ``project_root``: this reads the project as shipped, before the run has a copy.
     """
-    workspace = await _workspace_at(project_root)
+    workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     owner = workspace.owning(main_source) if main_source is not None else None
     member = (
         owner
@@ -171,10 +177,12 @@ async def select_package(
     )
 
 
-async def _workspace_at(root: Path, *, features: tuple[CargoFeature, ...] = ()) -> Workspace:
+async def _workspace_at(
+    root: Path, *, features: tuple[CargoFeature, ...] = (), cargo_home: Path | None
+) -> Workspace:
     try:
         workspace = await Workspace.read(
-            root, features=features, toolchain=HOST_RUST_TOOLCHAIN
+            root, features=features, toolchain=HOST_RUST_TOOLCHAIN, cargo_home=cargo_home
         )
     except CargoUnavailable as exc:
         raise PreflightFailed(str(exc)) from exc
@@ -186,7 +194,11 @@ async def _workspace_at(root: Path, *, features: tuple[CargoFeature, ...] = ()) 
 
 
 async def prepare_workspace(
-    project_root: Path, *, reference: ChainReference, package: str | None = None
+    project_root: Path,
+    *,
+    reference: ChainReference,
+    sandbox: SandboxConfig,
+    package: str | None = None,
 ) -> CvlrPreflight:
     """Scaffold ``project_root`` and report what a run needs to know about it.
 
@@ -200,7 +212,10 @@ async def prepare_workspace(
     (:meth:`~composer.spec.cvlr.reference.ChainReference.withholding`). Every function this calls
     already takes the set, so passing it in removes a lookup rather than adding an argument.
     """
-    workspace = await _workspace_at(project_root)
+    # The cargo home the gate's warm step fills (CargoSession.cargo_home), so what these reads fetch
+    # is not fetched again.
+    cargo_home = sandbox_cargo_home(project_root) if sandbox.enabled else None
+    workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     member = _pick_package(workspace, package)
 
     plan = plan_scaffold(workspace, member, reference)
@@ -215,7 +230,9 @@ async def prepare_workspace(
     # optional, so a default-feature read still reports them absent
     # (:meth:`composer.cargo.metadata.Workspace.read`). Features resolve against the package
     # cargo considers current.
-    resolved_in = await _workspace_at(member.root, features=(DEFAULT_FEATURE,))
+    resolved_in = await _workspace_at(
+        member.root, features=(DEFAULT_FEATURE,), cargo_home=cargo_home
+    )
     fresh = resolved_in.member(member.name) or member
     if fresh.lib is None:
         raise PreflightFailed(f"{fresh.name} has no library target to build")
@@ -253,12 +270,19 @@ async def gate_workspace(
 ) -> None:
     """Check that the scaffolded project compiles with the harness in, or fail the run.
 
-    Host-target ``cargo check`` only. What this has to catch is a scaffold that does not compile.
-    The SBF build is a later gate, and running it here would cost more than the failure it would
-    be catching.
+    ``cargo check`` for the SBF target (:func:`~composer.cargo.sbf.sbf_check`), not the build.
+    What this has to catch is a scaffold that does not compile. The build is a later gate, and
+    running it here would cost more than the failure it would be catching.
     """
+    try:
+        check_with = sbf_check(PLATFORM_TOOLS_VERSION)
+    except PlatformToolsMissing as exc:
+        raise PreflightFailed(str(exc)) from exc
     session = CargoSession(
-        workdir=pre.workspace_root, sandbox=sandbox, toolchain=HOST_RUST_TOOLCHAIN
+        workdir=pre.workspace_root,
+        sandbox=sandbox,
+        toolchain=HOST_RUST_TOOLCHAIN,
+        check_with=check_with,
     )
     warmed = await session.warm()
     if isinstance(warmed, WarmFailed):

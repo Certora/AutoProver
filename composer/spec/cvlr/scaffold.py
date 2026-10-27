@@ -359,11 +359,16 @@ class _PlanBuilder:
 
 
 def _generation(version: str) -> str:
-    """The platform generation a version belongs to: its major component.
+    """The platform generation a version belongs to: its major component, or major.minor below 2.
 
     ``solana-program`` 2.2 and 2.3 are the same generation. 1.18 and 2.2 are not, and each
-    generation has its own ``AccountInfo`` type."""
-    return version.split(".", maxsplit=1)[0]
+    generation has its own ``AccountInfo`` type. Before 2.0, Solana's minor releases broke
+    compatibility: ``cvlr-solana`` 0.4 requires ``^1.18``, and 1.17's ``solana-frozen-abi`` pins an
+    ``ahash`` the current platform tools cannot compile."""
+    major, _, rest = version.partition(".")
+    if major in ("0", "1"):
+        return f"{major}.{rest.split('.', maxsplit=1)[0]}"
+    return major
 
 
 @dataclass(frozen=True)

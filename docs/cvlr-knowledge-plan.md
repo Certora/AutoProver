@@ -5,7 +5,7 @@
 > replaces the capture pipeline that was going to generate that knowledge into the `cvlr_kb` corpus,
 > and the private repository that pipeline ran in, `certora-cvlr-kb`, which is being retired. Built:
 > the bundle (`2ffc1243`), the factored prompt (`f4c953fd`), the other CVLR agents wired to it, and
-> the recipes (`e04f2dea`). It lands as the landing plan's K1.
+> the recipes (`e04f2dea`, and K3 in `d129bacf`). It lands as the landing plan's K1.
 >
 > This document had a Part II, a Solana property corpus in certorag. It was removed on 2026-10-14:
 > nobody owns that work, and it depended on `certora-cvlr-kb`.
@@ -23,7 +23,7 @@ On the CVL/Solidity side, exactly two knowledge assets are machine-derived: the 
 `ragbuild`) and certorag's property corpus. **Every piece of CVL *practice* knowledge is
 hand-authored**, and it is delivered as an always-in-context bundle plus a trigger-indexed recipe
 set, not as retrievable corpus prose. CVLR now has the same shape: `cvlr_baseline_facts.md` in a
-CVLR bundle, read by every CVLR agent that can act on it, and two recipes. Corpus search holds only
+CVLR bundle, read by every CVLR agent that can act on it, and three recipes. Corpus search holds only
 reference material — the manual and the generated API — because a corpus is allowed to be absent
 at run time, and anything load-bearing must be in the prompt or the bundle. What CVLR still lacks
 is a property corpus, and none is planned.
@@ -55,9 +55,9 @@ The knowledge is a *bundle*, deliberately separable from any one agent's prompt.
 
 | Artifact | What it covers |
 |---|---|
-| `composer/kb/resources/cvlr_baseline_facts.md` (396 lines) | What a rule is; assumptions and vacuity; nondeterminism as the quantifier; loop bounds and the `optimistic_loop` ladder; arithmetic and why panic-freedom is off the menu; the nonlinear ladder; `clog!` legibility; when the Prover cannot follow the program's own data. Factored out of the author's system prompt (§4.2). |
-| `composer/kb/resources/cvlr_recipes_index.yaml` + `recipes/cvlr-k*.md` | Two recipes, K1 and K2 (§4.3) |
-| `composer/templates/cvlr_property_generation_system_prompt.j2` (479 lines) | The author's own contract: output shape, its tools, the publish stamps, the workflow, Anchor entry points and the worked example |
+| `composer/kb/resources/cvlr_baseline_facts.md` (398 lines) | What a rule is; assumptions and vacuity; nondeterminism as the quantifier; loop bounds and the `optimistic_loop` ladder; arithmetic and why panic-freedom is off the menu; the nonlinear ladder; `clog!` legibility; when the Prover cannot follow the program's own data. Factored out of the author's system prompt (§4.2). |
+| `composer/kb/resources/cvlr_recipes_index.yaml` + `recipes/cvlr-k*.md` | Three recipes, K1–K3 (§4.3) |
+| `composer/templates/cvlr_property_generation_system_prompt.j2` (517 lines) | The author's own contract: output shape, its tools, the publish stamps, the workflow, Anchor entry points and the worked example |
 | `composer/spec/cvlr/guidance.py` — `SOLANA_CVLR_GUIDANCE` | `backend_guidance` for property inference, written from the manual (§4.4) |
 | `composer/spec/cvlr/envs/` | The starting layers of the two tuning files, maintained in AutoProver since `596ec0de` |
 | `composer/templates/cvlr_munge_editor_system.j2` / `_review_system.j2` | The munge editor's charter and its reviewer |
@@ -147,8 +147,21 @@ The 27 `rule_shape` entries were triaged against the factored bundle, and two su
 
 The rest restated the bundle. One was dropped for a reason worth keeping: "end every rule with a
 vacuity check" is attested but does not transfer, because `cvlr_vacuity_check!` is gated on a cargo
-feature AutoProver never enables. More recipes come from what runs show the author missing; there
-is no pipeline behind them.
+feature AutoProver never enables.
+
+More recipes come from what runs show the author missing; there is no pipeline behind them. K3 is
+the first that came that way:
+
+- **K3** — sysvars, read directly. A handler that reads `Clock` or `Rent`, by syscall or from the
+  sysvar account, is driven as it is, and a rule that needs the account and the syscall to agree
+  says so with one assumption. The stake benchmark's third run split handlers, mocked reads and
+  skipped properties because a tuning-file defect made `Sysvar::from_account_info` external
+  ([stake-benchmark.md](./stake-benchmark.md)). With the defect fixed, Prover probes on SDK 2 and
+  SDK 3 stake verified that both forms are analyzed, and the recipe gives the SDK 3 spelling. It
+  also names the limit that remains: `Rent::minimum_balance` computes in `f64`, so a reserve
+  property is stated over the stored reserve, or over an integer stand-in where the program stores
+  none. Its evidence is Stake Pool's and P-Token's specs, paraphrased per §4.4, and
+  `tests/test_cvlr_knowledge.py` checks its index entry and body.
 
 ### 4.4 Rules for drawing on engagements
 
@@ -199,5 +212,5 @@ data before they were known:
 - **Read versions from `Cargo.lock`, per crate, as (name, version, source).** The CVLR family does
   not version in lockstep, one lockfile can resolve two versions of one crate, manifest dependency
   names need not match resolved package names, and a stray `Cargo.lock.backup` will match a careless
-  glob. A chain crate also implies a platform generation (`cvlr-solana` 0.5 is `solana-program` 2.2),
-  which no CVLR version string shows.
+  glob. A chain crate also implies a platform generation (`cvlr-solana` 0.5 is `solana-program` 2.2,
+  and 0.6 is the split `solana-*` 3.x crates), which no CVLR version string shows.

@@ -542,3 +542,20 @@ def test_project_source_is_read_off_the_workspace(tmp_path: Path):
     assert source.manifests == (
         PurePosixPath("crates/m/Cargo.toml"), PurePosixPath("programs/p/Cargo.toml")
     )
+
+
+@pytest.mark.asyncio
+async def test_a_dangling_symlink_in_the_project_does_not_stop_the_tree(tmp_path: Path):
+    """U19: the stake program tracks a link into target/deploy that a fresh clone leaves dangling.
+    The copy dereferenced it and raised, after extraction had been paid for."""
+    project = _project(tmp_path)
+    fixtures = project / "tests" / "fixtures"
+    fixtures.mkdir(parents=True)
+    (fixtures / "program.so").symlink_to("../../target/deploy/program.so")
+    (fixtures / "real.txt").write_text("kept\n")
+
+    tree = SharedTree(pristine=project, root=tmp_path / "work" / "build", source=_SOURCE_DIRS)
+    await tree.materialize()
+
+    assert not (tree.root / "tests" / "fixtures" / "program.so").exists()
+    assert (tree.root / "tests" / "fixtures" / "real.txt").read_text() == "kept\n"

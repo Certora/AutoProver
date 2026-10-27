@@ -32,7 +32,7 @@ from composer.spec.source.report.schema import (
     AutoProverReport, BuildEnvironment, ComponentName, CoverageReport, CurtailedComponent,
     Finding,
     FormalizedProperty, GaveUpComponent, GroupStatus, HoistedClaim, Outcome, PropertyGroup,
-    PropertyKey, ReportBackend, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
+    PropertyKey, ReportBackend, RuleName, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
 )
 
 
@@ -205,6 +205,7 @@ class CurtailedView(TypedDict):
     link: LinkView
     detail: str | None
     rows: list[CurtailedRowView]
+    source_edits: SourceEditRecord | None
 
 
 class ReportTemplateParams(TypedDict):
@@ -218,6 +219,8 @@ class ReportTemplateParams(TypedDict):
     rule_counts: list[ChipView]
     group_counts: list[ChipView]
     findings: list[FindingView]
+    findings_unwritten: list[RuleName]
+    grouping_fallback_reason: str | None
     groups: list[GroupView]
     hoisted: list[HoistedClaim]
     skipped: list[SkippedClaim]
@@ -404,6 +407,7 @@ def _curtailed_view(c: CurtailedComponent) -> CurtailedView:
         "link": _link_view(c.run_link),
         "detail": c.detail,
         "rows": rows,
+        "source_edits": c.source_edits,
     }
 
 
@@ -427,6 +431,8 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         "rule_counts": _outcome_counts([r.outcome for r in report.rules], unit_labels),
         "group_counts": _group_counts([g.status for g in report.groups], group_labels),
         "findings": [_finding_view(f) for f in report.findings],
+        "findings_unwritten": report.findings_unwritten,
+        "grouping_fallback_reason": report.grouping_fallback_reason,
         "groups": [
             _group_view(g, props_by_key, rules_by_ref, unit_labels, group_labels, edited_components)
             for g in report.groups

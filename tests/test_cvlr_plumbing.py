@@ -44,15 +44,18 @@ from composer.cargo.sbf import (
     BUILD_TIMEOUT_ENV,
     DEFAULT_BUILD_TIMEOUT_S,
     MalformedBuildManifest,
+    PlatformToolsMissing,
+    SBF_TARGET,
     Built,
     build_command_path,
     parse_manifest as parse_build_manifest,
     platform_tools_cargos,
     resolved_build_timeout_s,
     SbfBuild,
+    sbf_check,
     write_build_script,
 )
-from composer.cargo.session import CargoSession, CompileFailed
+from composer.cargo.session import CargoSession, CompileFailed, CrossCheck
 from composer.diagnostics.timing import (
     RunSummary,
     install_run_summary,
@@ -423,6 +426,13 @@ def test_the_base_models_top_bit_constants_soundly():
     assert "-solanaTACSoundSignedMath true" in flags
 
 
+def test_the_base_raises_the_tac_heap_bound():
+    """The default 32 KB TAC heap is overflowed by a large Anchor program's rules (upstream-defects
+    P17)."""
+    flags = cvlr_conf.tunable_conf(cvlr_conf.TunableConf())["prover_args"]
+    assert "-solanaHeapSize 262144" in flags
+
+
 def test_the_master_prover_pin_is_still_tracked_as_a_ship_blocker():
     """``prover_version: master`` is for development only. This fails once the pin is removed, so
     whoever removes it also closes cvlr-todo U25."""
@@ -543,6 +553,71 @@ def test_a_directory_without_the_binary_is_not_offered(tmp_path):
     (tmp_path / "v1.43" / "platform-tools" / "rust" / "bin").mkdir(parents=True)
 
     assert platform_tools_cargos("v1.43", root=tmp_path) == ()
+
+
+def _platform_tools(root: Path, version: str, flavour: str) -> Path:
+    tools = root / version / flavour
+    (tools / "rust" / "bin").mkdir(parents=True)
+    (tools / "rust" / "bin" / "cargo").touch()
+    return tools
+
+
+def test_the_sbf_check_runs_the_platform_tools_cargo_for_the_builds_target_and_profile(tmp_path):
+    """The host cannot always compile what the chain build does (`farms`' size asserts fail on
+    x86_64's `u128` alignment). And the build is `--release`: in another profile the check would
+    share no host units with it."""
+    tools = _platform_tools(tmp_path, "v1.53", "platform-tools-certora")
+    check = sbf_check("v1.53", root=tmp_path)
+    assert check.cargo == tools / "rust" / "bin" / "cargo"
+    assert check.args == ("--release", "--target", SBF_TARGET)
+
+
+def test_the_sbf_check_hands_build_scripts_the_builds_own_tools(tmp_path):
+    """`cargo certora-sbf` sets these. A build script that reruns when `CC` changes (blake3's) was
+    rebuilt, with 15 crates above it, every time the check and the build took turns on klend."""
+    tools = _platform_tools(tmp_path, "v1.53", "platform-tools-certora")
+    llvm = tools / "llvm" / "bin"
+    assert sbf_check("v1.53", root=tmp_path).env == {
+        "RUSTC": str(tools / "rust" / "bin" / "rustc"),
+        "CC": str(llvm / "clang"),
+        "AR": str(llvm / "llvm-ar"),
+        "OBJDUMP": str(llvm / "llvm-objdump"),
+        "OBJCOPY": str(llvm / "llvm-objcopy"),
+    }
+
+
+def test_the_sbf_check_without_platform_tools_says_which_version(tmp_path):
+    (tmp_path / "v1.53" / "platform-tools-certora").mkdir(parents=True)
+    with pytest.raises(PlatformToolsMissing, match="v1.53"):
+        sbf_check("v1.53", root=tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_session_checks_and_warms_with_the_cargo_its_check_runs(tmp_path, monkeypatch):
+    """A cache is warm only for the cargo that filled it, and a confined check is offline."""
+    check = CrossCheck(cargo=Path("/pt/cargo"), args=("--target", "t"), env={"RUSTC": "/pt/rustc"})
+    session = CargoSession(
+        workdir=tmp_path, sandbox=SandboxConfig(provider="none"), toolchain="1.90.0",
+        check_with=check,
+    )
+    calls: list[tuple[str, list[str], dict | None]] = []
+
+    async def record(program, args, files, **kwargs):
+        from composer.sandbox.command import CommandResult
+
+        calls.append((program, args, kwargs.get("env_overlay")))
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr("composer.cargo.session.run_local_command", record)
+    await session.warm()
+    await session.check(features=("certora",))
+
+    (warm_program, warm_args, _), (program, args, env) = calls
+    assert warm_program == program == "/pt/cargo"
+    assert warm_args[0] == "fetch"
+    assert args[:4] == ["check", "--quiet", "--target", "t"]
+    assert env == {"RUSTUP_TOOLCHAIN": "1.90.0", "RUSTC": "/pt/rustc"}
+    assert session.already_warmed("/pt/cargo") and not session.already_warmed("cargo")
 
 
 def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
@@ -1030,9 +1105,27 @@ def test_reading_a_workspace_runs_cargo_with_the_toolchain_asked_for(tmp_path, m
     monkeypatch.setattr(metadata.subprocess, "run", fake_run)
     for toolchain in ("1.90.0", None):
         metadata._cargo_metadata(
-            tmp_path, offline=True, features=(), toolchain=toolchain, timeout_s=5
+            tmp_path, offline=True, features=(), toolchain=toolchain, cargo_home=None, timeout_s=5
         )
     with_toolchain, without = seen
     assert with_toolchain is not None and with_toolchain["RUSTUP_TOOLCHAIN"] == "1.90.0"
     assert without is None
+
+
+def test_reading_a_workspace_fetches_into_the_cargo_home_asked_for(tmp_path, monkeypatch):
+    seen: list[dict[str, str] | None] = []
+
+    def fake_run(args, **kwargs):
+        seen.append(kwargs.get("env"))
+        return subprocess.CompletedProcess(args, 1, "", "no manifest")
+
+    monkeypatch.setattr(metadata.shutil, "which", lambda _: "/usr/bin/cargo")
+    monkeypatch.setattr(metadata.subprocess, "run", fake_run)
+    home = tmp_path / "private" / "cargo"
+    metadata._cargo_metadata(
+        tmp_path, offline=True, features=(), toolchain=None, cargo_home=home, timeout_s=5
+    )
+    (env,) = seen
+    assert env is not None and env["CARGO_HOME"] == str(home)
+    assert home.is_dir()
 

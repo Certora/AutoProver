@@ -56,7 +56,13 @@ from composer.prover.ptypes import (
     StatusCodes,
     classify_violation,
 )
-from composer.prover.results import external_functions, read_and_format_run_result
+from composer.prover.results import (
+    OUT_OF_RESOURCES,
+    SOLANA_ENCODING,
+    ErrorAlert,
+    external_functions,
+    read_and_format_run_result,
+)
 from composer.templates.loader import load_jinja_template
 from composer.certora_env import ProverApp
 from composer.prover.prover_protocol import ProverResult
@@ -742,6 +748,49 @@ async def declared_rules_list(
         all_rules = f.read()
     return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
+
+def _failure_advice(alerts: tuple[ErrorAlert, ...]) -> str:
+    """What to tell the author, given the ``ERROR`` entries on a job with no verdicts.
+
+    A type other than a resource limit or a Solana encoding failure is a prover crash.
+    An encoding failure is the front end refusing those rules. Anything else is the
+    global timeout.
+    """
+    if any(alert.type not in (OUT_OF_RESOURCES, SOLANA_ENCODING) for alert in alerts):
+        return (
+            "The prover reported an internal error. "
+            "Resubmitting this draft will fail the same way."
+        )
+    if any(alert.type == SOLANA_ENCODING for alert in alerts):
+        return (
+            "The prover could not encode one or more rules. "
+            "Resubmitting this draft fails the same way until those rules or the program change."
+        )
+    return (
+        "The prover ran out of resources before finishing. "
+        "Rerun the unfinished rules separately."
+    )
+
+
+def cloud_job_failure_message(exc: CloudJobError) -> str:
+    """The text ``run_prover`` returns when a cloud job ends without verdicts.
+
+    The link is always included. ``exc.alerts`` are the alert report's ``ERROR``
+    entries, present when a ``FAILED`` or ``HALTED`` job wrote them.
+    """
+    lines = [
+        f"Prover cloud job did not produce results (status {exc.status.value}). "
+        f"The job and its failure output are at {exc.link}"
+    ]
+    if exc.alerts:
+        lines.append(
+            _failure_advice(exc.alerts)
+            + "\n"
+            + "\n".join(alert.text for alert in exc.alerts)
+        )
+    return "\n\n".join(lines)
+
+
 async def run_prover(
     folder: Path,
     args: list[str],
@@ -870,16 +919,7 @@ async def run_prover(
                     diagnoses=[],
                 )
     except CloudJobError as exc:
-        # The link is the whole diagnosis. A job that fails server-side leaves nothing on disk —
-        # no report, no treeView, and certoraRun's own debug log stops after collecting sources —
-        # so a status with no link tells the reader only that something went wrong somewhere they
-        # cannot look. An authoring agent given that will assume its own draft is at fault and
-        # simplify until the harness is a tautology, which fails identically; a human given it has
-        # to reproduce the run just to obtain a URL the failure already had in hand.
-        return (
-            f"Prover cloud job did not produce results (status {exc.status.value}). "
-            f"The job and its failure output are at {exc.link}"
-        )
+        return cloud_job_failure_message(exc)
     except CloudResultsUnavailable as exc:
         # Returned rather than raised, like the subprocess timeout: raising ends the whole
         # formalization over a read the next submission will very likely complete.

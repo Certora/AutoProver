@@ -1,11 +1,18 @@
 # Upstream defects found while building the CVLR backend
 
 Everything here was found by pointing the CVLR backend (`docs/cvlr-backend-plan.md`) at real Anchor
-programs, and every entry is reproducible. **Two have Prover tickets:** P7 is CERT-10103, with a fix
-in flight at [EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673), and P8 is
-CERT-10061, which the Prover's own source names. Two more Prover bugs, CERT-10183 (float comparisons)
-and CERT-10184 (a memory-partitioning crash on `realloc`'s zero-fill), were filed from the
-starting-layer investigation in [cvlr-todo.md](./cvlr-todo.md) L1 and are recorded there, not here.
+programs, and every entry is reproducible. This document is the one record of which are routed.
+**Two have Prover tickets:** P7 is CERT-10103, fixed on the Prover's master branch by
+[EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673), and P8 is CERT-10061, which the
+Prover's own source names. P15 to P19 have no tickets and are fixed on master by
+[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762),
+[EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771),
+[EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773), [EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776) and
+[EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777). Two more Prover bugs,
+CERT-10183 (float comparisons) and CERT-10184 (a memory-partitioning crash on `realloc`'s
+zero-fill), were filed from the starting-layer investigation in [cvlr-todo.md](./cvlr-todo.md) L1
+and are recorded there, not here; CERT-10184 is fixed on master by [EVMVerifier#8696](https://github.com/Certora/EVMVerifier/pull/8696).
+C1's fix is released as a commit and not yet published (below).
 The rest are not filed, and this document exists so that routing is a decision somebody makes rather than one I guess at, since the
 groups below belong in different places and one of them cannot be public.
 
@@ -16,8 +23,8 @@ maintained fork whose `Error` is unboxed. P4 does not block either, and the caus
 our own author prompt rather than the prover — see its correction. **P6 was downgraded too**: a
 direct probe on 2026-09-29 did not reproduce it, and the handler form it was observed in is
 unmeasured. **P7
-also blocks**, for any function that multiplies in `i128` — narrower, and already filed as CERT-10103
-with a fix in flight, which makes it the only entry in this group with a known landing. **P8 blocks
+blocked any function that multiplies in `i128`** on a released Prover; it is fixed on master, which
+AutoProver runs during development. **P8 blocks
 nothing today and blocks a change we wanted**: two shipped flags that defeat each other, measured
 rather than argued, and named by a TODO in the prover's own source. **P9 blocks a whole shape of
 property** — anything that asserts a handler *succeeds* — and it is the uncomfortable one, because
@@ -25,10 +32,21 @@ the mechanism it points at is the fork P1 says we depend on. **P10 makes true ru
 whenever the compiler happens to emit a loop after the rule's last assertion, which every harness
 invites by dropping its nondet account array; worked around in the author prompt, and possibly the
 real cause of P9. **P12 is the price of P11's fix**: the sound-math mode asserts that a value it
-takes for a pointer stays below `2^64`, and a balance near `u64::MAX` fails that check. It costs
-coverage, never soundness, and it is worked around by bounding inputs, not by the optimistic flag
-that would hide overflows. **P13 is why a stand-in CPI cannot move lamports**, measured against a
-control group.
+takes for a pointer stays below `2^64`, and an expression it wrongly takes for a pointer can fail
+that check. Which expressions it takes depends on how the rule is laid out, so bounding the inputs
+clears it only sometimes. It costs coverage, never soundness; the author bounds once, then restates
+the property below the handler or skips it. **P13 is why a stand-in CPI cannot move lamports**, measured against a
+control group. **P14 is the Prover's CPI substitution not recognizing SDK 3's `invoke`**; it
+matters only with `-solanaCpiAnalysis`, which AutoProver does not set. **P15 crashed the Prover** on
+an SDK 3 `Clock::get()`, failing the whole job; it is fixed on master by
+[EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762). **P16 to P19 came out of one
+large lending program's run**, where every failed job was one of them. P16 is the general form of
+P15's escape: any internal error while encoding one rule failed the job; it is fixed on master by
+[EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771). P17, a 32 KB heap counted
+over allocation sites, caused most of those failures, and an existing option fixes it once you know
+to pass it; with P16 fixed, what was left of it was the error message, and that is fixed on master by
+[EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773). P18 and P19 are the allocator on a current toolchain, fixed on master by
+[EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776) and [EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777).
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -43,10 +61,9 @@ template omits; the rest are worked around by not reproducing them.
 against every CVLR release, found by compiling them. Small, public, and cheap to fix in the
 `Certora/Documentation` repository.
 
-**Group C — the CVLR crates.** The published `cvlr-*` releases the reference set pins. One entry, and
-it is the odd one here: not a bug but a release-cadence gap, recorded because its effect is a hard
-refusal and because nothing in this repository can work around it. It is also the only entry that
-gets *worse* with time rather than staying put.
+**Group C — the CVLR crates.** The `cvlr-*` releases the reference set pins. One entry, and it is
+the odd one here: not a bug but a release-cadence gap. The port is done and released as a commit,
+which AutoProver reads directly; what is left is publishing it to crates.io.
 
 One note on naming, because it constrains how T2 is written up: this repository is public, so no
 client, project or repository names appear in it. T2 is about a canonical file that carries one, and
@@ -60,13 +77,19 @@ the write-up gives the line number rather than the name.
 | [P4](#p4) | `-solanaAggressiveGlobalDetection` does not fix the [3308] it is recommended for, and neither does any summary | minor — **not** blocking; see the correction |
 | [P5](#p5) | A [3308] in the generated vacuity check is reported as a clean `VERIFIED` when `rule_sanity` is off | **critical** |
 | [P6](#p6) | A summarized CPI havocs the caller's *deserialized* `Account<T>`, not just the account buffer | **not reproduced** by a direct probe; the handler form is unmeasured |
-| [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fix in flight (CERT-10103) |
+| [P7](#p7) | A checked `i128` multiply is rejected outright — `__muloti4` is not modelled | **major** — fixed on the Prover's master branch (CERT-10103) |
 | [P8](#p8) | `-solanaTACSoundSignedMath` disables most of `-solanaTACMathInt`; together they turn a 7-minute green run into a 2-hour timeout | **major** — fixed on the Prover's master branch, not yet all released (CERT-10061) |
 | [P9](#p9) | Binding a handler's `Result` makes the rule vacuous, so an *acceptance* property is unstatable | **major** |
 | [P10](#p10) | The vacuity check's `satisfy` sits after the rule's drop glue, so a loop there makes a verified rule `SANITY_FAILED` | **major**, worked around |
 | [P11](#p11) | Without `-solanaTACSoundSignedMath`, a `u64` compared against a constant with the top bit set (`u64::MAX`, `1 << 63`) is modelled as comparing against a negative number | **critical** — unsound by default; `-solanaTACSoundSignedMath` fixes it, and AutoProver runs it on Prover master during development |
-| [P12](#p12) | Under `-solanaTACSoundSignedMath`, a value read from account data near `u64::MAX` fails a "Cannot overflow" check the Prover generated, so the rule never reaches its property | **major**, worked around in the prompt |
+| [P12](#p12) | Under `-solanaTACSoundSignedMath`, an expression the Prover wrongly takes for a pointer fails a "Cannot overflow" check it generated, depending on the rule's layout, so the rule never reaches its property | **major**, partly worked around in the prompt |
 | [P13](#p13) | An `AccountInfo` selected from a slice by key loses its provenance, so a stand-in `invoke` cannot move lamports | **major**, worked around in the prompt |
+| [P14](#p14) | The CPI analysis matches only `solana_program`'s `invoke`, so on SDK 3 no CPI is substituted and nothing says so | minor — only with `-solanaCpiAnalysis`, which AutoProver does not set; not filed |
+| [P15](#p15) | An SDK 3 `Clock::get()` can crash the Prover: "TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar" | **major** — the job FAILS with no verdicts; fixed on the Prover's master branch ([EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762)) |
+| [P16](#p16) | An internal error while encoding one rule (`TACTranslationError`, `PointerDomainError`) escapes the per-rule `catch` and fails every rule in the job | **major** — all 10 failed jobs of a 56-job run; fixed on the Prover's master branch ([EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771)) |
+| [P17](#p17) | Running out of the TAC heap does not say that `-solanaHeapSize` raises it, and the option's help calls the bound the runtime heap | fixed on the Prover's master branch ([EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773)); 8 of those 10 failed jobs were this, and the option fixes it, reproduced |
+| [P18](#p18) | `sol_alloc_free_` crashes the points-to analysis: "TODO(5): support sol_alloc_free" | **major** — 2 of those 10; trigger not pinned; fixed on the Prover's master branch ([EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776)) |
+| [P19](#p19) | The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed` | major — the suspected path to P18; fixed on the Prover's master branch ([EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777)) |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -76,9 +99,10 @@ the write-up gives the line number rather than the name.
 | [T6](#t6) | `[workspace.dependencies]` pins CVLR by hand | minor |
 | [T7](#t7) | Nothing points a new project at the Anchor fork it needs | **major** |
 | [T8](#t8) | A canonical summary is spelled for a `RawVec` symbol current toolchains no longer emit | major |
+| [T9](#t9) | The allocator directives are spelled for shim names current toolchains no longer emit (`__rustc::`) | fixed in AutoProver; redundant on the Prover's master branch since [EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777) |
 | [M1](#m1) | The manual's `cvlr_rules!` example puts a trailing comma after `bases: [...]`, which the macro rejects | minor |
 | [M2](#m2) | The manual types `cvlr_deserialize_nondet_accounts()` as `[AccountInfo; 8]`; it returns 16 | minor |
-| [C1](#c1) | `cvlr-solana` is bound to `solana-program` 2.2, so no program on the current Solana SDK can be scaffolded at all | **blocking** for every SDK 3.x target |
+| [C1](#c1) | `cvlr-solana` is bound to `solana-program` 2.2, so no program on the current Solana SDK can be scaffolded at all | ported and released as a commit (0.6.0), which AutoProver reads; **not published** |
 
 ---
 
@@ -530,9 +554,9 @@ what the reproducer here uses.
 
 ### A checked `i128` multiply is rejected outright: `[7000] __muloti4 is not currently supported`
 
-**Filed as CERT-10103; a fix is in flight — [Certora/EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673).**
-It is recorded here anyway, because the entry is what documents the *cost* of it, and because the
-second half — what an author does when a function cannot be executed at all — outlives the fix.
+**Filed as CERT-10103; fixed on the Prover's master branch by [Certora/EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673).**
+A released Prover without the fix still rejects the multiply. The entry documents the *cost* of it,
+and the second half — what an author does when a function cannot be executed at all — outlives the fix.
 
 Rust lowers an overflow-aware 128-bit signed multiplication to the compiler-rt intrinsic
 `__muloti4` (the pair of a product and an overflow flag). The Solana Prover has no model for that
@@ -898,12 +922,14 @@ either, a warning when a comparison against a top-bit constant is encoded under 
 
 ## P12
 
-### Under `-solanaTACSoundSignedMath`, a value read from account data near `u64::MAX` fails a "Cannot overflow" check the Prover generated
+### Under `-solanaTACSoundSignedMath`, an expression the Prover wrongly takes for a pointer fails a "Cannot overflow" check it generated
 
 **Effect: a rule stops on an assertion it did not write, `Cannot overflow: inferred pointer` or
-`Cannot overflow: computing TAC map index`, and never reaches its property.** The trigger is a
-number read from an account (a balance, an amount) that the rule leaves free, so the solver may put
-it within a few hundred of `u64::MAX`. Nothing is unsound: the extra assertion can only add
+`Cannot overflow: computing TAC map index`, and never reaches its property.** The expression
+involved carries a number read from an account, not an address. Leaving that number free is one
+trigger: the solver puts it within a few hundred of `u64::MAX`. But bounding it is not always enough,
+because whether the Prover takes the expression for a pointer at all depends on how the rule's code
+is laid out (*The measurement*, below). Nothing is unsound: the extra assertion can only add
 failures. AutoProver classifies it as an incomplete check, so it never becomes a finding
 (`composer/prover/ptypes.py`, `_GENERATED_ASSERTIONS`). But it costs coverage. On the 2026-10-15
 `solana_vault_idl` recording, two of the four units hit it. Deposits deleted a lamport-conservation
@@ -926,8 +952,8 @@ true: every plausible address is below `SBF_IMPLAUSIBLE_MEM_ADDRESS` (`0x5_0000_
 fails when the annotated expression carries a value that is no pointer at all.
 
 **The measurement.** Probe rules in a copy of the recorded vault project, built and submitted
-exactly as the pipeline does: the shipped conf, Prover `master`, 2026-10-16. The Withdrawals rule
-that hit it was resubmitted verbatim:
+exactly as the pipeline does: the shipped conf, Prover `master`, 2026-10-16. First, the Withdrawals
+rule that hit it, resubmitted verbatim:
 
 | rule | conf | verdict |
 |---|---|---|
@@ -937,10 +963,32 @@ that hit it was resubmitted verbatim:
 | same, balance and lamports `< 2^63` | shipped | `VIOLATED`: the rule's own `assertion failed` |
 
 In the first row's counterexample the vault's deserialized `balance` and `amount` are both
-`0xfffffffffffffe81`. That is `u64::MAX - 382`, a number from the account's bytes. Bounding it
-removes the generated assertion, and only the top half of the range has to go. The rule that is
-left fails its own `r.is_ok()` at `balance = 4, amount = 2`. That is [P9](#p9)'s territory, not this
-entry's. The recording's other message, "computing TAC map index", came from a stand-in `invoke` that
+`0xfffffffffffffe81`. That is `u64::MAX - 382`, a number from the account's bytes. The bounded rows'
+remaining failure is their own `r.is_ok()` at `balance = 4, amount = 2`, which is [P9](#p9)'s
+territory. **Those rows do not show the bound removes the generated assertion.** The Prover reports
+one violated assertion per rule, so they show only that the solver picked another one.
+
+The same rules with their own assertion replaced by `cvlr_assert!(true)`, so that only generated
+assertions can fail, settle it, and show the bound is not reliable:
+
+| rule, own assertion removed | verdict |
+|---|---|
+| nothing bounded | `VIOLATED`: `Cannot overflow: computing TAC map index` |
+| balance and lamports `< 2^63` (probe I) | `VERIFIED` |
+| balance and lamports `<= 2^40` | `VERIFIED` |
+| the `< 2^63` rule as the 2026-10-16 container run's author wrote it (probe S) | `VIOLATED`: `Cannot overflow: computing TAC map index` |
+| eight more variants of the author's shape, each dropping one assumption or `clog!` | all `VIOLATED`: `Cannot overflow: inferred pointer` or `computing TAC map index` |
+
+Probes I and S mean the same thing. They differ only in statement order (whether `amount` is chosen
+and bounded before or after `vault.authority == authority.key()` is assumed) and in whether the
+account infos are bound to locals first. In the run, the author's counterexample had every value
+near `2^48`. Which `mod 2^64` results `findMorePointers` counts as pointers evidently follows the
+compiled code's register use, not the values, so no rewording of a rule is a dependable way past
+it. In that run the Withdrawals author bounded as told, stopped on the assertion twice more with the
+bound in place, and moved its acceptance rules to `apply_withdrawal` on its own.
+
+The probes (`probe.rs`, H to T) and their jobs are in the 2026-10-16 session scratchpad; I and S are
+the pair to send with the ticket. The recording's other message, "computing TAC map index", came from a stand-in `invoke` that
 moved lamports through infos it was handed. The probe of that shape stops earlier, on
 [P13](#p13)'s `[3003]`.
 
@@ -950,12 +998,14 @@ not wrap. That prunes exactly the overflow paths a property about a balance or a
 find. A bound on the input is narrower, and it is visible, because it is an assumption in the
 harness that the report carries.
 
-**What AutoProver does about it.** The author's system prompt
-(`cvlr_property_generation_system_prompt.j2`) tells it to bound values read from account data below
-`2^63` when a property does not need the top of the range, and to record the bound as an
-assumption. When a rule does stop on this assertion, the gate says what it means and what to do
-(`composer/spec/cvlr/verify.py`). A property that is about the top of the range is skipped, with the
-reason.
+**What AutoProver does about it** (decided 2026-10-16: keep sound math, and spend at most one
+attempt per rule). The author's system prompt (`cvlr_property_generation_system_prompt.j2`) and the
+gate's message when a rule stops on this assertion (`composer/spec/cvlr/verify.py`) say the same
+thing. Bound the account-data values on the rule's path once, below `2^63`, and record the bound as
+an assumption. If the stop comes back with the bound in place, state the property against the
+program's logic below the handler, in a function that takes no `AccountInfo`, or skip it with the
+stop as the reason. A property about the top of the range cannot take the bound and is skipped. The
+cost is coverage that varies from rule to rule, and the report shows it as skips and assumptions.
 
 **What would resolve it**: making `findMorePointers` annotate only expressions with pointer
 provenance, so a data value is never asserted on as an address (CERT-10098 narrowed pointer addition
@@ -1004,6 +1054,232 @@ prompt says this.
 
 **What would resolve it**: pointer analysis that keeps provenance through a choice among slice
 elements, which here are all clones of infos with known regions. Not yet filed.
+
+---
+
+## P14
+
+### The CPI analysis matches only `solana_program`'s `invoke`, so on SDK 3 no CPI is substituted
+
+**Effect: with `-solanaCpiAnalysis` on, an SDK 3 program's token CPIs are neither mocked nor
+flagged.** The analysis replaces an SPL Token or Token-2022 CPI it can resolve with a
+`cvlr_spl_token` mock, and every other CPI with `assert(false)` ("Unresolved CPI call"). It finds the
+calls by exact demangled name: `solana_program::program::invoke` and
+`solana_program::program::invoke_signed` (EVMVerifier `src/main/kotlin/sbf/analysis/cpis/CpisAnalysis.kt`,
+`INVOKE_FUNCTION_NAME` and `INVOKE_SIGNED_FUNCTION_NAME`, compared with `==`).
+
+An SDK 3 program has no `solana_program`; it calls `solana_cpi::invoke` and
+`solana_cpi::invoke_signed`. The analysis finds no invokes, so it neither substitutes a mock nor
+asserts. A rule crossing a token CPI could pass while checking nothing about the transfer, and
+nothing reports it.
+
+**Why it is minor here.** AutoProver does not set `-solanaCpiAnalysis`: it is experimental and off
+by default, and one of its original developers says it never worked well
+([cvlr-todo.md](./cvlr-todo.md) L2). Without it a CPI is an opaque call whose writes are dropped, on
+either SDK (L1). `cvlr-spl-token`'s SDK 3 models are substituted only through this analysis, so
+until it is fixed they are unused on SDK 3.
+
+**What would resolve it**: recognize both spellings, in the names `CpisAnalysis.kt` compares calls
+against and in the `mockFor` names `CpisSubstitutionMap.kt` passes to `getCallInstructionToThis`.
+The mangled names the substitution map carries for the mocks are only metadata, so a new
+`cvlr-spl-token` release does not need a Prover change. A test needs an SDK 3 program that transfers
+tokens by CPI; the stake probe makes none. Not yet filed.
+
+---
+
+## P15
+
+### An SDK 3 `Clock::get()` can crash the Prover
+
+**Fixed on the Prover's master branch by [Certora/EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762).**
+A points-to-dead `sol_get_clock_sysvar` has no memory-splitter entry, so `getTACVariables` returns
+nothing and the arity check throws `IllegalStateException`. `solanaSbfToTAC` catches only
+`SolanaError`, and one such call fails every rule in the job. The PR encodes a missing entry as
+unreachable TAC, as a dead load already is, and does the same for `Clock::set` and `Rent::get`. A
+recorded summary whose field count is wrong throws `SolanaError` with the actual count. The
+five-field clock summary is unchanged: it already matches the lowered call.
+
+**Effect: the whole cloud job ends `FAILED`**, so every rule it carried comes back with no verdict.
+`Reports/alertReport.json` holds one `ERROR`, "An internal Prover error occurred", with the hint:
+
+```
+TAC Clock::get expected to extract 5 TAC variables from call sol_get_clock_sysvar
+```
+
+Seen four times on the 2026-10-16 container run on `solana-program/stake` `main` (`bed72d0`, SDK 3),
+Prover `master` at `d530cfdc69`:
+
+| job | unit | the harness's own `Clock::get()` calls |
+|---|---|---|
+| `d347b5af8522405f84207968ab2a41b1` | Delegation & Deactivation | 12 |
+| `e7760d2d…` | Delegation & Deactivation | 1 |
+| `9fc4c8ae6e1944dca697e568d679772f` | Delegation & Deactivation, resubmitted | 1 |
+| `8f604d46bcde47a3aac5c9d2a75c864d` | Protocol Parameters / Queries | 0 |
+
+The first three harnesses call `solana_clock::Clock::get().unwrap()` themselves, which suggested a
+harness-side call as the trigger. The fourth calls it nowhere, and crashed the same way, so the
+program's own `Clock::get()` calls in `processor.rs` can trigger it too. Account Initialization and
+Authority Management drive handlers that read the clock and ran without the crash, so it depends on
+which call, or on what else the job analyzes. The crashing call is one the points-to analysis
+skipped and TAC encoding still walked.
+
+**What AutoProver does about it.** A `FAILED` job includes the alert's `hint`, which names the
+syscall and the call address, and the text says resubmitting the same draft will fail the same way.
+A Prover build without the fix still fails this way.
+
+**Not yet re-measured** against a Prover master that includes the fix.
+
+---
+
+## P16
+
+### An internal error while encoding one rule fails every rule in the job
+
+**Fixed on the Prover's master branch by [Certora/EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771)**,
+as proposed below: the per-rule loop also catches `SolanaInternalError`, reports it as that rule's
+error with an alert naming the rule, and the other rules keep their verdicts.
+
+`solanaSbfToTAC` (`sbf/SolanaEntryPoint.kt:148`) encodes each rule inside
+`try { … } catch (e: SolanaError)`, so a rule that fails to encode becomes that rule's
+`RuleEncodingException` and the others go on. But the translator's own failures are not
+`SolanaError`s. `TACTranslationError` (`sbf/tac/SbfCFGToTAC.kt:51`) and `PointerDomainError`
+(`sbf/domains/memory/PointerDomain.kt:118`) both extend `SolanaInternalError`, which is a
+`CertoraInternalException`. They pass the per-rule `catch`, end the whole run, and the cloud job ends
+`FAILED`.
+
+**Effect: one rule's encoding failure throws away every verdict in the job.** On a ~36k-line Anchor
+lending program (2026-10-22, Prover `master`), all 10 of a run's 56 cloud jobs that failed did so
+this way: 8 with P17's heap overflow and 2 with P18's `sol_alloc_free`. Each carried a whole unit's
+rules, 11 to 22 of them, and the authoring agent got no verdict for any. It had to guess which rule
+was at fault, because the alert names none. In the reproduction under P17, the rules that do not
+overflow encode and run normally once the overflow is gone, and the per-rule errors that remain
+(`[3001]`, `[6000]`) are reported per rule, as they should be.
+
+P15 was the same escape through the same `catch`, and its fix encoded that one case instead of
+catching the class.
+
+**Fix:** catch `SolanaInternalError` in the per-rule loop too, and report it as that rule's
+`RuleEncodingException`, keeping the internal-error alert. The other rules then keep their verdicts.
+
+---
+
+## P17
+
+### Running out of the TAC heap does not say that `-solanaHeapSize` raises it
+
+**Fixed on the Prover's master branch by [Certora/EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773)**, as proposed
+below: a coded `SolanaError` (6001) naming the bound, the total reached and `-solanaHeapSize N`, and
+reworded help. It also fixes two edge cases in the allocator's bound check: a huge size could wrap
+the free pointer, and an allocation that exactly filled the bound was refused.
+
+**What is left after P16.** Before P16's fix a heap overflow failed the whole job, and that was
+P16's defect. Now it fails one rule, and this entry is about what that rule's error says.
+
+The heap is a per-rule `TACBumpAllocator` (`sbf/tac/SbfCFGToTAC.kt:121`,
+`sbf/tac/TACAllocators.kt:48`). Every allocation site in the rule's inlined program gets fresh
+addresses at translation time, and nothing is freed. An allocation whose size the analysis cannot
+read is charged `-solanaTACHeapAllocSize`, 512 bytes, which every `msg!` with arguments is. When
+the total passes `-solanaHeapSize` (default 32768), `next()` throws:
+
+```
+TACTranslationError("TACHeapAllocator ran out of memory of 32768 bytes!")
+```
+
+Nothing in it names the option, or how much the rule needed, so the reader cannot tell this is a
+setting rather than a fault in the program or the rule. The option's own help makes it worse: it
+calls 32 KB "the actual SBF runtime constraint", which reads as "your program uses too much memory".
+It is not that. The bound is on translation-time allocation sites, and a program well inside its
+runtime heap can exceed it.
+
+**The option does fix it.** On a ~36k-line Anchor lending program (2026-10-22, Prover `master`), 8
+cloud jobs failed this way. One of them, rebuilt from its own uploaded sources and resubmitted on
+2026-10-23:
+
+| job | prover args | result |
+|---|---|---|
+| `400485abc6c440aca1ed1cbef6ea8b75` | as the run submitted them | `FAILED`, `TACHeapAllocator ran out of memory of 32768 bytes!` |
+| `0ec2cec8d7b045419a70e60e97da3855` | the same plus `-solanaHeapSize 262144` | `SUCCEEDED` in 3.5 minutes: 16 verified, 7 violated, 7 per-rule errors |
+
+**Fix: report it the way stack exhaustion is reported.** Running out of stack is a `SolanaError`
+with code 6000 (`smashedStackUserInfo`, `sbf/support/Errors.kt:292`), whose help names
+`-solanaStackSize` and a size, `nearestPowerOfTwo(current + overflow)`. For the heap, throw a
+`SolanaError` with its own code from `TACBumpAllocator.next()`. It should give the bound, the total
+reached at the failing allocation, and "increase it with `-solanaHeapSize N`". The total at failure
+is a lower bound on what the rule needs, since translation stops there, so `N` should be at least
+the next power of two above it, and the message should say so. Reword the option's help to say what
+the bound counts: allocation sites in the translated rule, not the runtime heap.
+
+**What AutoProver does about it.** Nothing yet. AutoProver can pass `-solanaHeapSize` in the
+backend's default prover args (`composer/spec/cvlr/conf.py`), which avoids the error whether or not
+this is fixed.
+
+---
+
+## P18
+
+### `sol_alloc_free_` crashes the points-to analysis
+
+**Fixed on the Prover's master branch by [Certora/EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776)**, with the
+model proposed below: `free_addr == 0` allocates on the heap, a pointer or a nonzero number is a
+no-op free returning 0. A call whose `free_addr` the analysis cannot decide gets a per-rule error
+(3311) naming the inlined source frames, rather than a guess. The two crashing jobs were not rerun
+against it, so the trigger is still not pinned.
+
+`PointerDomain`'s syscall handling (`sbf/domains/memory/PointerDomain.kt:5088`) has
+`SOL_ALLOC_FREE -> throw PointerDomainError("TODO(5): support sol_alloc_free")`. A program reaches
+that syscall whenever an allocation goes through Rust's System allocator instead of a modelled
+allocator call. On SBF, `__rustc::__rdl_alloc`, `__rdl_alloc_zeroed`, `__rdl_dealloc` and
+`__rdl_realloc` are `sol_alloc_free_(size, 0)` and its variants. With `no-entrypoint`, which a
+verification build enables, the program defines no `#[global_allocator]`, so those are the
+allocator.
+
+**Effect: before P16's fix, the job ended `FAILED`; now the rule that reaches it ends in an
+internal error.** On the lending program above, 2 of the 56 jobs, in two units, ended:
+
+```
+PointerDomain error: TODO(5): support sol_alloc_free
+```
+
+The alert names no function. The likeliest path is P19: a `__rustc::__rust_realloc` call the Prover
+does not recognize as an allocation is inlined, through `__rdl_realloc`, down to the syscall. That
+is not confirmed. The crashing jobs (`4a053e6282c74296b3a75d41902a0815`,
+`f0d5e1cda0bb49cd9dd5d5c47baa7002`) carry their sources, and rebuilding one the way P17's was
+rebuilt would show the call.
+
+**Fix:** model the syscall: `free_addr == 0` allocates `size` bytes on the heap, and anything else is
+a no-op free, which is what the allocator call it stands behind already gets. Short of that, raise a
+`SolanaError` naming the caller, so the rule's error says which call to summarize instead of
+asking for a Prover bug report.
+
+---
+
+## P19
+
+### The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed`
+
+**Fixed on the Prover's master branch by [Certora/EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777)**,
+stacked on #8776. The recognizers strip a leading `__rustc::`, as proposed below. Realloc gets a stronger
+model than the one proposed: it is expanded right after inlining into an allocation of the new size
+plus a `sol_memcpy_` of the first `min(old_size, new_size)` bytes, so a `Vec`'s elements stay known
+after it grows. Plain allocation would have made them unknown.
+
+rustc 1.89, which platform-tools v1.53 ships, emits the allocator shims under a `__rustc::` path:
+`__rustc::__rust_alloc`, `__rustc::__rust_dealloc`, `__rustc::__rust_realloc`, and behind them
+`__rustc::__rdl_*` (P18). `isAllocFn` (`sbf/cfg/SbfInstruction.kt:563`) accepts `__rust_alloc`,
+`__rust_alloc_zeroed` and `__rustc::__rust_alloc`, and `isDeallocFn` accepts `__rust_dealloc` and
+`__rustc::__rust_dealloc`. Nothing accepts `__rustc::__rust_alloc_zeroed`, and nothing accepts
+`realloc` under any name.
+
+**Effect.** A call to an unrecognized shim is an ordinary call. Unless a tuning file never-inlines
+it, the analysis inlines it and walks into the System allocator, which ends at P18's syscall. In a
+v1.53 build of the lending program, `__rustc::__rust_realloc` is called from
+`alloc::raw_vec::finish_grow` (Vec growth). The canonical tuning files never-inline `^<?alloc::.*$`,
+which covers that caller, so the stock configuration is protected on that path. A program, or a
+tuning edit, that reaches the shim another way is not. The stale tuning patterns are T9.
+
+**Fix:** recognize `__rustc::__rust_alloc_zeroed` as an allocation, and give realloc a model:
+allocate the new size, as `isAllocFn` already does for a fresh allocation. Matching the `__rustc::`
+prefix generally, rather than name by name, would keep the next rename from breaking it again.
 
 ---
 
@@ -1248,6 +1524,42 @@ author-written ones.
 
 ---
 
+## T9
+
+### The allocator directives are spelled for shim names current toolchains no longer emit
+
+`cvlr_inlining_core.txt` never-inlines the allocator shims by their old names:
+
+```
+#[inline(never)] ^__rust_alloc$
+#[inline(never)] ^__rust_dealloc$
+#[inline(never)] ^__rust_alloc_zeroed$
+#[inline(never)] ^__rg_alloc$
+#[inline(never)] ^__rg_dealloc$
+#[inline(never)] ^__rg_oom$
+```
+
+A program built with platform-tools v1.53 (rustc 1.89) defines `__rustc::__rust_alloc`,
+`__rustc::__rust_dealloc`, `__rustc::__rust_realloc`, `__rustc::__rg_oom` and the `__rustc::__rdl_*`
+functions behind them. None of the six patterns matches any of them, silently, as T8's does not. The
+Prover's own recognizer catches two of these by name (P19), so most of the gap is covered by that.
+But no directive covers `__rustc::__rust_realloc`, in a block headed "Rust memory allocation
+functions".
+
+**Fixed in AutoProver.** Every allocator directive accepts the prefix, `^(__rustc::)?__rust_alloc$`
+and so on, and `__rust_realloc`, which the file never had, is added. On the Prover's master branch
+the directives are redundant for the shims: since
+[Certora/EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777) the inliner leaves any
+call it recognizes as an allocation, a free or a realloc uninlined, under either name, whatever the
+tuning file says. The same `composer/cargo/symbols.py` check T8 suggests would have caught the stale
+names.
+
+The same rename reached the counterexample renderer: the Solana trace shape dropped allocator frames
+named `__rust_alloc` and not `__rustc::__rust_alloc`, so a v1.53 build's traces were full of them.
+That is fixed too (`SOLANA_TRACE` in `composer/prover/results.py`).
+
+---
+
 ## C1
 
 ### `cvlr-solana` is bound to `solana-program` 2.2, so a program on the current SDK cannot be scaffolded at all
@@ -1274,7 +1586,7 @@ version = "2.2"
 
 Read from the registry checkout, not from the repository. **0.5.0 is the newest release on
 crates.io** (published 2026-01-16; 0.4.5 the same day, 0.4.4 before that in April 2025). So there is
-no CVLR line to move *to*.
+no published CVLR line to move *to*.
 
 The refusal, from a scaffold dry run against `solana-program/stake` at `main`:
 
@@ -1307,19 +1619,15 @@ respelling them — confirmed working here, twelve aliases in force on this targ
 directive is a text substitution. It cannot reconcile two incompatible `AccountInfo` types in one
 dependency graph, which is a compile-time fact about the crates.
 
-**Currently worked around by not using current code.** `docs/stake-benchmark.md` records the
-benchmark this blocked and the route taken: check out the last commit before the target moved to SDK
-3.0 — roughly a year and several hundred commits behind `main`. That works for a benchmark, where a
-snapshot is defensible if it is declared. It does not work for a client on code they are shipping,
-and it expires: the gap widens every time a maintained program bumps its SDK.
+The fix is a `cvlr-solana` release line per platform generation, which is how
+[`reference.py`](../composer/spec/cvlr/reference.py) models the world: `PlatformGeneration` exists
+because a chain crate implies a generation, and `scaffold.select_generation` picks the reference set
+whose platform the package links. Widening the existing pin would not have been enough: the identity
+of `AccountInfo` comes from the crate that defines it, so one release cannot satisfy both
+generations regardless of how the facade is pinned.
 
-Fix: a `cvlr-solana` release line per platform generation, which is how
-[`reference.py`](../composer/spec/cvlr/reference.py) already models the world —
-`PlatformGeneration` exists precisely because a chain crate implies a generation. Widening the
-existing pin is not enough on its own: the identity of `AccountInfo` comes from the crate that
-defines it, so one release cannot satisfy both generations regardless of how the facade is pinned.
-Until such a release exists, `ChainReference.platform` is documentation of a constraint rather than
-a choice anyone can make.
+**What would resolve it**: publishing 0.6.0 (and 0.5.1) to crates.io, after which the reference set
+drops the commits and nothing else changes.
 
 ---
 

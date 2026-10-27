@@ -4,6 +4,7 @@ Every conf is built here, never read from the project. :data:`BASE_CONF` is fixe
 :class:`TunableConf` holds what the author may change, and :func:`tunable_conf` renders it onto
 the fixed part. :func:`solana_conf` adds one submission's
 keys: the build script, the message, the rule selection, and the summary files.
+:func:`delivered_conf` is the conf a run ships for each delivered unit.
 
 ``solana_inlining`` is left unset. ``cargo certora-sbf`` reads it from the package's
 ``[package.metadata.certora]`` and reports it through the build manifest. The prover applies that
@@ -36,6 +37,12 @@ from composer.spec.util import string_hash
 #: ``-solanaTACMathInt`` (P8) are on the Prover's master branch and not yet released, hence
 #: ``prover_version``.
 #:
+#: ``-solanaHeapSize`` is 256 KB, eight times the default. The bound is not the program's runtime
+#: heap: the Prover charges each allocation site in a rule's inlined program, frees nothing, and
+#: charges 512 bytes for a size it cannot read, which every formatted log message is. A rule over the
+#: bound gets an error, not a weaker proof. A large Anchor program's rules overflow the default
+#: (``docs/upstream-defects.md`` P17).
+#:
 #: TODO(cvlr-todo U25): remove ``prover_version`` before the Solana AutoProver ships.
 BASE_CONF: Conf = {
     "smt_timeout": "6000",
@@ -46,6 +53,7 @@ BASE_CONF: Conf = {
         "-solanaSkipCallRegInst true",
         "-solanaTACOptimize 2",
         "-solanaStackSize 8192",
+        "-solanaHeapSize 262144",
         "-solanaTACMathInt true",
         "-solanaTACSoundSignedMath true",
     ],
@@ -149,7 +157,8 @@ PLATFORM_TOOLS_VERSION = "v1.53"
 #: The host Rust toolchain every cargo command of a CVLR run uses, whatever the target's
 #: ``rust-toolchain.toml`` pins. The pin is for the project's own builds: host checks and Anza's SBF
 #: toolchain. The program this backend verifies is compiled by the platform tools' rustc whatever the
-#: pin says, so the host toolchain only runs ``cargo metadata``, ``cargo check`` and build scripts.
+#: pin says, and so is its ``cargo check`` (:func:`~composer.cargo.sbf.sbf_check`). The host
+#: toolchain only runs ``cargo metadata`` and the cargo that launches ``cargo certora-sbf``.
 #: Following the pin instead fails in the Solana image: the runtime user cannot write the image's
 #: rustup home, so a toolchain the image lacks cannot be installed, and cargo does not start.
 #: ``scripts/Dockerfile.solana`` installs this one.
@@ -215,3 +224,29 @@ def solana_conf(tunable: TunableConf, run: RunOverlay) -> Conf:
             conf["rule_sanity"] = "none"
             conf["coverage_info"] = "basic"
     return run.rules.apply_to(conf)
+
+
+def delivered_conf(
+    tunable: TunableConf,
+    *,
+    features: tuple[str, ...],
+    summaries: tuple[Path, ...],
+    rules: RuleSelection,
+    msg: str,
+) -> Conf:
+    """The conf a user runs to check one delivered unit's rules again, from the package directory.
+
+    It has no ``build_script``: the run's script reads a confined command beside it in the run's
+    work directory. Without one, ``certoraSolanaProver`` runs ``cargo certora-sbf`` in the nearest
+    ``Cargo.toml``'s directory, with ``cargo_features`` and ``cargo_tools_version``. That is also
+    why ``summaries`` are relative to the package directory and not to the project root.
+    """
+    conf: Conf = {
+        **tunable_conf(tunable),
+        "cargo_features": list(features),
+        "cargo_tools_version": PLATFORM_TOOLS_VERSION,
+        "msg": safe_msg(msg),
+    }
+    if summaries:
+        conf["solana_summaries"] = [s.as_posix() for s in summaries]
+    return rules.apply_to(conf)

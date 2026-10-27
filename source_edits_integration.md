@@ -26,14 +26,27 @@ per delivered component that has munges, with the diff of the munged files. Mung
 virtual in the same sense: they live in a per-run copy of the project, and the
 project on disk keeps the code as shipped. What differs is the harness. The CVLR
 harness is a new Rust module written into the program's crate (`<pkg>/src/certora/`).
-It is the component's deliverable, not a source edit, so it is not in the diff.
+It is the component's deliverable, not a source edit, so it is not in `cumulative_diff`.
+From schema 3.6 a CVLR record also carries `patch_path`, a project-relative patch of
+the harness plus that component's edits. That is the file to `git apply` for a Solana
+component, on the project as it was before the run. Apply one component's file. It
+creates the harness files, so it does not apply on top of `certora/cvlr/harness.patch`
+or on top of another component's patch.
+
+A component the run budget cut short is not in `source_edits`: its partial makes no
+claims about any code. From schema 3.7 its `curtailed_components` entry carries the
+same record as `source_edits` when the partial edited the program. Its `patch_path`
+rebuilds the partial's tree, with the harness module left as the placeholder and the
+draft beside it as `<module>.rs.unverified`. Rename the draft over the module to build it.
 
 ## 1. `source_edits` in `report.json`
 
 `schema_version` moves to `"3.1"`. The change is purely additive — a `"3.0"`
 document still validates against the new model — so consumers should accept both
 versions and treat a missing/empty `source_edits` as "every component was verified
-against the on-disk source".
+against the on-disk source". Schema 3.6 adds an optional `patch_path` on each
+record. Absent, including on a `"3.5"` document, the record has no separate apply
+file and `cumulative_diff` is what a consumer applies. That is every EVM report.
 
 The new top-level field:
 

@@ -15,6 +15,13 @@ you are not certain of, not after the compiler rejects one.
 The reference it reads is generated from those exact crates, so an answer from it cannot be about
 a different line. Nothing else you have is version-bound that way: a project you remember, the
 manual and your own recollection are all from whenever they were written.
+{% if caveats %}
+
+**Where the manual is wrong for this build:**
+{% for caveat in caveats %}
+* {{ caveat }}
+{% endfor %}
+{% endif %}
 
 Three things worth knowing about its answers:
 

@@ -19,7 +19,7 @@ The path picks the crate the harness is written into (`--package` overrides it).
   | `solana-program` 2.x | 0.6.1 | 0.5.1 |
 
   The pipeline reads the generation from the resolved dependency graph and adds the matching CVLR crates itself. A project on `solana-program` 1.x is refused, and so is a project that already depends on a different CVLR line.
-- **Anchor, if used, at a version Certora's fork covers.** The Prover cannot analyze crates.io `anchor-lang`: every handler fails with [3006]. The pipeline redirects `anchor-lang` and `anchor-spl` to the matching `certora-v<version>` branch of [Certora/anchor](https://github.com/Certora/anchor) through `[patch.crates-io]`. Covered versions are 0.26.0–0.29.0, 0.30.1, 0.31.1, 0.32.0 and 0.32.1 (`ANCHOR_FORK` in `composer/spec/cvlr/forks.py`). Any other version stops the run with a message naming those versions. The `fixed` crate is handled the same way, at 1.23.1 only.
+- **Anchor, if used, at a version Certora's fork covers.** The Prover cannot analyze crates.io `anchor-lang`: every handler fails with [3006]. The pipeline redirects `anchor-lang` and `anchor-spl` to the matching `certora-v<version>` branch of [Certora/anchor](https://github.com/Certora/anchor) through `[patch.crates-io]`. Covered versions are every stable release from 0.26.0 through 1.2.1 (`ANCHOR_FORK` in `composer/spec/cvlr/forks.py`). Any other version stops the run with a message naming those versions. The `fixed` crate is handled the same way, at 1.23.1 only.
 
 The program's own `rust-toolchain.toml` is not used. Every cargo command a run makes uses the host toolchain `HOST_RUST_TOOLCHAIN` (1.90.0, in `composer/spec/cvlr/conf.py`), and the program is compiled by the platform tools' rustc whatever the project pins.
 
@@ -45,6 +45,8 @@ $COMPOSE run --rm autoprove-solana console-solana /work/<proj> programs/<pkg>/sr
 
 A cold build of both images takes about 35 minutes.
 
+After a build, `scripts/verify-solana-image.sh` checks the images without an LLM: the toolchain in the Solana image, the two entrypoint guards, and one Prover job from `tests/test_cvlr_end_to_end.py` run inside the container against a SolanaExamples checkout (`--examples DIR`, or `$SOLANA_EXAMPLES_REPO`). It needs `CERTORAKEY` or a `certora-cloud login`, and takes about two minutes. `--no-prover` skips the job.
+
 ## Host
 
 You need the EVM pipeline's prerequisites from [README.md](README.md#prerequisites): Python, `uv`, `rustup`, the cloud credentials, and PostgreSQL. Solidity compilers are not needed. You also need:
@@ -57,7 +59,11 @@ You need the EVM pipeline's prerequisites from [README.md](README.md#prerequisit
 
 ## Output
 
-The harness is a Rust module inside the verified crate, under `<pkg>/src/certora/`, with the rules in `specs/`. It is wired into the crate's `Cargo.toml` (a `certora` feature) and `lib.rs`. Everything else goes under `certora/cvlr/` in the project root: the report, the property-to-rule mapping and the per-rule reports. Edits the pipeline made to the program itself (munges) are listed in the report.
+The harness is a Rust module inside the verified crate, under `<pkg>/src/certora/`, with the rules in `specs/`. It is wired into the crate's `Cargo.toml` (a `certora` feature) and `lib.rs`. Everything else goes under `certora/cvlr/` in the project root: the report, the property-to-rule mapping and the per-rule reports. That includes `certora/cvlr/harness.patch`, the harness and its wiring, named by the report's `deliverable_patch`. `git apply` it on the project as it was before the run.
+
+A component whose proof edited the program also gets `certora/cvlr/components/<module>.patch`. The report's `source_edits[].patch_path` names it. That file is the harness plus that component's edits. `git apply` it on the project as it was before the run, then build with `--features "certora unit_<module>"`. Apply one component's patch to that clean project. Each patch creates the harness files, so it does not apply on top of `harness.patch` or on top of another component's patch. `source_edits[].cumulative_diff` is the edits alone, against the tree the run left behind. It is the record of what changed in the program. The file to apply is `patch_path`. A component the run budget cut short is not in `source_edits`. If its partial edited the program, its `curtailed_components[]` entry carries the same record, and its patch leaves the harness module as the placeholder. To build the partial, rename `<module>.rs.unverified` over `<module>.rs` after applying.
+
+Each delivered component also gets a Prover conf, `certora/cvlr/confs/<module>.conf`, named by the report's `prover_confs`. It has the rules, cargo features, loop settings and summaries that component was verified with. After applying the patch, run it from the package directory: `cd <pkg> && certoraSolanaProver <path to certora/cvlr/confs/<module>.conf>`. The conf has no build script, so the Prover CLI builds with `cargo certora-sbf` in that directory. Its summaries path is relative to the package for the same reason. The summaries file it names, `<pkg>/src/certora/envs/cvlr_summaries_<module>.txt`, is in both patches.
 
 The run builds in a copy of the project in a temporary directory, which is deleted when the run ends. The pipeline adds the Prover's output directories to the project's `.gitignore`.
 

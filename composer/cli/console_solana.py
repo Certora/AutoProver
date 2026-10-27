@@ -19,6 +19,8 @@ async def _main() -> int:
         print(f"\n  Components:    {result.n_components}")
         print(f"  Properties:    {result.n_properties}")
         print(f"  Delivered:     {result.n_delivered}")
+        if result.n_partial:
+            print(f"  Partial:       {result.n_partial} (budget-curtailed)")
         for outcome in result.outcomes:
             # A budget-curtailed publish wraps a ``Delivered``, so the harness it did write is
             # still on disk and still worth naming.
@@ -38,6 +40,11 @@ async def _main() -> int:
         if result.all_failed:
             print("  RUN FAILED: every component failed to generate or gave up.")
             return 1
+        if result.n_delivered == 0:
+            print(
+                f"  RUN CURTAILED: the budget stopped every component; {result.n_partial} "
+                "published a partial result, unverified."
+            )
         return 0
 
 
