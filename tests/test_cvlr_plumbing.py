@@ -108,19 +108,19 @@ _METADATA = {
             "targets": [{"name": "root", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/w/src/lib.rs"}],
         },
         {
-            "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr@0.6.1",
+            "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr@0.6.2",
             "name": "cvlr",
-            "version": "0.6.1",
-            "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-0.6.1/Cargo.toml",
+            "version": "0.6.2",
+            "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-0.6.2/Cargo.toml",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "features": {},
             "targets": [{"name": "cvlr", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/reg/cvlr/src/lib.rs"}],
         },
         {
-            "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr-log@0.6.1",
+            "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr-log@0.6.2",
             "name": "cvlr-log",
-            "version": "0.6.1",
-            "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-log-0.6.1/Cargo.toml",
+            "version": "0.6.2",
+            "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-log-0.6.2/Cargo.toml",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "features": {},
             "targets": [{"name": "cvlr_log", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/reg/cvlr-log/src/lib.rs"}],
@@ -245,7 +245,7 @@ def test_every_copy_of_a_crate_the_graph_resolves_twice_is_reported():
     older = json.loads(json.dumps(payload["packages"][2]))
     older.update(id=f"{older['source']}#cvlr@0.4.1", version="0.4.1")
     payload["packages"].append(older)
-    assert [c.version for c in _workspace(payload).resolved("cvlr")] == ["0.6.1", "0.4.1"]
+    assert [c.version for c in _workspace(payload).resolved("cvlr")] == ["0.6.2", "0.4.1"]
 
 
 def _cargo_answers(monkeypatch, answer):
@@ -337,17 +337,17 @@ def test_the_resolved_cvlr_crates_are_the_family_the_build_pulled_in():
     """``cvlr`` is a facade — ``cvlr_assert!`` expands in ``cvlr-asserts`` — so the family is what
     matters and it is recognized by name rather than declared anywhere."""
     sources = CvlrSources.of(_workspace(_METADATA))
-    assert [(c.name, c.version) for c in sources.crates] == [("cvlr", "0.6.1"), ("cvlr-log", "0.6.1")]
+    assert [(c.name, c.version) for c in sources.crates] == [("cvlr", "0.6.2"), ("cvlr-log", "0.6.2")]
 
 
 
 
 def test_two_copies_of_one_version_are_ordered_the_same_whatever_order_cargo_lists_them():
-    """A registry release and a git checkout of it both resolve as ``cvlr 0.6.1``."""
+    """A registry release and a git checkout of it both resolve as ``cvlr 0.6.2``."""
     registry = CratePackage(
         name="cvlr",
-        version="0.6.1",
-        manifest_path=Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.1/Cargo.toml"),
+        version="0.6.2",
+        manifest_path=Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.2/Cargo.toml"),
         lib=None,
         features=(),
         source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
@@ -383,7 +383,7 @@ def test_an_older_cvlr_than_the_pin_is_a_mismatch_that_stops_the_run():
     sources = CvlrSources.of(_workspace(payload))
     mismatched = {g.crate: g for g in sources.mismatched(SOLANA_V2)}
     assert mismatched["cvlr"].resolved == "0.4.1"
-    assert mismatched["cvlr"].reference == "0.6.1"
+    assert mismatched["cvlr"].reference == "0.6.2"
 
 
 def test_an_older_cvlr_beside_the_pinned_one_is_still_a_mismatch():

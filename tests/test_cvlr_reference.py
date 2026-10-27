@@ -45,7 +45,7 @@ def test_the_dependency_block_carries_the_platform_too():
     # Without it a probe cannot name AccountInfo, so an entry that mentions one would fail the
     # gate for a missing import rather than for anything about CVLR.
     block = ref.SOLANA_V2.cargo_dependencies()
-    assert 'cvlr = "=0.6.1"' in block
+    assert 'cvlr = "=0.6.2"' in block
     assert 'cvlr-solana = "=0.5.1"' in block
     assert 'solana-program = "2.2"' in block
 
@@ -137,7 +137,6 @@ def _from_commits(reference: ref.ChainReference, repo: str) -> list[ref.CommitPa
 
 
 _CVLR_SOLANA_REPO = "https://github.com/Certora/cvlr-solana.git"
-_CVLR_REPO = "https://github.com/Certora/cvlr.git"
 
 
 def test_the_crates_of_one_repository_are_read_from_one_commit():
@@ -146,22 +145,6 @@ def test_the_crates_of_one_repository_are_read_from_one_commit():
     patches = _from_commits(ref.SOLANA_V2, _CVLR_SOLANA_REPO)
     assert {p.name for p in patches} == {"cvlr-solana", "cvlr-solana-stake", "cvlr-spl-token"}
     assert len({p.commit for p in patches}) == 1
-
-
-def test_the_whole_core_is_read_from_the_core_s_commit():
-    """``cvlr`` depends on every crate of its repository, and the chain crates depend on several of
-    them directly. Patching ``cvlr`` alone would leave those resolving from crates.io beside the
-    commit's copies, two of each crate, whose types do not unify."""
-    for reference in (ref.SOLANA_V2, ref.SOLANA_V3, ref.SOROBAN):
-        patches = _from_commits(reference, _CVLR_REPO)
-        assert {p.name for p in patches} == {
-            "cvlr", "cvlr-asserts", "cvlr-decimal", "cvlr-derive", "cvlr-early-panic",
-            "cvlr-fixed", "cvlr-hook", "cvlr-log", "cvlr-macros", "cvlr-mathint", "cvlr-nondet",
-            "cvlr-rule-manifest", "cvlr-spec",
-        }
-        assert {(p.version, p.commit) for p in patches} == {
-            (reference.core.version, reference.core.unpublished)
-        }
 
 
 def test_a_commit_is_pinned_by_hash_and_never_by_a_name_that_can_move():

@@ -1442,7 +1442,7 @@ a feature-gated `use` rather than a rewrite:
 | literal array sizes replaced by named constants | 2 | the constants shrink under the feature, so loops over the collection fit the unroll bound |
 | `inline(never)`, always paired with `early_panic` | 3 | keeps the function a frame the prover can see |
 
-Both attributes are in the pinned reference set (`cvlr` 0.6.1 re-exports `early_panic` and
+Both attributes are in the pinned reference set (`cvlr` 0.6.2 re-exports `early_panic` and
 `mock_fn`), so this is a small declarative vocabulary, not free-form source editing. Four things in
 it are worth stating plainly.
 

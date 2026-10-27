@@ -620,20 +620,13 @@ recorded turns, which moves everything after them out of order. Nobody has run t
 needs a re-recording under the corpus, and before that the researcher needs its own lane, so that
 its turns are recorded and replayed apart from its caller's. Landing plan P9.
 
-**U28. Ship blocker: the core is read from a git commit, because its documented release is
-unpublished.** `cvlr` 0.6.1 on crates.io leaves 176 of the API corpus's items without prose. Every
-item is documented on `Certora/cvlr`'s main branch, which is still version 0.6.1, so the reference
-set ([reference.py](../composer/spec/cvlr/reference.py)) reads the whole core workspace from that
-commit (`c2df10a`), by the same mechanism as U26. All thirteen crates are patched together, because
-`cvlr-solana` depends on the sub-crates directly and a lone `cvlr` patch would put two copies of each
-in the graph. One of them, `cvlr-rule-manifest`, is not on crates.io at any version. Built from the
-pins, the corpus has 0 of 354 items without prose (2026-10-22). Once a
-documented release is on crates.io, pin it and drop the commit, then rebuild the corpus and check the
-producer's `--undocumented` report is still empty. That release is `cvlr` 0.6.2
-([cvlr#52](https://github.com/Certora/cvlr/pull/52), release commit `de8dec0`), cut on `c2df10a`:
-`verify_rules` reads the `.cvlr_rules` section that commit added, and 0.6.2 publishes
-`cvlr-rule-manifest` with it (`docs/cvlr-sdk3-support.md`, *Where things stand*). `reference.py`'s
-docstring should also say that a bump means an API corpus rebuild; today nothing connects the two.
+**~~U28. Ship blocker: the core is read from a git commit, because its documented release is
+unpublished.~~** — **published as `cvlr` 0.6.2 (2026-10-27).** The core was read from a commit on
+`Certora/cvlr`'s main branch, since crates.io's 0.6.1 left 176 of the API corpus's items without
+prose and had no `.cvlr_rules`. 0.6.2 is that branch released, `cvlr-rule-manifest` included
+([cvlr#52](https://github.com/Certora/cvlr/pull/52), squash commit `0ef58e4`). The reference set
+pins it from crates.io, and the corpus rebuilt from the pins has 0 of 354 items without prose.
+`reference.py`'s docstring now says a bump means a corpus rebuild.
 
 **U29. A scaffold could offer to move an off-reference project onto the pin.** The scaffold refuses a
 project on another CVLR line (`Mismatched`). Offering to rewrite its pins instead is the obvious next

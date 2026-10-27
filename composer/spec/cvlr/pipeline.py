@@ -146,7 +146,7 @@ class CvlrDeps:
     preflight: CvlrPreflight
     #: The verified package's directory, relative to the project root.
     package_dir: Path
-    #: ``cvlr 0.6.1, cvlr-solana 0.5.0, …`` — stated in the prompt, so a reader of a transcript can
+    #: ``cvlr 0.6.2, cvlr-solana 0.5.1, …`` — stated in the prompt, so a reader of a transcript can
     #: tell which release the advice in it was about.
     versions: str
     #: Where each violated rule's analysis lands, for the report to reshape into findings.

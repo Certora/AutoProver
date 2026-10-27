@@ -41,7 +41,7 @@ giving it `cvlr_research` is the direction, not a second mount.
 preflight.** That is the CVL arrangement: the Prover ships one CVL, and the language version is not
 a thing a project chooses. For CVLR it is a policy rather than a physical constraint, but the
 contract is the same. The reference set is [`composer/spec/cvlr/reference.py`](../composer/spec/cvlr/reference.py)
-— `cvlr` 0.6.1, `cvlr-solana`, `cvlr-solana-stake` and `cvlr-spl-token` 0.5.0; Soroban's
+— `cvlr` 0.6.2, `cvlr-solana`, `cvlr-solana-stake` and `cvlr-spl-token` 0.5.1 and 0.6.0; Soroban's
 `cvlr-soroban` and `cvlr-soroban-derive` 0.4.0. It is what a fresh project is pinned to, and what the
 run compiles is guaranteed equal to it, because anything else was refused. The corpus documents
 exactly that set, so there is no version divergence to caveat. Landed in
@@ -68,8 +68,7 @@ There is no escape hatch. A flag that lets a project drift would silently degrad
 researcher gives, and there is no such flag for CVL either. Two consequences are open:
 
 * **A bump means a corpus rebuild**, and the two must land together or every answer is about the
-  wrong release. `reference.py`'s docstring does not yet say so ([cvlr-todo.md](./cvlr-todo.md)
-  U28).
+  wrong release. `reference.py`'s docstring says so.
 * **The scaffold could offer to bump an off-reference project** instead of refusing it. That edits
   the client's dependency graph, so it is a decision rather than a task (U29).
 
@@ -172,14 +171,12 @@ byte-identical to what the same crates emit once released; where the build came 
 only in the manifest's `source` line and the log, which no agent reads. That is how documentation is
 tried before it is published.
 
-**Every exported item is documented, read from the commits that document it.** The published
-crates document 66 of 284 items; `cvlr-asserts`, for one, has 31 items and no prose. Both
-repositories have since documented every item and check for it in CI, and neither documented
-release is published. The reference set reads both from commits: `cvlr-solana` from its release
-commits, and the core from `Certora/cvlr`'s main branch, which is still version 0.6.1. Built from
-those pins, the corpus has 0 of 346 items without prose (2026-10-14). The producer's
-`--undocumented` report is how that is rechecked after a bump. Moving the core back to crates.io is
-[cvlr-todo.md](./cvlr-todo.md) U28.
+**Every exported item is documented, read from the releases that document it.** The releases
+published before October 2026 document 66 of 284 items; `cvlr-asserts`, for one, had 31 items and
+no prose. Both repositories have since documented every item and check for it in CI. The core's
+documented release, `cvlr` 0.6.2, is published; the `cvlr-solana` ones are read from their release
+commits until they are. Built from those pins, the corpus has 0 of 354 items without prose
+(2026-10-27). The producer's `--undocumented` report is how that is rechecked after a bump.
 
 ### 4.3 Header paths
 
