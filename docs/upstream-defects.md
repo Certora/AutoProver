@@ -1252,9 +1252,18 @@ author-written ones.
 
 ### `cvlr-solana` is bound to `solana-program` 2.2, so a program on the current SDK cannot be scaffolded at all
 
-**Effect: every program on the Solana SDK 3.x line is refused before a single rule is authored.**
-Not a degraded run or a silent misconfiguration — [`_check_platform`](../composer/spec/cvlr/scaffold.py)
-returns `Blocked`, and a plan carrying one applies nothing.
+**Fixed: `cvlr-solana` 0.6.0 is published (2026-10-27).** It is on the split `solana-*` 3.x crates
+and has both program models ([cvlr-solana#24](https://github.com/Certora/cvlr-solana/pull/24),
+release commit `13bb381`). AutoProver's `SOLANA_V3` reference set pins it
+([`reference.py`](../composer/spec/cvlr/reference.py)), so SDK 3 programs are scaffolded and run
+([cvlr-sdk3-support.md](./cvlr-sdk3-support.md)).
+
+What follows is the gap as 0.5.x and earlier leave it.
+
+**Effect, on 0.5.x and earlier: every program on the Solana SDK 3.x line is refused before a
+single rule is authored.** Not a degraded run or a silent misconfiguration —
+[`_check_platform`](../composer/spec/cvlr/scaffold.py) returns `Blocked`, and a plan carrying one
+applies nothing.
 
 `cvlr-solana` 0.5.0 declares its platform dependency as:
 

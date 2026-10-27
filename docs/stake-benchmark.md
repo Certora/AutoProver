@@ -507,8 +507,8 @@ the destination truncates the account through `realloc(0)`.
 year-old snapshot. The plan and its evidence are in `docs/cvlr-sdk3-support.md`. In brief:
 
 - **CVLR.** `cvlr-solana` 0.6.0 is the SDK 3 line. The port and both program models are on
-  `Certora/cvlr-solana`'s `eric/sdk3`, released at `13bb381`. Until it is published, AutoProver
-  reads it from that commit (U26).
+  `Certora/cvlr-solana`'s `main` (#24, release commit `13bb381`), published to crates.io on
+  2026-10-27.
 - **AutoProver:**
   - two Solana reference sets, chosen per target by the platform crate it links;
   - the SDK 3 tuning-path aliases;
