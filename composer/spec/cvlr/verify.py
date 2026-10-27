@@ -14,7 +14,6 @@ and the program violates it. The marking records that claim.
 import asyncio
 import dataclasses
 import logging
-import subprocess
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import (
@@ -44,7 +43,7 @@ from composer.authoring.state import ValidationStamper
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
-from composer.cargo.symbols import SymbolsUnavailable, defined_functions, nearest, unmatched
+from composer.cargo.symbols import SymbolsUnavailable, nearest, prover_function_names, unmatched
 from composer.prover.cloud import results_api
 from composer.prover.core import (
     CexHandler,
@@ -681,7 +680,7 @@ class VerifyRules(
             )
             if not isinstance(outcome, (BuildRejected, SubmissionFailed, Checked)):
                 return outcome
-            return self._report(outcome, deps, declared=tuple(listed))
+            return await self._report(outcome, deps, declared=tuple(listed))
 
     def _nothing_to_submit(self) -> Command | str:
         """The build listed no rules.
@@ -716,25 +715,29 @@ class VerifyRules(
                 ),
             )
 
-    def _inert_summaries(self, build: SbfRun) -> str | None:
-        """A note naming summary directives this build's symbols do not match, or None.
+    async def _inert_summaries(self, build: SbfRun) -> str | None:
+        """A note when a summary matches nothing, or when the names cannot be read.
 
         A summary is a regex over demangled names. One that matches nothing
         changes nothing, and the prover reports no diagnostic. A symbol the
         compiler inlined away is absent from the build, so no spelling of it
         matches.
 
-        Returns None when the symbols cannot be read. An unreadable artifact is
-        a different failure from a directive that matched nothing.
+        Returns None when there is nothing to check or every directive matched.
+        An unreadable symbol table is a sentence in the tool result, not silence:
+        silence reads as every directive matching.
         """
         directives = tuple(d.pattern for d in self.state["summaries"])
         if not directives or not isinstance(build.verdict, Built):
             return None
         try:
-            symbols = defined_functions(build.verdict.manifest.artifact)
-        except (SymbolsUnavailable, ELFError, OSError, subprocess.CalledProcessError):
+            symbols = await prover_function_names(build.verdict.manifest.artifact)
+        except (SymbolsUnavailable, ELFError, OSError):
             _log.warning("could not read symbols to check summary directives", exc_info=True)
-            return None
+            return (
+                "The build's function names could not be read, so summary directives "
+                "were not checked against them."
+            )
         missed = unmatched(directives, symbols)
         if not missed:
             return None
@@ -745,7 +748,7 @@ class VerifyRules(
             ],
         }).render_to(load_jinja_template)
 
-    def _report(
+    async def _report(
         self,
         outcome: CvlrOutcome,
         deps: VerifyDeps,
@@ -770,7 +773,7 @@ class VerifyRules(
                 )
             case SubmissionFailed(build=build, reason=reason):
                 said = [f"The prover run did not produce results: {reason}"]
-                if (inert := self._inert_summaries(build)) is not None:
+                if (inert := await self._inert_summaries(build)) is not None:
                     said.append(inert)
                 return tool_return(self.tool_call_id, "\n\n".join(said))
             case Checked(build=build, report=report):
@@ -780,7 +783,7 @@ class VerifyRules(
                 unverdicted = _unverdicted(declared, status)
                 surprising = _wrongly_expected(status, expected)
                 lines = [report.result_str]
-                if (inert := self._inert_summaries(build)) is not None:
+                if (inert := await self._inert_summaries(build)) is not None:
                     lines.append(inert)
                 if surprising:
                     lines.append(

@@ -4,14 +4,14 @@ Tuning files address code by demangled symbol. A directive that names a symbol
 the build does not define matches nothing, and the prover does not say so.
 
 The prover demangles with ``rustfilt`` and no ``-h``, which strips hashes.
-This module does the same. ``llvm-readelf --demangle``, ``llvm-cxxfilt``, and
-the other LLVM demanglers do not understand rustc's ``$LT$`` escapes. GNU
-``c++filt`` understands them and keeps the hash.
+This module does the same. A result with a different number of lines than
+names is refused: the prover discards that result and keeps the mangled names.
 """
 
+import asyncio
+import difflib
 import re
 import shutil
-import subprocess
 from collections import Counter
 from collections.abc import Iterable
 from pathlib import Path
@@ -38,9 +38,25 @@ class NoSymbolTable(SymbolsUnavailable):
         super().__init__(f"{shared_object} has no symbol table; was it stripped?")
 
 
-def defined_functions(shared_object: Path) -> tuple[str, ...]:
-    """Every function the program defines, named as the prover names it, sorted."""
-    demangled = demangle(_mangled_functions(shared_object))
+class RustfiltFailed(SymbolsUnavailable):
+    def __init__(self, returncode: int, stderr: str):
+        super().__init__(f"rustfilt exited with status {returncode}: {stderr.strip()}")
+
+
+class RustfiltMismatch(SymbolsUnavailable):
+    def __init__(self, names: int, lines: int):
+        super().__init__(f"rustfilt returned {lines} lines for {names} names.")
+
+
+async def prover_function_names(shared_object: Path) -> tuple[str, ...]:
+    """Names the prover gives this program's functions and call targets, sorted.
+
+    Defined function symbols and undefined ones both count. The prover numbers
+    every CFG name and every call target, and an undefined function symbol is
+    the call the object file records. A name shared by several of them becomes
+    ``name_0`` … ``name_{n-1}``.
+    """
+    demangled = await demangle(_mangled_functions(shared_object))
     return tuple(sorted(as_the_prover_names(demangled)))
 
 
@@ -68,22 +84,35 @@ def _mangled_functions(shared_object: Path) -> list[str]:
         return sorted({
             symbol.name
             for symbol in symtab.iter_symbols()
-            if symbol["st_info"]["type"] == "STT_FUNC" and symbol["st_shndx"] != "SHN_UNDEF"
+            if symbol.name and symbol["st_info"]["type"] == "STT_FUNC"
         })
 
 
-def demangle(names: list[str]) -> list[str]:
+async def demangle(names: list[str]) -> list[str]:
     """``names`` as ``rustfilt`` spells them, in the same order.
 
     A name that is not mangled comes back unchanged. Callers match by position.
+    A result whose line count differs from ``names`` is refused.
     """
+    if not names:
+        return []
     rustfilt = shutil.which("rustfilt")
     if rustfilt is None:
         raise RustfiltMissing()
-    run = subprocess.run(
-        [rustfilt], input="".join(f"{n}\n" for n in names), capture_output=True, text=True, check=True
+    proc = await asyncio.create_subprocess_exec(
+        rustfilt,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
-    return run.stdout.splitlines()
+    stdout, stderr = await proc.communicate("".join(f"{n}\n" for n in names).encode())
+    returncode = await proc.wait()
+    if returncode != 0:
+        raise RustfiltFailed(returncode, stderr.decode(errors="replace"))
+    lines = stdout.decode().splitlines()
+    if len(lines) != len(names):
+        raise RustfiltMismatch(len(names), len(lines))
+    return lines
 
 
 def unmatched(patterns: tuple[str, ...], symbols: tuple[str, ...]) -> tuple[str, ...]:
@@ -103,15 +132,11 @@ def unmatched(patterns: tuple[str, ...], symbols: tuple[str, ...]) -> tuple[str,
 
 
 def nearest(pattern: str, symbols: tuple[str, ...], *, limit: int = 3) -> tuple[str, ...]:
-    """Symbols to suggest for a pattern that matched nothing.
+    """Symbols to suggest for a pattern that matched nothing, most similar first.
 
-    Uses the pattern's longest run of identifier characters as a substring
-    probe. For ``^<vault::VaultError as core::fmt::Display>::fmt$`` that is
-    ``Display``.
+    Compares the pattern's text, not what it matches. A pattern is nearly
+    always one symbol name between ``^`` and ``$``, so a misspelled or
+    mis-pathed name is still textually close to the symbol it meant. Empty
+    when nothing is close.
     """
-    literals = sorted(re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", pattern), key=len, reverse=True)
-    for literal in literals:
-        hits = [s for s in symbols if literal in s]
-        if hits:
-            return tuple(hits[:limit])
-    return ()
+    return tuple(difflib.get_close_matches(pattern, symbols, n=limit))

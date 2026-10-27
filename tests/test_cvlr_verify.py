@@ -4,17 +4,20 @@ No cargo and no Prover. The report is a stand-in, and the stamp is the digest
 of the draft.
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from composer.authoring.state import make_validation_stamper, spec_digest
+from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CompileFailed
 from composer.prover.core import ProverReport, _report_without_analysis
 from composer.prover.ptypes import Counterexample, LoopUnwound, RulePath, RuleResult
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.prover import BuildRejected, Checked, SubmissionFailed
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
+from composer.spec.cvlr.tuning import SummaryDirective
 from composer.spec.cvlr.verify import VerifyRules
 
 _DRAFT = "#[rule]\nfn rule_a() {}\n#[rule]\nfn rule_b() {}\n"
@@ -60,9 +63,10 @@ def _report(
     )
 
 
-def test_every_declared_rule_verified_stamps_the_draft():
+@pytest.mark.asyncio
+async def test_every_declared_rule_verified_stamps_the_draft():
     tool = _tool()
-    out = tool._report(
+    out = await tool._report(
         Checked(build=None, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VERIFIED"))),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
         declared=("rule_a", "rule_b"),
@@ -75,8 +79,9 @@ def test_every_declared_rule_verified_stamps_the_draft():
     assert out.update["last_verdicts"].rules == ("rule_a", "rule_b")
 
 
-def test_a_failing_rule_does_not_stamp():
-    out = _tool()._report(
+@pytest.mark.asyncio
+async def test_a_failing_rule_does_not_stamp():
+    out = await _tool()._report(
         Checked(build=None, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
         declared=("rule_a", "rule_b"),
@@ -87,8 +92,9 @@ def test_a_failing_rule_does_not_stamp():
     assert "rule_b" in out.update["messages"][0].content
 
 
-def test_a_missing_verdict_does_not_stamp():
-    out = _tool()._report(
+@pytest.mark.asyncio
+async def test_a_missing_verdict_does_not_stamp():
+    out = await _tool()._report(
         Checked(build=None, report=_report(("rule_a", "VERIFIED"))),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
         declared=("rule_a", "rule_b"),
@@ -98,21 +104,23 @@ def test_a_missing_verdict_does_not_stamp():
     assert "rule_b" in out.update["messages"][0].content
 
 
-def test_a_rejected_build_reports_the_compiler_and_does_not_stamp():
+@pytest.mark.asyncio
+async def test_a_rejected_build_reports_the_compiler_and_does_not_stamp():
     rejected = BuildRejected(
         build=SimpleNamespace(verdict=CompileFailed(diagnostics="error[E0425]: cannot find", exit_code=1))  # type: ignore[arg-type]
     )
 
-    out = _tool()._report(rejected, _deps(), declared=("rule_a",))  # type: ignore[arg-type]
+    out = await _tool()._report(rejected, _deps(), declared=("rule_a",))  # type: ignore[arg-type]
 
     assert "E0425" in out.update["messages"][0].content
     assert "validations" not in out.update
 
 
-def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart():
+@pytest.mark.asyncio
+async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart():
     """A loop bound is the prover's limit, not a finding about the program."""
     assertion = "Unwinding condition in a loop. Try increasing the unwinding bound."
-    out = _tool()._report(
+    out = await _tool()._report(
         Checked(
             build=None,  # type: ignore[arg-type]
             report=_report(
@@ -130,8 +138,9 @@ def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart():
     assert out.update["last_verdicts"].incomplete == ["rule_b"]
 
 
-def test_a_submission_without_results_does_not_stamp():
-    out = _tool()._report(
+@pytest.mark.asyncio
+async def test_a_submission_without_results_does_not_stamp():
+    out = await _tool()._report(
         SubmissionFailed(build=None, reason="the cloud job failed"),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
         declared=("rule_a",),
@@ -139,6 +148,27 @@ def test_a_submission_without_results_does_not_stamp():
 
     assert "cloud job failed" in out.update["messages"][0].content
     assert "validations" not in out.update
+
+
+@pytest.mark.asyncio
+async def test_unreadable_symbols_are_said_rather_than_left_as_a_match():
+    tool = _tool()
+    tool.state["summaries"] = [SummaryDirective(pattern="^foo$", why="formatting")]
+    build = SbfRun(
+        duration_ms=1,
+        verdict=Built(manifest=SimpleNamespace(artifact=Path("/nonexistent/prog.so"))),  # type: ignore[arg-type]
+        confined=True,
+    )
+
+    out = await tool._report(
+        Checked(build=build, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VERIFIED"))),
+        _deps(),  # type: ignore[arg-type]
+        declared=("rule_a", "rule_b"),
+    )
+
+    content = out.update["messages"][0].content
+    assert "could not be read" in content
+    assert "stamped" in content
 
 
 @pytest.mark.asyncio
