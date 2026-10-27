@@ -218,7 +218,11 @@ Investigated in the Prover's source, and recorded as upstream defects P16 to P19
   branch, which AutoProver's jobs run, by [EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771).
 - **`sol_alloc_free` is the allocator on a current toolchain.** rustc 1.89 renames the allocator
   shims under `__rustc::`, the Prover does not recognize the realloc one, and AutoProver's starting
-  inlining file matches none of them. The exact trigger is not pinned (P18, P19, T9).
+  inlining file matches none of them. The exact trigger is not pinned (P18, P19, T9). The Prover's
+  master branch models the syscall and recognizes the renamed shims
+  ([EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776),
+  [EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777)), and the inlining file now
+  accepts the prefix.
 - **With the heap fixed, the next walls are visible.** The resubmitted job's rules ran: 16 verified,
   7 violated (3 of them loop-unwinding checks at `loop_iter` 2), and 7 per-rule errors. Six of those
   are `[3001] access to an indeterminate stack location` in the `uint` crate under `Fraction`'s
@@ -234,10 +238,10 @@ what AutoProver does with klend as published.
 
 1. **Pass `-solanaHeapSize`** (262144 measured) in the backend's default prover args
    (`composer/spec/cvlr/conf.py`). It widens only the address range allocations are drawn from, so
-   it costs no soundness, and it removed the crash outright.
+   it costs no soundness, and it removed the crash outright. Done.
 2. **Fix the allocator directives** in `cvlr_inlining_core.txt`: accept the `__rustc::` prefix and
-   add `__rust_realloc` (T9). This keeps the analysis out of the System allocator, the likely path
-   to the `sol_alloc_free` crash.
+   add `__rust_realloc` (T9). Done. The Prover's master branch keeps the analysis out of the System
+   allocator by itself now, so the directives are a second line.
 3. **Find out what the long jobs are.** Read the timed-out jobs' outputs for which rules hit the
    ceiling and why. Then decide whether the ceiling should move, whether those rules should be
    split, or whether the author should be told to restate them, before raising any limit.

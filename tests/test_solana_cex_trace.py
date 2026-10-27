@@ -121,6 +121,15 @@ def test_allocator_frames_are_matched_by_name_not_by_the_value_they_hold():
     assert "__rust_alloc" not in _rendered(_assertion_failed_dump(), SOLANA_TRACE)
 
 
+def test_allocator_frames_are_dropped_under_the_rustc_1_89_shim_name():
+    """rustc 1.89 (platform-tools v1.53) emits the shim as ``__rustc::__rust_alloc``."""
+    dump = json.loads(
+        json.dumps(_assertion_failed_dump()).replace('"__rust_alloc: ', '"__rustc::__rust_alloc: ')
+    )
+    assert "__rustc::__rust_alloc" in json.dumps(dump)
+    assert "__rust_alloc" not in _rendered(dump, SOLANA_TRACE)
+
+
 def test_the_evm_shape_drops_four_frames_and_elides_none():
     """Pinned rather than measured against an EVM fixture, which would cost a cloud run."""
     assert EVM_TRACE.dropped == frozenset(

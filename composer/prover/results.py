@@ -116,8 +116,11 @@ EVM_TRACE = TraceShape(
 #: ``Assert 'loop has terminated' failed`` and the per-iteration structure that says how far the
 #: loop got under ``unknown loop source code``, so dropping that frame renders a trace that states
 #: no failure at all.
+#:
+#: rustc 1.89 and later name the allocator shim ``__rustc::__rust_alloc``, so both spellings are
+#: dropped.
 SOLANA_TRACE = TraceShape(
-    dropped=_GENERIC_NOISE | {"__rust_alloc: {}", "CVT_alloc_slice: {}"},
+    dropped=_GENERIC_NOISE | {"__rust_alloc: {}", "__rustc::__rust_alloc: {}", "CVT_alloc_slice: {}"},
     elided=frozenset({"cvlr_solana::layout::cvlr_deserialize_nondet_accounts(...)"}),
 )
 
