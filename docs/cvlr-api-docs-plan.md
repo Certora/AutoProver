@@ -174,8 +174,8 @@ tried before it is published.
 **Every exported item is documented, read from the releases that document it.** The releases
 published before October 2026 document 66 of 284 items; `cvlr-asserts`, for one, had 31 items and
 no prose. Both repositories have since documented every item and check for it in CI. The core's
-documented release, `cvlr` 0.6.2, is published; the `cvlr-solana` ones are read from their release
-commits until they are. Built from those pins, the corpus has 0 of 354 items without prose
+documented release, `cvlr` 0.6.2, is published, and so is `cvlr-solana` 0.5.1; 0.6.0 is read from
+its release commit until it is. Built from those pins, the corpus has 0 of 354 items without prose
 (2026-10-27). The producer's `--undocumented` report is how that is rechecked after a bump.
 
 ### 4.3 Header paths

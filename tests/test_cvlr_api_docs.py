@@ -42,6 +42,7 @@ from composer.scripts.cvlr_api_docs import (
     undocumented_report,
 )
 from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING
+from tests.conftest import CVLR_SOLANA_0_5_1_COMMIT, read_from_commit
 
 _DATA = Path(__file__).parent / "data" / "cvlr_rustdoc"
 
@@ -419,23 +420,27 @@ def test_a_probe_with_no_checkouts_patches_only_the_unpublished_releases(tmp_pat
     commit, not whatever crates.io has under an older version."""
     from composer.spec.cvlr.reference import SOLANA_V2
 
-    _probe_crate(tmp_path, SOLANA_V2, {})
+    unpublished = read_from_commit(SOLANA_V2, CVLR_SOLANA_0_5_1_COMMIT)
+
+    _probe_crate(tmp_path, unpublished, {})
     _, patch = (tmp_path / "Cargo.toml").read_text().split("[patch.crates-io]")
     assert {line.split(" = ")[0] for line in patch.strip().splitlines()} == {
-        p.name for p in SOLANA_V2.from_commits()
+        p.name for p in unpublished.from_commits()
     }
-    for p in SOLANA_V2.from_commits():
+    for p in unpublished.from_commits():
         assert p.commit.patch_line(p.name) in patch
 
 
 def test_a_checkout_replaces_the_commit_for_the_crates_it_defines(tmp_path):
     from composer.spec.cvlr.reference import SOLANA_V2
 
+    unpublished = read_from_commit(SOLANA_V2, CVLR_SOLANA_0_5_1_COMMIT)
+
     root = Path("/home/eric/src/cvlr-solana")
     checkout = LocalCheckout(
         root=root, crate_dir=root / "cvlr-solana", version="0.5.1", revision="v0.5.1"
     )
-    _probe_crate(tmp_path, SOLANA_V2, {"cvlr-solana": checkout})
+    _probe_crate(tmp_path, unpublished, {"cvlr-solana": checkout})
     _, patch = (tmp_path / "Cargo.toml").read_text().split("[patch.crates-io]")
     assert 'cvlr-solana = { path = "/home/eric/src/cvlr-solana/cvlr-solana" }' in patch
     assert "cvlr-spl-token = { git" in patch
@@ -494,11 +499,13 @@ def test_the_manifest_source_names_every_checkout_it_read():
     """
     from composer.spec.cvlr.reference import SOLANA_V2
 
-    assert "checkout" not in manifest_source(SOLANA_V2, {})
-    commit = SOLANA_V2.from_commits()[0].commit
-    assert f"{commit.repo} @ {commit.rev[:12]}" in manifest_source(SOLANA_V2, {})
+    unpublished = read_from_commit(SOLANA_V2, CVLR_SOLANA_0_5_1_COMMIT)
+
+    assert "checkout" not in manifest_source(unpublished, {})
+    commit = unpublished.from_commits()[0].commit
+    assert f"{commit.repo} @ {commit.rev[:12]}" in manifest_source(unpublished, {})
     source = manifest_source(
-        SOLANA_V2, {"cvlr-asserts": _checkout("cvlr-asserts"), "cvlr-log": _checkout("cvlr-log")}
+        unpublished, {"cvlr-asserts": _checkout("cvlr-asserts"), "cvlr-log": _checkout("cvlr-log")}
     )
     assert "cvlr 0.6.2" in source
     assert source.count("/home/eric/src/cvlr @ cvlr-v0.6.1-3-g8d9d463-dirty") == 1

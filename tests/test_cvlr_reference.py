@@ -142,9 +142,8 @@ _CVLR_SOLANA_REPO = "https://github.com/Certora/cvlr-solana.git"
 def test_the_crates_of_one_repository_are_read_from_one_commit():
     """``cvlr-solana`` releases its three crates together. Patching them from two commits would
     build a chain crate and a model that were never released together."""
-    patches = _from_commits(ref.SOLANA_V2, _CVLR_SOLANA_REPO)
-    assert {p.name for p in patches} == {"cvlr-solana", "cvlr-solana-stake", "cvlr-spl-token"}
-    assert len({p.commit for p in patches}) == 1
+    for reference in ref.generations("solana"):
+        assert len({p.commit for p in _from_commits(reference, _CVLR_SOLANA_REPO)}) <= 1
 
 
 def test_a_commit_is_pinned_by_hash_and_never_by_a_name_that_can_move():
@@ -159,7 +158,7 @@ def test_reading_a_release_from_its_commit_is_still_tracked_as_a_ship_blocker():
     from pathlib import Path
 
     todo = (Path(__file__).parent.parent / "docs" / "cvlr-todo.md").read_text()
-    assert ref.SOLANA_V2.from_commits()
+    assert any(r.from_commits() for r in ref.generations("solana"))
     assert "**U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.**" in todo
 
 

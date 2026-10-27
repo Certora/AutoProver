@@ -306,25 +306,18 @@ class ChainReference:
 _CORE = CrateRelease("cvlr", "0.6.2")
 
 #: ``cvlr-solana`` 0.5.1: 0.5.0 with the public API documented and the ``rt`` feature fixed. The
-#: three crates of that repository are released together, at one version and from one commit.
-#:
-#: TODO(cvlr-todo U26): pin the crates.io release once it is published, and drop the commit.
-_CVLR_SOLANA_0_5_1 = GitCommit(
-    repo="https://github.com/Certora/cvlr-solana.git",
-    rev="2e53877a4d9ffb10aff5dc21829fd073f00333a6",
-)
-
+#: three crates of that repository are released together, at one version.
 SOLANA_V2 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.5.1", _CVLR_SOLANA_0_5_1),
+    chain_crate=CrateRelease("cvlr-solana", "0.5.1"),
     models=(
         ProgramModel(
-            CrateRelease("cvlr-solana-stake", "0.5.1", _CVLR_SOLANA_0_5_1), "the stake program"
+            CrateRelease("cvlr-solana-stake", "0.5.1"), "the stake program"
         ),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
         # summaries. Split out of the chain crate, and released with it.
         ProgramModel(
-            CrateRelease("cvlr-spl-token", "0.5.1", _CVLR_SOLANA_0_5_1), "the SPL token program"
+            CrateRelease("cvlr-spl-token", "0.5.1"), "the SPL token program"
         ),
     ),
     forks=(ANCHOR_FORK, FIXED_FORK),

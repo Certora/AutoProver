@@ -602,14 +602,13 @@ release, and rerun the CVLR gate against the released Prover first, since P8's t
 what the release has to have fixed.
 
 **U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.**
-`cvlr-solana` 0.5.1 (the documented API and the `rt` fix) is cut and tagged, and not yet published
-to crates.io (`docs/cvlr-sdk3-support.md`, *Publishing*). The reference set
-([reference.py](../composer/spec/cvlr/reference.py)) pins its three crates at that version and
-names the release commit (`GitCommit`), and the scaffold writes a `[patch.crates-io]` entry per
-crate so cargo reads them from the commit. A shipped product should not send every target to a git
-repository. Once the release is on crates.io, drop the `GitCommit`s; the pins and everything else
-stay. The SDK 3 line (`docs/cvlr-sdk3-support.md`, C1 and A5) uses the same mechanism and
-the same exit.
+Only the SDK 3 line is left: `cvlr-solana` 0.6.0 (`docs/cvlr-sdk3-support.md` C1 and A5) is cut
+and in review ([cvlr-solana#24](https://github.com/Certora/cvlr-solana/pull/24)), and not yet
+published to crates.io. The reference set ([reference.py](../composer/spec/cvlr/reference.py)) pins
+its three crates at that version and names the release commit (`GitCommit`), and the scaffold
+writes a `[patch.crates-io]` entry per crate so cargo reads them from the commit. A shipped product
+should not send every target to a git repository. Once the release is on crates.io, drop the
+`GitCommit`; the pins and everything else stay. 0.5.1 took this exit on 2026-10-27.
 
 **U27. The replay tape was recorded without the corpus and now replays with it.**
 The tape was recorded under `--rag-corpus none`, and seven of its turns call `cvlr_research`
