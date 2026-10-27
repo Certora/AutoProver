@@ -15,7 +15,7 @@ Every CVLR release AutoProver pins, for all three Solana generations. None is on
 
 | Release | Repository | Branch, PR | Release commit | State |
 |---|---|---|---|---|
-| `cvlr` 0.6.2, 13 crates | `Certora/cvlr` | `eric/release-0.6.2`, [#52](https://github.com/Certora/cvlr/pull/52) | `2313d51`, to be recut | open; tags local. **Stale**: cut from `465a022` (API docs #51), so it lacks [#53](https://github.com/Certora/cvlr/pull/53) (`c2df10a`, `.cvlr_rules`) and the `cvlr-rule-manifest` crate #53 adds |
+| `cvlr` 0.6.2, 13 crates | `Certora/cvlr` | `eric/release-0.6.2`, [#52](https://github.com/Certora/cvlr/pull/52) | `de8dec0`: `main` (API docs #51, [#53](https://github.com/Certora/cvlr/pull/53)'s `.cvlr_rules` and `cvlr-rule-manifest`) released | open; tags local |
 | `cvlr-solana` 0.5.1, 3 crates (SDK 2) | `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | `2e53877`: `main` (API docs #21, `rt` fix) released | open; tags local |
 | `cvlr-solana` 0.6.0, 3 crates (SDK 3) | `Certora/cvlr-solana` | `eric/release-0.6.0`, on `eric/sdk3` (the port, C1 and C2, on 0.5.1) | `f054348` | pushed, no PR until #22 merges; tags local |
 | `cvlr-solana` 0.4.6, 1 crate (`solana-program` 1.18) | `Certora/cvlr-solana` | `v0.4`, [#23](https://github.com/Certora/cvlr-solana/pull/23) (`cvlr-solana-1-18-support.md` G3) | `b1988a4` | merged; not tagged |
@@ -29,9 +29,9 @@ after the merge.
 `cvlr-solana` line requires its `cvlr-*` crates at `<1` only (0.6.0 at `>=0.6`, 0.4.6 and 0.5.1 at
 `>=0.4`), so any 0.6.x core serves all three. AutoProver needs 0.6.2 for two other reasons: the
 published 0.6.1 has no API docs (`cvlr-todo.md` U28), and the landing line (`eric/solana-staging`)
-reads rule names from the `.cvlr_rules` section that #53 added. So #52 has to be recut on `c2df10a`
-before it merges, with `cvlr-rule-manifest` among its crates and its tags. That crate is new to
-crates.io and is published before `cvlr-log`, `cvlr-macros` and `cvlr`, which depend on it.
+reads rule names from the `.cvlr_rules` section that #53 added. #52 is cut on `c2df10a`, so it has
+both, and `cvlr-rule-manifest` is among its crates and its tags. That crate is new to crates.io and
+is published before `cvlr-log`, `cvlr-macros` and `cvlr`, which depend on it.
 
 ### Publishing, and git dependencies until then
 
@@ -431,7 +431,6 @@ crash showed up (`upstream-defects.md` P15).
 
 All of it is outside AutoProver:
 
-- Recut #52 on `c2df10a`, with `cvlr-rule-manifest` (*Where things stand*).
 - Merge #22 and #52 with merge commits and push their tags. Tag 0.4.6 on `v0.4`.
 - Move `v0.5` up to 0.5.1, and open the `eric/sdk3` PR.
 - Publish (*Publishing*). Each `cvlr-solana` publication drops a `GitCommit`, and the last one
