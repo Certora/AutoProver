@@ -974,16 +974,16 @@ def test_redirecting_twice_is_a_no_op(tmp_path):
 
 
 def test_an_anchor_version_the_fork_does_not_cover_blocks_the_whole_plan(tmp_path):
-    """The fork has a branch for 0.30.1 and not 0.30.0. The plan blocks instead of scaffolding a
+    """The fork has a branch for 0.26.0 and not 0.25.0. The plan blocks instead of scaffolding a
     project that builds and then reports a pointer-analysis error with nothing about Anchor."""
     workspace, package = _project(
         tmp_path,
-        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.30.0"),
+        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.25.0"),
         workspace_manifest='[workspace]\nmembers = ["."]\n',
-        cvlr_resolved={"anchor-lang": "0.30.0"},
+        cvlr_resolved={"anchor-lang": "0.25.0"},
     )
     plan = plan_scaffold(workspace, package, SOLANA_V2)
-    assert any("0.30.0" in b.problem for b in plan.blocked), plan.blocked
+    assert any("0.25.0" in b.problem for b in plan.blocked), plan.blocked
     with pytest.raises(ScaffoldBlocked):
         apply(plan, tmp_path)
     # A blocked plan applies nothing at all, including the parts that were fine.
@@ -1005,11 +1005,11 @@ def test_the_forks_planned_are_the_reference_chains_own(tmp_path):
     even one the Anchor fork does not cover."""
     workspace, package = _project(
         tmp_path,
-        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.30.0"),
+        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.25.0"),
         workspace_manifest='[workspace]\nmembers = ["."]\n',
         platform="22.0.0",
         platform_crate="soroban-sdk",
-        cvlr_resolved={"anchor-lang": "0.30.0"},
+        cvlr_resolved={"anchor-lang": "0.25.0"},
     )
     plan = plan_scaffold(workspace, package, SOROBAN)
     core_commits = {p.name for p in SOROBAN.from_commits()}

@@ -19,7 +19,7 @@ The path picks the crate the harness is written into (`--package` overrides it).
   | `solana-program` 2.x | 0.6.1 | 0.5.1 |
 
   The pipeline reads the generation from the resolved dependency graph and adds the matching CVLR crates itself. A project on `solana-program` 1.x is refused, and so is a project that already depends on a different CVLR line.
-- **Anchor, if used, at a version Certora's fork covers.** The Prover cannot analyze crates.io `anchor-lang`: every handler fails with [3006]. The pipeline redirects `anchor-lang` and `anchor-spl` to the matching `certora-v<version>` branch of [Certora/anchor](https://github.com/Certora/anchor) through `[patch.crates-io]`. Covered versions are 0.26.0–0.29.0, 0.30.1, 0.31.1, 0.32.0 and 0.32.1 (`ANCHOR_FORK` in `composer/spec/cvlr/forks.py`). Any other version stops the run with a message naming those versions. The `fixed` crate is handled the same way, at 1.23.1 only.
+- **Anchor, if used, at a version Certora's fork covers.** The Prover cannot analyze crates.io `anchor-lang`: every handler fails with [3006]. The pipeline redirects `anchor-lang` and `anchor-spl` to the matching `certora-v<version>` branch of [Certora/anchor](https://github.com/Certora/anchor) through `[patch.crates-io]`. Covered versions are every stable release from 0.26.0 through 1.2.1 (`ANCHOR_FORK` in `composer/spec/cvlr/forks.py`). Any other version stops the run with a message naming those versions. The `fixed` crate is handled the same way, at 1.23.1 only.
 
 The program's own `rust-toolchain.toml` is not used. Every cargo command a run makes uses the host toolchain `HOST_RUST_TOOLCHAIN` (1.90.0, in `composer/spec/cvlr/conf.py`), and the program is compiled by the platform tools' rustc whatever the project pins.
 
