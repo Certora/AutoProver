@@ -10,7 +10,9 @@ file is a regular expression over demangled symbol names.
 Inlining (:data:`INLINING`)
     One directive per line, ``#[inline] <pattern>`` or ``#[inline(never)] <pattern>``. An inlined
     call is analyzed through its body. Any other call is opaque. The Prover does not look inside
-    it, and it knows nothing about what the call wrote. The starting configuration leaves
+    it: the call's return value is unconstrained, and it writes nothing, so everything the real
+    function would have written keeps the value it had before the call. A summary (below) names
+    the few locations it does write. The starting configuration leaves
     ``core``, ``std``, ``alloc``, ``solana_program`` and ``anchor_lang`` opaque by default. The
     exceptions are the functions whose effects a rule depends on: the ``AccountInfo`` accessors,
     ``invoke``, error conversions, and Anchor's account loaders.
@@ -27,14 +29,13 @@ A pattern that matches nothing is not an error. The directive does not apply, an
 with a different configuration than the file appears to describe. Most of the care taken below
 is about that failure.
 
-Each file is split into layers. The starting layers live only under :data:`ENV_DIR`. The rest
-are in the target's ``envs/`` directory::
+Each file is split into layers. The starting layers live only under :data:`ENV_DIR`. A unit's
+layer lives only in the run's state. The composites are in the target's ``envs/`` directory::
 
     <stem>_core.txt           starting configuration: the Rust runtime and the Solana platform
     <stem>_anchor.txt         starting configuration: the Anchor framework (inlining only)
-    <stem>_<unit>_run.txt     one unit's own directives
     <stem>.txt                generated from the starting layers, named by the package
-    <stem>_<unit>.txt         generated from those plus the unit's, named by one unit's conf
+    <stem>_<unit>.txt         generated from those plus the unit's layer, named by one unit's conf
 
 When to change which layer:
 
@@ -52,10 +53,26 @@ When to change which layer:
 - **The composites are not edited.** :func:`compose_env` builds them from the layers, and the
   scaffold rewrites the package composite whenever it differs from that. A directive written into
   a composite is not in any layer, and the next composition drops it.
+
+Summaries the authoring loop adds (:class:`SummaryDirective`, written by :class:`TuningFiles`)
+    The pointer analysis refuses some code, most often [3308] on an Anchor
+    ``#[error_code]`` enum formatting its ``#[msg("...")]`` string. Any
+    ``require!`` or ``?`` in a handler can reach it, and a rule on that path
+    gets no verdict. The remedy is a summary in the unit layer.
+
+    A summary is unsound. It replaces a function with one that returns an
+    unconstrained value and writes only the locations the summary names.
+    Summarizing the wrong function produces a green rule that checked less
+    than it appears to. Every directive carries a ``why``, which the judge and
+    the report both get, and adding one invalidates the prover stamp
+    (:func:`summary_history`). This module does not check that a summary avoids
+    the code under test: a regex cannot be matched against symbols before a
+    build. The judge does that, using ``why``.
 """
 
 from dataclasses import dataclass
 from importlib.resources import files
+from pathlib import Path
 
 from composer.spec.cvlr.env_paths import PathDialect
 
@@ -94,17 +111,13 @@ class EnvFamily:
         """The file the package declares. Generated from the starting layers."""
         return f"{self.stem}.txt"
 
-    def unit_layer(self, unit: str) -> str:
-        """The file name for one unit's own directives.
+    def unit_composite(self, unit: str) -> str:
+        """The file one unit's conf names. Generated from the starting layers and the unit's.
 
         A summary is a symbol pattern the prover applies to the whole build, not something a cargo
         feature can scope. Lines added to a file every unit's conf names would apply to every
         unit's submission.
         """
-        return f"{self.stem}_{unit}_run.txt"
-
-    def unit_composite(self, unit: str) -> str:
-        """The file one unit's conf names. Generated from the starting layers and the unit's."""
         return f"{self.stem}_{unit}.txt"
 
 
@@ -150,7 +163,7 @@ def compose_env(
 
     The scaffold writes the package-level composite, which has no ``unit_layer``. A unit layer is
     one unit's directives, so they are not applied to another unit's submission (see
-    :meth:`EnvFamily.unit_layer`). Those are the project's own symbols, so the dialect leaves them
+    :meth:`EnvFamily.unit_composite`). Those are the project's own symbols, so the dialect leaves them
     alone.
     """
     header = _GENERATED_HEADER.format(
@@ -165,6 +178,136 @@ def compose_env(
             f"crates this project resolves\n"
         )
     parts += [starting_env(name, dialect) for name in family.starting]
-    if unit_layer is not None:
+    if unit_layer:
         parts.append(unit_layer)
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"
+
+
+#: A summary body. A ``#[type(...)]`` annotation is optional. Omitting it means
+#: the return is unconstrained, which is the usual case for a formatting path
+#: nothing asserts over.
+_TYPE_ANNOTATION = "#[type({body})]"
+
+@dataclass(frozen=True)
+class SummaryDirective:
+    """One symbol pattern the prover should summarize rather than analyze."""
+
+    #: A regex over demangled symbols, spelled as the canonical files spell them.
+    #: Anchored with ``^`` and ``$`` by convention, for example
+    #: ``^<vault::VaultError as core::fmt::Display>::fmt$``.
+    pattern: str
+    #: Why analyzing it fails, and why summarizing it is sound for this batch.
+    #: Written into the unit's tuning file and the report.
+    why: str
+    #: ``<location>:<kind>``, such as ``(*i32)(r1+0):num``. :meth:`render` wraps
+    #: it in ``#[type(...)]``. ``None`` leaves the return unconstrained.
+    returns: str | None = None
+
+    def render(self) -> str:
+        lines = [f"; {line}" for line in self.why.strip().splitlines() or [""]]
+        if self.returns is not None:
+            lines.append(_TYPE_ANNOTATION.format(body=self.returns))
+        lines.append(self.pattern)
+        return "\n".join(lines)
+
+
+def render_layer(directives: tuple[SummaryDirective, ...]) -> str:
+    return "".join(f"{d.render()}\n\n" for d in directives).removesuffix("\n")
+
+
+@dataclass(frozen=True)
+class TuningFiles:
+    """Where one unit's tuning files are, and how paths in them are spelled.
+
+    ``unit`` names the file this unit's directives land in. Every unit shares
+    one working tree. A summary is a regex over symbols that the prover applies
+    to the whole build, and a cargo feature cannot scope it. A shared file
+    would apply one unit's summaries to another unit's submission. The unit's
+    conf names the unit's composite. The project's own declaration in
+    ``[package.metadata.certora]`` is left alone.
+    """
+
+    envs_dir: Path
+    dialect: PathDialect
+    #: The harness module name. It is what makes these files this unit's.
+    unit: str
+
+    def composite_path(self, family: EnvFamily = SUMMARIES) -> Path:
+        """The composite this unit's conf names."""
+        return self.envs_dir / family.unit_composite(self.unit)
+
+    def write(self, directives: tuple[SummaryDirective, ...]) -> None:
+        """Recompose the summaries file this unit's conf names.
+
+        Rewritten from ``directives``, not appended. The recorded state and the
+        file then cannot drift. A run with no directives composes to the
+        starting configuration. Dropping a directive from state removes it from
+        disk.
+
+        Called from the build path. The tool that records a directive does not
+        write the file. One writer reads state the reducer has already merged.
+        A tool writing its own view of the list would race another call and
+        drop one of the two.
+        """
+        self.envs_dir.mkdir(parents=True, exist_ok=True)
+        self.composite_path(SUMMARIES).write_text(
+            compose_env(SUMMARIES, unit_layer=render_layer(directives), dialect=self.dialect)
+        )
+
+    def ensure_composite(self) -> None:
+        """Create this unit's summaries composite when the conf's file is absent.
+
+        A submission names the path before the unit has any directives. An
+        empty file is enough. :meth:`write` on a later build replaces it from
+        state. A file that is already there is left as it is, so constructing
+        the target again does not drop directives a build has written.
+        """
+        if not self.composite_path().is_file():
+            self.write(())
+
+    def missing(self) -> tuple[str, ...]:
+        """Package tuning files that should be on disk and are not.
+
+        A summary written where the build reads no tuning file changes nothing.
+        The tool would report success and the next run would hit the same
+        [3308]. These composites are the scaffold's, and the build manifest
+        declares them. The unit's own file is created with the target
+        (:meth:`ensure_composite`).
+        """
+        return tuple(
+            family.composite
+            for family in ENV_FAMILIES
+            if not (self.envs_dir / family.composite).is_file()
+        )
+
+
+def merge_summaries(
+    left: list[SummaryDirective], right: list[SummaryDirective]
+) -> list[SummaryDirective]:
+    """Append summary directives, in order, dropping a repeated pattern.
+
+    Two ``summarize_for_prover`` calls can land in one graph step. LangGraph
+    refuses two writes to a field with no reducer. Each call contributes only
+    its own directive, so neither has to have seen the other's. A repeated
+    pattern keeps the earlier directive.
+    """
+    merged = list(left)
+    seen = {d.pattern for d in merged}
+    for directive in right:
+        if directive.pattern in seen:
+            continue
+        merged.append(directive)
+        seen.add(directive.pattern)
+    return merged
+
+
+def summary_history(directives: tuple[SummaryDirective, ...]) -> tuple[str, ...]:
+    """The directives as ``version_history`` tokens, so an earlier stamp goes stale.
+
+    Keyed on the pattern and the return type, which is what the prover does
+    differently. ``why`` is left out, so rewording a justification does not
+    require a new submission.
+    """
+    return tuple(
+        f"summary:{d.pattern}:{'' if d.returns is None else d.returns}" for d in directives
+    )

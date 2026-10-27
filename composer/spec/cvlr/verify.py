@@ -13,8 +13,9 @@ import logging
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, override
+from typing import AsyncIterator, Mapping, TypedDict, override
 
+from elftools.common.exceptions import ELFError
 from langchain_core.tools import BaseTool
 
 from graphcore.graph import tool_return, tool_state_update
@@ -29,6 +30,7 @@ from composer.authoring.state import ValidationStamper
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
+from composer.cargo.symbols import SymbolsUnavailable, nearest, prover_function_names, unmatched
 from composer.prover.core import (
     CexHandler,
     CexProgressCallbacks,
@@ -49,14 +51,32 @@ from composer.spec.cvlr.prover import (
     run_submission,
     write_submission,
 )
+from composer.spec.cvlr.author_tools import AdjustProverConfig, SummarizeForProver
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR
-from composer.spec.cvlr.state import CvlrGenerationState
+from composer.spec.cvlr.state import CvlrGenerationState, tuning_history
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
+from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.gen_types import TypedTemplate
+from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display
 
 _log = logging.getLogger(__name__)
+
+
+class _InertSummary(TypedDict):
+    pattern: str
+    suggestions: tuple[str, ...]
+
+
+class _InertSummariesParams(TypedDict):
+    #: How many directives the unit has, of which ``missed`` matched no symbol.
+    total: int
+    missed: list[_InertSummary]
+
+
+_InertSummaries = TypedTemplate[_InertSummariesParams]("cvlr/inert_summaries.j2")
 
 
 class BuildPermit:
@@ -83,13 +103,23 @@ class BuildPermit:
         if not self._held:
             raise RuntimeError("the build permit is not held")
 
-    async def stage(self, draft: str) -> "StagedUnit":
-        """Write ``draft`` into the unit's module, and return what builds it."""
+    async def stage(
+        self,
+        draft: str,
+        summaries: Sequence[SummaryDirective],
+        overlay: Mapping[str, str],
+    ) -> "StagedUnit":
+        """Write the draft, the summaries, and this unit's program edits into the tree.
+
+        ``summaries`` is rewritten even when empty, so a dropped directive leaves
+        the file the conf names. Returns what builds the staged unit.
+        """
         self.require_held()
         target = self._target
+        target.tuning.write(tuple(summaries))
         await target.tree.reconcile(
             target.unit.module,
-            UnitEdits(module_path=target.module_path, draft=draft),
+            UnitEdits(module_path=target.module_path, draft=draft, overlay=overlay),
         )
         return StagedUnit(self, target)
 
@@ -136,11 +166,16 @@ class HarnessTarget:
     session: CargoSession
     package: str
     package_root: Path
+    tuning: TuningFiles
     #: The module name the tree keys edits by, and the cargo feature that selects
     #: this unit.
     unit: HarnessModule
     tree: SharedTree
     build_sem: asyncio.Semaphore
+
+    def __post_init__(self) -> None:
+        # The conf names this file, including when the unit has no summaries yet.
+        self.tuning.ensure_composite()
 
     @property
     def features(self) -> tuple[CargoFeature, ...]:
@@ -192,7 +227,7 @@ class _RunAccounting(RunAccounting):
 
 @dataclass(frozen=True)
 class VerifyDeps:
-    """What the prover gate needs beyond the draft."""
+    """What ``verify_rules`` needs beyond the draft."""
 
     target: HarnessTarget
     submission: Submission
@@ -214,9 +249,18 @@ class VerifyDeps:
         """
         return replace(self.submission, features=self.target.features)
 
-    def submission_for(self, rules: Sequence[str]) -> Submission:
-        """The unit's submission, checking ``rules``."""
-        return replace(self.unit_submission, rules=SelectRules(tuple(rules)))
+    def submission_for(self, state: CvlrGenerationState, rules: Sequence[str]) -> Submission:
+        """The unit's submission, checking ``rules`` under the current prover settings.
+
+        The settings come from state. A submission built earlier would send the old
+        settings, while :func:`~composer.spec.cvlr.conf.conf_history` is what the
+        stamp records.
+        """
+        return replace(
+            self.unit_submission,
+            rules=SelectRules(tuple(rules)),
+            settings=state["prover_settings"],
+        )
 
 
 @tool_display("Compiling the harness", "Compile")
@@ -242,7 +286,7 @@ class CargoCheck(
             return "No harness written yet — put a draft first."
         with self.tool_deps() as target:
             async with target.build_slot() as permit:
-                staged = await permit.stage(draft)
+                staged = await permit.stage(draft, self.state["summaries"], self.state["vfs"])
                 run = await staged.check()
         match run.verdict:
             case Compiled():
@@ -296,12 +340,13 @@ class RuleStatusReport(CexHandler):
 
 async def _stage_and_submit(
     deps: VerifyDeps,
+    state: CvlrGenerationState,
     draft: str,
     *,
     tool_call_id: str,
     choose: Callable[[set[str]], Submission | str],
 ) -> CvlrOutcome | str:
-    """Stage ``draft``, build this unit, and submit what ``choose`` returns.
+    """Stage ``draft`` with the unit's summaries and edits, build it, and submit what ``choose`` returns.
 
     ``choose`` sees the rule names in the ``.so`` and returns the submission to
     write, or a message. A message, or a missing or unreadable section, writes
@@ -320,7 +365,7 @@ async def _stage_and_submit(
     behind its own feature.
     """
     async with deps.target.build_slot() as permit:
-        staged = await permit.stage(draft)
+        staged = await permit.stage(draft, state["summaries"], state["vfs"])
         build = await staged.build_for_submission(deps.unit_submission)
         if not isinstance(build.verdict, Built):
             return BuildRejected(build)
@@ -376,19 +421,53 @@ class VerifyRules(
                 # A conf with no `rule` entry makes the cloud job end in FAILED, with no
                 # report. The section holds only this unit's rules: the build enables only
                 # this unit's feature.
-                return deps.submission_for(listed)
+                return deps.submission_for(self.state, listed)
 
             outcome = await _stage_and_submit(
                 deps,
+                self.state,
                 draft,
                 tool_call_id=self.tool_call_id,
                 choose=choose,
             )
             if isinstance(outcome, str):
                 return outcome
-            return self._report(outcome, deps, declared=listed)
+            return await self._report(outcome, deps, declared=listed)
 
-    def _report(
+    async def _inert_summaries(self, build: SbfRun) -> str | None:
+        """A note when a summary matches nothing, or when the names cannot be read.
+
+        A summary is a regex over demangled names. One that matches nothing
+        changes nothing, and the prover reports no diagnostic. A symbol the
+        compiler inlined away is absent from the build, so no spelling of it
+        matches.
+
+        Returns None when there is nothing to check or every directive matched.
+        An unreadable symbol table is a sentence in the tool result, not silence:
+        silence reads as every directive matching.
+        """
+        directives = tuple(d.pattern for d in self.state["summaries"])
+        if not directives or not isinstance(build.verdict, Built):
+            return None
+        try:
+            symbols = await prover_function_names(build.verdict.manifest.artifact)
+        except (SymbolsUnavailable, ELFError, OSError):
+            _log.warning("could not read symbols to check summary directives", exc_info=True)
+            return (
+                "The build's function names could not be read, so summary directives "
+                "were not checked against them."
+            )
+        missed = unmatched(directives, symbols)
+        if not missed:
+            return None
+        return _InertSummaries.bind({
+            "total": len(directives),
+            "missed": [
+                {"pattern": pattern, "suggestions": nearest(pattern, symbols)} for pattern in missed
+            ],
+        }).render_to(load_jinja_template)
+
+    async def _report(
         self,
         outcome: CvlrOutcome,
         deps: VerifyDeps,
@@ -406,34 +485,40 @@ class VerifyRules(
                     self.tool_call_id,
                     f"The chain build failed, so nothing was submitted:\n{said}",
                 )
-            case SubmissionFailed(reason=reason):
-                return tool_return(
-                    self.tool_call_id,
-                    f"The prover run did not produce results: {reason}",
-                )
-            case Checked(report=report):
+            case SubmissionFailed(build=build, reason=reason):
+                said = [f"The prover run did not produce results: {reason}"]
+                if (inert := await self._inert_summaries(build)) is not None:
+                    said.append(inert)
+                return tool_return(self.tool_call_id, "\n\n".join(said))
+            case Checked(build=build, report=report):
                 status = report.rule_status
                 not_verified = [name for name in declared if not status.get(name, False)]
+                lines = [report.result_str]
+                if (inert := await self._inert_summaries(build)) is not None:
+                    lines.append(inert)
                 if not_verified:
+                    lines.append(f"Not verified: {', '.join(not_verified)}.")
                     return tool_state_update(
-                        self.tool_call_id,
-                        f"{report.result_str}\n\nNot verified: {', '.join(not_verified)}.",
-                        prover_link=report.link,
+                        self.tool_call_id, "\n\n".join(lines), prover_link=report.link
                     )
+                lines.append("Every declared rule verified. This draft is stamped.")
                 return tool_state_update(
                     self.tool_call_id,
-                    f"{report.result_str}\n\nEvery declared rule verified. This draft is stamped.",
+                    "\n\n".join(lines),
                     prover_link=report.link,
-                    validations=deps.stamper(self.state),
+                    validations=deps.stamper(self.state, tuning_history(self.state)),
                 )
 
 
 def gate_tools(deps: VerifyDeps) -> list[BaseTool]:
-    """``cargo_check`` builds ``deps.target``, the same target ``verify_rules`` submits.
+    """The tools that compile a draft, change what a run checks, and submit it.
 
-    Neither tool edits the program.
+    ``cargo_check`` and ``summarize_for_prover`` are bound to ``deps.target``,
+    the target ``verify_rules`` submits. No tool here edits the program.
     """
     return [
         CargoCheck.bind(deps.target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
+        SummarizeForProver.bind(deps.target.tuning).as_tool("summarize_for_prover"),
+        AdjustProverConfig.as_tool("adjust_prover_config"),
     ]
