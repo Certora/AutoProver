@@ -66,9 +66,12 @@ class SummarizeForProver(
     )
     returns: str | None = Field(
         default=None,
-        description="The `#[type(...)]` body, without the wrapper, when the summarized function's "
-        "return value needs a shape — e.g. `(*i32)(r1+0):num`. Omit for an unconstrained return, "
-        "which is right for a function whose result nothing asserts over.",
+        description="What the summarized function returns, as `<location>:<kind>` — e.g. "
+        "`(*i32)(r1+0):num`. A location is `r0` (the return register) or memory at an offset from "
+        "a register, such as `(*i64)(r1+8)` for an out-pointer return. A kind is `num`, "
+        "`ptr_heap` or `ptr_external`. Give only that text: it is written into the tuning file as "
+        "`#[type(<location>:<kind>)]`, and the `#[type(` and `)]` are added for you. Omit for an "
+        "unconstrained return, which is right for a function whose result nothing asserts over.",
     )
 
     @override
