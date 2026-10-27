@@ -20,8 +20,10 @@ from pathlib import Path
 from typing import (
     AsyncIterator,
     Callable,
+    Literal,
     Mapping,
     Sequence,
+    TypedDict,
     override,
 )
 
@@ -90,6 +92,7 @@ from composer.spec.cvlr.state import (
 )
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.gen_types import TypedTemplate
 from composer.spec.cvlr.vacuity import VacuityAnalyzer, core_finding
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.report_prover import fetch_unsat_cores
@@ -98,6 +101,60 @@ from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display
 
 _log = logging.getLogger(__name__)
+
+
+class _RuleNamesParams(TypedDict):
+    names: list[str]
+
+
+_ExpectedVerified = TypedTemplate[_RuleNamesParams]("cvlr/expected_verified.j2")
+_NoVerdict = TypedTemplate[_RuleNamesParams]("cvlr/no_verdict.j2")
+_Unaccounted = TypedTemplate[_RuleNamesParams]("cvlr/unaccounted.j2")
+
+
+class _ExternalFunctionsParams(TypedDict):
+    #: The prover's own warning text, one entry per warning.
+    warnings: list[str]
+
+
+_ExternalFunctions = TypedTemplate[_ExternalFunctionsParams]("cvlr/external_functions.j2")
+
+type _IncompleteKind = Literal["loop", "overflow", "other"]
+
+
+class _IncompleteAdviceParams(TypedDict):
+    kind: _IncompleteKind
+
+
+_IncompleteAdvice = TypedTemplate[_IncompleteAdviceParams]("cvlr/incomplete_advice.j2")
+
+
+class _IncompleteRule(TypedDict):
+    name: str
+    assertion: str
+
+
+class _IncompleteCheckParams(TypedDict):
+    rules: list[_IncompleteRule]
+    #: :data:`_IncompleteAdvice` rendered for each kind among ``rules``.
+    advice: str
+
+
+_IncompleteCheck = TypedTemplate[_IncompleteCheckParams]("cvlr/incomplete_check.j2")
+
+
+class _InertSummary(TypedDict):
+    pattern: str
+    suggestions: tuple[str, ...]
+
+
+class _InertSummariesParams(TypedDict):
+    #: How many directives the unit has, of which ``missed`` matched no symbol.
+    total: int
+    missed: list[_InertSummary]
+
+
+_InertSummaries = TypedTemplate[_InertSummariesParams]("cvlr/inert_summaries.j2")
 
 
 class BuildPermit:
@@ -386,7 +443,7 @@ class VerifyDeps:
         )
 
 
-def _incomplete_kind(stopped: IncompleteCheck) -> str:
+def _incomplete_kind(stopped: IncompleteCheck) -> _IncompleteKind:
     match stopped:
         case LoopUnwound():
             return "loop"
@@ -398,14 +455,15 @@ def _incomplete_kind(stopped: IncompleteCheck) -> str:
 
 def _incomplete_note(incomplete: Mapping[str, IncompleteCheck]) -> str:
     ordered = sorted(incomplete.items())
-    kinds = list(dict.fromkeys(_incomplete_kind(stopped) for _, stopped in ordered))
-    return load_jinja_template(
-        "cvlr/incomplete_check.j2",
-        rules=[{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
-        advice="\n".join(
-            load_jinja_template("cvlr/incomplete_advice.j2", kind=kind) for kind in kinds
-        ),
+    kinds: list[_IncompleteKind] = list(
+        dict.fromkeys(_incomplete_kind(stopped) for _, stopped in ordered)
     )
+    return _IncompleteCheck.bind({
+        "rules": [{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
+        "advice": "\n".join(
+            _IncompleteAdvice.bind({"kind": kind}).render_to(load_jinja_template) for kind in kinds
+        ),
+    }).render_to(load_jinja_template)
 
 
 def _externals_note(externals: Sequence[str]) -> str | None:
@@ -423,7 +481,7 @@ def _externals_note(externals: Sequence[str]) -> str | None:
     if not externals:
         return None
     _log.info("prover treated functions as external:\n%s", "\n".join(externals))
-    return load_jinja_template("cvlr/external_functions.j2", warnings="\n\n".join(externals))
+    return _ExternalFunctions.bind({"warnings": list(externals)}).render_to(load_jinja_template)
 
 
 def _unverdicted(declared: Sequence[str], status: Mapping[str, bool]) -> list[str]:
@@ -680,14 +738,12 @@ class VerifyRules(
         missed = unmatched(directives, symbols)
         if not missed:
             return None
-        return load_jinja_template(
-            "cvlr/inert_summaries.j2",
-            missed_count=len(missed),
-            total=len(directives),
-            missed=[
+        return _InertSummaries.bind({
+            "total": len(directives),
+            "missed": [
                 {"pattern": pattern, "suggestions": nearest(pattern, symbols)} for pattern in missed
             ],
-        )
+        }).render_to(load_jinja_template)
 
     def _report(
         self,
@@ -728,19 +784,17 @@ class VerifyRules(
                     lines.append(inert)
                 if surprising:
                     lines.append(
-                        load_jinja_template(
-                            "cvlr/expected_verified.j2", names=", ".join(surprising)
-                        )
+                        _ExpectedVerified.bind({"names": surprising}).render_to(load_jinja_template)
                     )
                 if incomplete:
                     lines.append(_incomplete_note(incomplete))
                 if unverdicted:
                     lines.append(
-                        load_jinja_template("cvlr/no_verdict.j2", names=", ".join(unverdicted))
+                        _NoVerdict.bind({"names": unverdicted}).render_to(load_jinja_template)
                     )
                 if unexcused:
                     lines.append(
-                        load_jinja_template("cvlr/unaccounted.j2", names=", ".join(unexcused))
+                        _Unaccounted.bind({"names": unexcused}).render_to(load_jinja_template)
                     )
                 if (externals := _externals_note(report.external_functions)) is not None:
                     lines.append(externals)
