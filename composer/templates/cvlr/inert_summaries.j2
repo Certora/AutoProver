@@ -1,4 +1,4 @@
-{{ missed_count }} of your {{ total }} summary directive(s) match no symbol in this build, so they had no effect:
+{{ missed | length }} of your {{ total }} summary directive(s) match no symbol in this build, so they had no effect:
 {% for item in missed %}  {{ item.pattern }}
 {% for suggestion in item.suggestions %}      this build does define: {{ suggestion }}
 {% endfor %}{% endfor -%}

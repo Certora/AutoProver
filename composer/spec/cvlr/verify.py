@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Mapping, override
+from typing import AsyncIterator, Mapping, TypedDict, override
 
 from elftools.common.exceptions import ELFError
 from langchain_core.tools import BaseTool
@@ -58,10 +58,25 @@ from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import CvlrGenerationState, tuning_history
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.gen_types import TypedTemplate
 from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display
 
 _log = logging.getLogger(__name__)
+
+
+class _InertSummary(TypedDict):
+    pattern: str
+    suggestions: tuple[str, ...]
+
+
+class _InertSummariesParams(TypedDict):
+    #: How many directives the unit has, of which ``missed`` matched no symbol.
+    total: int
+    missed: list[_InertSummary]
+
+
+_InertSummaries = TypedTemplate[_InertSummariesParams]("cvlr/inert_summaries.j2")
 
 
 class BuildPermit:
@@ -445,14 +460,12 @@ class VerifyRules(
         missed = unmatched(directives, symbols)
         if not missed:
             return None
-        return load_jinja_template(
-            "cvlr/inert_summaries.j2",
-            missed_count=len(missed),
-            total=len(directives),
-            missed=[
+        return _InertSummaries.bind({
+            "total": len(directives),
+            "missed": [
                 {"pattern": pattern, "suggestions": nearest(pattern, symbols)} for pattern in missed
             ],
-        )
+        }).render_to(load_jinja_template)
 
     async def _report(
         self,
