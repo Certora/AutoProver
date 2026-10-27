@@ -435,15 +435,15 @@ function that *writes* state a rule asserts over, not only one whose result it r
     reachable, the canary VERIFIED and the companion was VIOLATED (`new_len` 3, `data_len()` still
     2). The starting layer now inlines `realloc` and `original_data_len` instead, and the probe shows
     the model matching the program: canary VIOLATED, companion VERIFIED.
-    **`resize` is still dropped, deliberately.** It is `realloc(n, true)`, and inlining it crashes
-    the Prover's memory partitioning on the zero-fill: "unknown offset for r1" at `sol_memset_`, a
-    `TACTranslationError` that fails the whole job, so every rule in the submission loses its
-    verdict. Left external, it is reachable, and its writes are dropped (canary VERIFIED, companion
-    VIOLATED), as `realloc`'s were. A direct `realloc(n, true)` now reaches the same crash, where
-    before it passed silently. Reported as **CERT-10184**, and fixed on the Prover's master branch
-    by [EVMVerifier#8696](https://github.com/Certora/EVMVerifier/pull/8696), which also stopped every memory splitter from dropping a non-stack
-    memset of unknown length, leaving the destination's old contents. **TODO:** inline `resize`,
-    rerun this probe, and update its expected verdicts.
+    **`resize`: inlined since 2026-10-26.** It is `realloc(n, true)`, and inlining it used to crash
+    the Prover's memory partitioning on the zero-fill: "unknown offset for r1" at `sol_memset_`,
+    which failed the whole job. Left external, it was reachable and its writes were dropped (canary
+    VERIFIED, companion VIOLATED), as `realloc`'s were. Reported as **CERT-10184**, and fixed on the
+    Prover's master branch by [EVMVerifier#8696](https://github.com/Certora/EVMVerifier/pull/8696),
+    which also stopped every memory splitter from dropping a non-stack memset of unknown length,
+    leaving the destination's old contents. The starting layer now inlines `resize`, and the probe
+    shows its length modelled as the program's: canary VIOLATED, companion VERIFIED. The probe does
+    not check the zero-filled bytes.
   * **A lamport transfer by `invoke`: the write is dropped.** Reachable, canary VERIFIED, companion
     VIOLATED: after a successful transfer of 2, the payer still has `2^64 - 1`. This is broader than
     the starting layer. `invoke_signed_unchecked` is summarized as its `Result`, and the syscall

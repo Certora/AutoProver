@@ -5,8 +5,8 @@ arbitrary value and writes nothing beyond the cells its summary names. Two conse
 measuring rather than inferring, because each one would let a rule verify a property the program
 violates:
 
-* ``AccountInfo::realloc`` is summarized by the starting layer as its ``Result`` alone, so after a
-  resize the model may still hold the old length.
+* ``AccountInfo::realloc`` and ``resize`` are inlined by the starting layer. An analyzed call that
+  wrote nothing would leave the model holding the old length.
 * A lamport transfer by CPI, through ``invoke`` (which reaches the summarized
   ``invoke_signed_unchecked``) and through Anchor's ``system_program::transfer`` (opaque under the
   ``anchor_lang`` blanket), may leave the payer's lamports where they were.
@@ -154,8 +154,9 @@ async def test_which_writes_the_model_drops(project, capsys):
     missing = [rule for rule in RULES if rule not in status]
     assert missing == [], f"no verdict for {missing}. Report: {report.link}"
 
-    # What the model does today, measured 2026-09-29. Each line is a tripwire: a change means the
-    # Prover or the starting layer changed, and `docs/cvlr-todo.md` L1 says what depends on it.
+    # What the model does today, measured 2026-09-29, `resize` again 2026-10-26. Each line is a
+    # tripwire: a change means the Prover or the starting layer changed, and `docs/cvlr-todo.md` L1
+    # says what depends on it.
     observed = {rule: status[rule] for rule in RULES}
     expected = {
         # `realloc`: inlined by the starting layer, and modelled faithfully. (Under the summary it
@@ -163,11 +164,11 @@ async def test_which_writes_the_model_drops(project, capsys):
         "rule_realloc_can_succeed": True,
         "rule_canary_realloc_keeps_the_old_length": False,
         "rule_realloc_sets_the_new_length": True,
-        # `resize`: reachable, and the resize is dropped. It is not inlined, because inlining its
-        # zero-fill crashes the Prover's memory partitioning and ends the whole job.
+        # `resize`: inlined by the starting layer, and its length modelled faithfully. (External,
+        # the canary verified.)
         "rule_resize_can_succeed": True,
-        "rule_canary_resize_keeps_the_old_length": True,
-        "rule_resize_sets_the_new_length": False,
+        "rule_canary_resize_keeps_the_old_length": False,
+        "rule_resize_sets_the_new_length": True,
         # `invoke`: reachable, and the transfer is dropped. The payer keeps its lamports.
         "rule_invoke_transfer_can_succeed": True,
         "rule_canary_invoke_transfer_moves_nothing": True,
@@ -183,9 +184,11 @@ async def test_which_writes_the_model_drops(project, capsys):
         "rule_account_field_across_an_invoke_is_reachable": True,
         "rule_account_field_survives_an_invoke": True,
     }
-    # `resize` is external by design (CERT-10184), so the job's alert report must name it. This is
-    # also what shows the alert report was fetched with the results.
-    assert "solana_account_info::AccountInfo::resize" in report.external_functions, (
+    # The job always has some external function, so an empty list means the alert report was not
+    # fetched with the results.
+    assert report.external_functions, f"no external functions reported. Report: {report.link}"
+    inlined = {"solana_account_info::AccountInfo::realloc", "solana_account_info::AccountInfo::resize"}
+    assert inlined.isdisjoint(report.external_functions), (
         f"external functions reported: {report.external_functions}. Report: {report.link}"
     )
 
