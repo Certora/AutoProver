@@ -55,9 +55,9 @@ Soroban has one, `cvlr-soroban` and `cvlr-soroban-derive` 0.4.0. The scaffold re
 the project is on and pins that set. What the run compiles is guaranteed equal to it, because
 anything else was refused.
 
-Every release but `cvlr-solana` 0.6.0 is on crates.io. That one is read from its release commit
-through a `[patch.crates-io]` entry the scaffold writes, so the project still declares the crates.io
-version ([cvlr-todo.md](./cvlr-todo.md) U26).
+Every release is on crates.io. A release that is not yet published can be read from its release
+commit through a `[patch.crates-io]` entry the scaffold writes, so the project still declares the
+crates.io version ([cvlr-todo.md](./cvlr-todo.md) U26).
 
 The refusal widens one that already existed — `scaffold` refusing a CVLR pin that does not match the
 project's platform generation — to any pin that is not ours, in the same place and before any LLM

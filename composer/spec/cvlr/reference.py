@@ -377,24 +377,13 @@ SOLANA_V2 = ChainReference(
 )
 
 #: ``cvlr-solana`` 0.6.0, the SDK 3 line: 0.5.1 ported to the split ``solana-*`` 3.x crates, with
-#: both program models. Released from one commit, like 0.5.1.
-#:
-#: TODO(cvlr-todo U26): pin the crates.io release once it is published, and drop the commit.
-_CVLR_SOLANA_0_6_0 = GitCommit(
-    repo="https://github.com/Certora/cvlr-solana.git",
-    rev="13bb381bd2eb77cba8300ebb8a7cd4921d903fcc",
-)
-
+#: both program models.
 SOLANA_V3 = replace(
     SOLANA_V2,
-    chain_crate=CrateRelease("cvlr-solana", "0.6.0", _CVLR_SOLANA_0_6_0),
+    chain_crate=CrateRelease("cvlr-solana", "0.6.0"),
     models=(
-        ProgramModel(
-            CrateRelease("cvlr-solana-stake", "0.6.0", _CVLR_SOLANA_0_6_0), "the stake program"
-        ),
-        ProgramModel(
-            CrateRelease("cvlr-spl-token", "0.6.0", _CVLR_SOLANA_0_6_0), "the SPL token program"
-        ),
+        ProgramModel(CrateRelease("cvlr-solana-stake", "0.6.0"), "the stake program"),
+        ProgramModel(CrateRelease("cvlr-spl-token", "0.6.0"), "the SPL token program"),
     ),
     platform=PlatformGeneration(
         # No `solana-program` at all: every platform type is in its own crate.

@@ -147,19 +147,9 @@ def test_the_crates_of_one_repository_are_read_from_one_commit():
 
 
 def test_a_commit_is_pinned_by_hash_and_never_by_a_name_that_can_move():
-    for patch in (*ref.SOLANA_V2.from_commits(), *ref.SOLANA_V3.from_commits()):
+    for patch in (p for r in ref.generations("solana") for p in r.from_commits()):
         commit = patch.commit
         assert len(commit.rev) == 40 and all(ch in "0123456789abcdef" for ch in commit.rev)
-
-
-def test_reading_a_release_from_its_commit_is_still_tracked_as_a_ship_blocker():
-    """This fails once nothing is read from a commit, so whoever publishes the release and drops
-    the commits also closes cvlr-todo U26."""
-    from pathlib import Path
-
-    todo = (Path(__file__).parent.parent / "docs" / "cvlr-todo.md").read_text()
-    assert any(r.from_commits() for r in ref.generations("solana"))
-    assert "**U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.**" in todo
 
 
 def test_solana_has_one_reference_set_per_generation_newest_first():
@@ -187,13 +177,11 @@ def test_only_the_1_18_line_warns_the_author_off_the_manual():
     assert "cvlr_spl_token" in caveats and "cvlr_solana::token" in caveats
 
 
-def test_the_sdk3_line_is_released_whole_from_one_commit():
+def test_the_sdk3_line_is_released_whole():
     """Chain crate and models together, at one version, and on the same core as 2.x."""
     v3 = ref.SOLANA_V3
-    chain = _from_commits(v3, _CVLR_SOLANA_REPO)
-    assert {(p.name, p.version) for p in chain} == {
+    assert {(c.name, c.version) for c in (v3.chain_crate, *(m.release for m in v3.models))} == {
         ("cvlr-solana", "0.6.0"), ("cvlr-solana-stake", "0.6.0"), ("cvlr-spl-token", "0.6.0")
     }
-    assert len({p.commit for p in chain}) == 1
     assert v3.core == ref.SOLANA_V2.core
     assert [w.name for w in v3.platform.witnesses] == ["solana-account-info"]

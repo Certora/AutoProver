@@ -580,10 +580,9 @@ for it (0.5.1 for `solana-program` 2.x), and builds with platform-tools v1.53 un
 toolchain rather than the target's `rust-toolchain.toml`. Its files are P1's and P2's, all merged,
 and master's tests reach them through `preflight.select`, the scaffold and the end-to-end test, so
 it is a follow-up rather than a slice of its own capability. It goes ahead of P3b: every later
-slice is cut from a branch that has it, and their tests assume it. It carries two pins its
-description must name: `cvlr-solana` 0.6.0 read from a git commit until it is published
-([cvlr-todo.md](./cvlr-todo.md) U26), and `prover_version: master` until the Prover releases the
-sound-math fixes (U25).
+slice is cut from a branch that has it, and their tests assume it. It carries one pin its
+description must name: `prover_version: master` until the Prover releases the sound-math fixes
+([cvlr-todo.md](./cvlr-todo.md) U25).
 
 | Change | Files | Rides |
 |---|---|---|
