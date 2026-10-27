@@ -1565,7 +1565,7 @@ That is fixed too (`SOLANA_TRACE` in `composer/prover/results.py`).
 ### `cvlr-solana` is bound to `solana-program` 2.2, so a program on the current SDK cannot be scaffolded at all
 
 **Ported, released as a commit, not published.** `cvlr-solana` 0.6.0, on the split `solana-*` 3.x
-crates and with both program models, is release commit `f054348` on branch `eric/release-0.6.0` of
+crates and with both program models, is release commit `13bb381` on branch `eric/release-0.6.0` of
 `Certora/cvlr-solana`, in review as
 [cvlr-solana#24](https://github.com/Certora/cvlr-solana/pull/24).
 AutoProver's `SOLANA_V3` reference set reads it from that commit through a `[patch.crates-io]` entry
