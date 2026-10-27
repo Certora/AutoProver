@@ -36,22 +36,11 @@ class SummarizeForProver(
 ):
     """Tell the prover to replace a function with an unconstrained stand-in.
 
-    Use this when a rule gets no verdict because the pointer analysis refused
-    something on its path. The usual case is [3308] on an Anchor
-    ``#[error_code]`` enum formatting its ``#[msg]`` string, which any
-    ``require!`` or ``?`` in a called handler can reach. Summarizing that
-    formatting code makes the rest of the handler analyzable.
+    The stand-in returns an unconstrained value and writes only the locations
+    ``returns`` names. Every other store the real function makes is dropped.
 
-    A summary is unsound, and the prover does not report that. The call returns
-    an unconstrained value and writes only the locations ``returns`` names.
-    Every other store the real function makes is dropped. Summarizing code a
-    property is about can make the rule pass having checked nothing, with no
-    trace in the harness. Summarize only code the properties do not depend on.
-    Do not summarize a handler, a function that writes state you assert over,
-    or one that computes a value you assert over.
-
-    Adding one invalidates the prover stamp. The previous run's verdicts were
-    about a different build. Re-run ``verify_rules``.
+    The directive applies from the next build. Adding one invalidates the
+    prover stamp. Re-run ``verify_rules``.
     """
 
     symbol_pattern: str = Field(
@@ -69,9 +58,8 @@ class SummarizeForProver(
         description="What the summarized function returns, as `<location>:<kind>` — e.g. "
         "`(*i32)(r1+0):num`. A location is `r0` (the return register) or memory at an offset from "
         "a register, such as `(*i64)(r1+8)` for an out-pointer return. A kind is `num`, "
-        "`ptr_heap` or `ptr_external`. Give only that text: it is written into the tuning file as "
-        "`#[type(<location>:<kind>)]`, and the `#[type(` and `)]` are added for you. Omit for an "
-        "unconstrained return, which is right for a function whose result nothing asserts over.",
+        "`ptr_heap` or `ptr_external`. Give only that text; the `#[type(` and `)]` around it are "
+        "added for you. Omit to leave the return unconstrained.",
     )
 
     @override
@@ -121,54 +109,30 @@ def _config_change(args: dict) -> str:
 class AdjustProverConfig(
     WithInjectedState[CvlrGenerationState], WithInjectedId, WithImplementation[Command | str]
 ):
-    """Change this unit's prover settings.
+    """Change this unit's loop bound or its ``optimistic_loop`` setting.
 
-    The list is closed. Both settings apply to every rule in the unit.
-
-    With ``optimistic_loop`` off, ``loop_iter`` only decides how far the prover
-    unrolls a loop. A rule that verifies is verified at any bound; a bound too
-    low shows up as a violation, not as a weaker green. With ``optimistic_loop``
-    on, ``loop_iter`` is the assumption itself: a green verdict covers only
-    executions whose loops finish within ``loop_iter`` iterations, so lowering
-    the bound weakens every verdict in the unit.
-
-    Omit a field to leave it. A call that sets neither is refused. A change
-    invalidates the prover stamp. Re-run ``verify_rules``.
+    No other prover setting can be changed here. Both apply to every rule in
+    the unit. Omit a field to leave it. A call that sets neither is refused. A
+    change invalidates the prover stamp. Re-run ``verify_rules``.
     """
 
     loop_iter: int | None = Field(
         default=None,
-        description="The new loop bound, or omit to leave it. While `optimistic_loop` is off, the "
-        "Prover unrolls an unbounded loop this many times and then asserts that the loop has "
-        "finished. A rule that verifies at this bound is verified. A rule that cannot comes back "
-        "VIOLATED on \"Unwinding condition in a loop\". While `optimistic_loop` is on, the bound "
-        "is no longer checked but assumed: a VERIFIED rule holds only for executions whose loops "
-        "finish within this many iterations, so the bound is part of what every verdict in the "
-        "unit means. Set it as low as the property allows. Cost "
-        "grows exponentially, and above 3 or 4 it grows faster than the answer is usually worth. "
-        "Raise it after bounding whatever determines the trip count, and after deciding whether "
-        "the loop is in the property's way.",
+        description="How many times the prover unrolls a loop, at least 1. Omit to leave it. "
+        "While `optimistic_loop` is off, the prover then asserts the loop has finished, and a loop "
+        "that needs more iterations comes back VIOLATED on \"Unwinding condition in a loop\". "
+        "While it is on, the prover assumes the loop has finished instead.",
     )
     optimistic_loop: bool | None = Field(
         default=None,
-        description="True to assume loops finish within the bound, false to assert it again, or "
-        "omit to leave the setting. This is the setting that makes `loop_iter` part of what a "
-        "verdict means. With it on, the Prover does not check that the unroll bound was enough, so "
-        "a violation on a later iteration is never found and the rule reports VERIFIED. Every rule in the submission is "
-        "affected. Use it only for a loop whose trip count the analysis cannot fix: raising the "
-        "bound does not terminate, because the reported iteration goes up with the bound, and no "
-        "summary directive can name the loop. Check that first by moving the bound and reading "
-        "what comes back. A loop that discharges at 3 is not this case. If the property is about "
-        "the loop, use `record_skip` and name the loop. With the setting on, the rest of the "
-        "handler is reachable again. Say in `why` which bounds you tried and what they reported.",
+        description="True to assume every loop finishes within `loop_iter` iterations instead of "
+        "asserting it, false to assert it again. Omit to leave it.",
     )
     why: str = Field(
         default="",
-        description="Required when changing `loop_iter` or turning `optimistic_loop` on. For a "
-        "bound, what the last run reported and why this bound suits the property. With "
-        "`optimistic_loop` on, also what you tried first, and why assuming every loop finishes "
-        "within `loop_iter` is sound for this batch. Not written into the conf. Turning "
-        "`optimistic_loop` off does not use it.",
+        description="Required when changing `loop_iter` or turning `optimistic_loop` on. Which "
+        "bounds you tried, what they reported, and why this setting is the remedy. Not written "
+        "into the conf.",
     )
 
     @override
