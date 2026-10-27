@@ -16,14 +16,17 @@ Every CVLR release AutoProver pins, for all three Solana generations. None is on
 | Release | Repository | Branch, PR | Release commit | State |
 |---|---|---|---|---|
 | `cvlr` 0.6.2, 13 crates | `Certora/cvlr` | `eric/release-0.6.2`, [#52](https://github.com/Certora/cvlr/pull/52) | `de8dec0`: `main` (API docs #51, [#53](https://github.com/Certora/cvlr/pull/53)'s `.cvlr_rules` and `cvlr-rule-manifest`) released | open; tags local |
-| `cvlr-solana` 0.5.1, 3 crates (SDK 2) | `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | `2e53877`: `main` (API docs #21, `rt` fix) released | open; tags local |
-| `cvlr-solana` 0.6.0, 3 crates (SDK 3) | `Certora/cvlr-solana` | `eric/release-0.6.0`, on `eric/sdk3` (the port, C1 and C2, on 0.5.1) | `f054348` | pushed, no PR until #22 merges; tags local |
+| `cvlr-solana` 0.5.1, 3 crates (SDK 2) | `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | `2e53877`: `main` (API docs #21, `rt` fix) released | merged (`a9898ba`, a merge commit); tags local |
+| `cvlr-solana` 0.6.0, 3 crates (SDK 3) | `Certora/cvlr-solana` | `eric/release-0.6.0`, on `eric/sdk3` (the port, C1 and C2, on 0.5.1) | `f054348` | pushed, no PR yet; tags local |
 | `cvlr-solana` 0.4.6, 1 crate (`solana-program` 1.18) | `Certora/cvlr-solana` | `v0.4`, [#23](https://github.com/Certora/cvlr-solana/pull/23) (`cvlr-solana-1-18-support.md` G3) | `b1988a4` | merged; not tagged |
 
 Each release commit is what `cargo-release` would produce: versions, CHANGELOG and README. Each
-passes the repository's CI checks and `cargo publish --dry-run --workspace`. #22 and #52 ask for a
-merge commit, so `main` contains the commit the tags and AutoProver's pin name. The tags are pushed
-after the merge.
+passes the repository's CI checks and `cargo publish --dry-run --workspace`. #22 was merged with a
+merge commit, so `cvlr-solana`'s `main` contains `2e53877`, the commit its tags and AutoProver's
+pin name. `Certora/cvlr` does not allow merge commits, so #52 is squash-merged. The squashed
+commit has the release commit's tree under a new hash: the `cvlr` tags are recreated on it,
+after checking the two trees match, and then pushed. AutoProver pins `cvlr` by a commit already
+on `main`, so its pin does not move.
 
 `cvlr` needs nothing for SDK 3. The core crates do not depend on the Solana SDK, and every
 `cvlr-solana` line requires its `cvlr-*` crates at `<1` only (0.6.0 at `>=0.6`, 0.4.6 and 0.5.1 at
@@ -130,8 +133,8 @@ CI's checks pass on the branch: `fmt`, `clippy -D warnings`, `doc -D missing_doc
 The stake probe verifies all ten rules against it
 ([job](https://prover.certora.com/jobStatus/37632/357dc4fa69324cb6be0509048e0c7b9d?anonymousKey=f559cc790f6f81ec87f20767473839f283569fcc)).
 The 0.6.0 release commit is `f054348` on `eric/release-0.6.0`. The release notes say that SPL
-Token CPI substitution does not yet apply to SDK 3 programs (P1). What remains: a PR once #22 has
-merged, review, and publication.
+Token CPI substitution does not yet apply to SDK 3 programs (P1). #22 has merged, so what remains
+is a PR, review, and publication.
 
 ### Release lines
 
@@ -166,8 +169,8 @@ about the generation:
 - `v0.5` stays the SDK 2 line. Fixes and new helpers are cherry-picked onto it, which is
   mechanical while the difference is one field.
 
-This is under way. 0.5.1 is `main`'s last SDK 2 release (#22). Once it merges, `v0.5` moves up to
-it, and `eric/sdk3` goes to `main` for 0.6.0. `v0.5` is still at the 0.5.0 release commit.
+This is under way. 0.5.1 is `main`'s last SDK 2 release (#22, merged). `v0.5` moves up to it, and
+`eric/sdk3` goes to `main` for 0.6.0. `v0.5` is still at the 0.5.0 release commit.
 
 The single-branch alternative is renamed dependencies on both `solana-account-info` majors,
 selected by mutually exclusive `sdk2` / `sdk3` features. Cargo features are meant to be additive,
@@ -431,7 +434,8 @@ crash showed up (`upstream-defects.md` P15).
 
 All of it is outside AutoProver:
 
-- Merge #22 and #52 with merge commits and push their tags. Tag 0.4.6 on `v0.4`.
+- Squash-merge #52, and recreate its tags on the squashed commit. Push the 0.6.2 and 0.5.1 tags, and
+  tag 0.4.6 on `v0.4`.
 - Move `v0.5` up to 0.5.1, and open the `eric/sdk3` PR.
 - Publish (*Publishing*). Each `cvlr-solana` publication drops a `GitCommit`, and the last one
   closes U26. Publishing 0.6.2 and moving the core's pin to it closes U28.
