@@ -475,6 +475,14 @@ SOLANA_V3 = replace(
             # matches nothing, so the whole SDK is analyzed. `solana_get_sysvar::get_sysvar`, the
             # generic sysvar read `StakeHistorySysvar` goes through, needs no tuning: the syscall
             # under it is modelled.
+            #
+            # Not a platform crate: Anchor 1.1.0 moved `anchor_lang::error` into the
+            # `anchor-lang-error` crate. The anchor blanket `^.*anchor_lang.*$` still matches it,
+            # so without this the `Error` conversions are opaque. An opaque conversion on a
+            # constructor's error path leaves the `Ok` payload's pointers without provenance, and
+            # the first dereference fails with [3003]. Anchor 1.0.x has no such crate and keeps
+            # the canonical spelling.
+            PathAlias("anchor_lang::error::", ("anchor_lang_error::",)),
         ),
     ),
 )
