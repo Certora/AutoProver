@@ -602,8 +602,8 @@ release, and rerun the CVLR gate against the released Prover first, since P8's t
 what the release has to have fixed.
 
 **U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.**
-`cvlr-solana` 0.5.1 (the documented API and the `rt` fix) is cut and tagged, but only the crates'
-owner can publish to crates.io, and it is not published yet. The reference set
+`cvlr-solana` 0.5.1 (the documented API and the `rt` fix) is cut and tagged, and not yet published
+to crates.io (`docs/cvlr-sdk3-support.md`, *Publishing*). The reference set
 ([reference.py](../composer/spec/cvlr/reference.py)) pins its three crates at that version and
 names the release commit (`GitCommit`), and the scaffold writes a `[patch.crates-io]` entry per
 crate so cargo reads them from the commit. A shipped product should not send every target to a git
@@ -629,8 +629,11 @@ commit (`c2df10a`), by the same mechanism as U26. All thirteen crates are patche
 in the graph. One of them, `cvlr-rule-manifest`, is not on crates.io at any version. Built from the
 pins, the corpus has 0 of 354 items without prose (2026-10-22). Once a
 documented release is on crates.io, pin it and drop the commit, then rebuild the corpus and check the
-producer's `--undocumented` report is still empty. `reference.py`'s docstring should also say that a
-bump means an API corpus rebuild; today nothing connects the two.
+producer's `--undocumented` report is still empty. That release is `cvlr` 0.6.2
+([cvlr#52](https://github.com/Certora/cvlr/pull/52)), and it has to be recut on `c2df10a` first:
+`verify_rules` reads the `.cvlr_rules` section that commit added, and 0.6.2 has to publish
+`cvlr-rule-manifest` with it (`docs/cvlr-sdk3-support.md`, *Where things stand*). `reference.py`'s
+docstring should also say that a bump means an API corpus rebuild; today nothing connects the two.
 
 **U29. A scaffold could offer to move an off-reference project onto the pin.** The scaffold refuses a
 project on another CVLR line (`Mismatched`). Offering to rewrite its pins instead is the obvious next

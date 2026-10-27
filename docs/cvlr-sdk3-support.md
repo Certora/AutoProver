@@ -11,37 +11,36 @@ This document covers what has to change, in CVLR and in AutoProver, for a run on
 `main` and on SDK 3 programs generally. The changes are sized against a probe that has already
 verified an SDK 3 program end to end.
 
-## Where things stand (2026-10-13)
+## Where things stand (2026-10-27)
 
-| Repository | Branch, PR | What it is | State |
-|---|---|---|---|
-| `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | 0.5.1 release commit `2e53877`: `main` (API docs #21, `rt` fix) released, SDK 2 line | open; tags local |
-| `Certora/cvlr-solana` | `eric/sdk3` | the SDK 3 port (C1, C2), rebased on 0.5.1 | pushed; PR after #22 |
-| `Certora/cvlr-solana` | `eric/release-0.6.0` | 0.6.0 release commit `f054348`, on `eric/sdk3` | pushed; tags local |
-| `Certora/cvlr` | `eric/release-0.6.2`, [#52](https://github.com/Certora/cvlr/pull/52) | 0.6.2 release commit `2313d51`: API docs #51, Soroban auto sanity #48, `no_std` `cvlr-spec` | open; tags local |
-| AutoProver | `eric/solanaProver` (`f17fc6f1`) | `cvlr-solana` 0.5.1, read from `2e53877` (A5) | committed |
+Every CVLR release AutoProver pins. None is on crates.io yet.
+
+| Release | Repository | Branch, PR | Release commit | State |
+|---|---|---|---|---|
+| `cvlr` 0.6.2, 13 crates | `Certora/cvlr` | `eric/release-0.6.2`, [#52](https://github.com/Certora/cvlr/pull/52) | `2313d51`, to be recut | open; tags local. **Stale**: cut from `465a022` (API docs #51), so it lacks [#53](https://github.com/Certora/cvlr/pull/53) (`c2df10a`, `.cvlr_rules`) and the `cvlr-rule-manifest` crate #53 adds |
+| `cvlr-solana` 0.5.1, 3 crates (SDK 2) | `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | `2e53877`: `main` (API docs #21, `rt` fix) released | open; tags local |
+| `cvlr-solana` 0.6.0, 3 crates (SDK 3) | `Certora/cvlr-solana` | `eric/release-0.6.0`, on `eric/sdk3` (the port, C1 and C2, on 0.5.1) | `f054348` | pushed, no PR until #22 merges; tags local |
 
 Each release commit is what `cargo-release` would produce: versions, CHANGELOG and README. Each
 passes the repository's CI checks and `cargo publish --dry-run --workspace`. Both PRs ask for a
 merge commit, so `main` contains the commit the tags and AutoProver's pin name. The tags are pushed
 after the merge.
 
-`cvlr` needs nothing for SDK 3. The core crates do not depend on the Solana SDK, and
-`cvlr-solana` 0.6.0 requires `cvlr` ≥ 0.6, which the published 0.6.1 meets. 0.6.2 is
-documentation and Soroban work. AutoProver stays on 0.6.1, and its API corpus can be built from
-the 0.6.2 commit with `--crate-source` until 0.6.2 is published.
+`cvlr` needs nothing for SDK 3. The core crates do not depend on the Solana SDK, and both
+`cvlr-solana` lines require their `cvlr-*` crates at `<1` only (0.6.0 at `>=0.6`, 0.5.1 at
+`>=0.4`), so any 0.6.x core serves both. AutoProver needs 0.6.2 for two other reasons: the
+published 0.6.1 has no API docs (`cvlr-todo.md` U28), and `verify_rules` reads rule names from the
+`.cvlr_rules` section that #53 added. So #52 has to be recut on `c2df10a` before it merges, with
+`cvlr-rule-manifest` among its crates and its tags. That crate is new to crates.io and is
+published before `cvlr-log`, `cvlr-macros` and `cvlr`, which depend on it.
 
 ### Publishing, and git dependencies until then
 
-**Only one account can publish these crates.** Every crate in both repositories has one
-crates.io owner, the GitHub account `1arie1`, and neither repository publishes from CI. A release
-can be cut, tagged and merged, but nobody else can publish it.
+**Members of `certora/cvlr-publishers` can publish.** The GitHub team is a crates.io owner of
+every crate in both repositories, beside `1arie1` and `chandrakananandi`. Neither repository
+publishes from CI, so a release is published by hand, from its tag.
 
-**The fix is a team owner.** `cargo owner --add github:certora:<team> <crate>`, run by the
-current owner for each crate, lets any member of that team publish. Team owners can publish but
-cannot add or remove owners, so control stays where it is.
-
-**Until then, AutoProver reads each unpublished release from its release commit** (A5). The
+**Until a release is published, AutoProver reads it from its release commit** (A5). The
 reference set pins the crates.io version and names the commit, and the scaffold writes a
 `[patch.crates-io]` entry per crate:
 
@@ -57,8 +56,10 @@ reference set pins the crates.io version and names the commit, and the scaffold 
 **The pin has to follow the release commit.** A review change to a release commit gives it a new
 hash, and the pin in `reference.py` moves with it. Pushing the tags makes the commits permanent.
 
-**The exit is publication.** Once a release is on crates.io, its `GitCommit` is dropped and nothing
-else changes. U26 in `cvlr-todo.md` is the ship blocker that tracks this.
+**The exit is publication.** Once a `cvlr-solana` release is on crates.io, its `GitCommit` is
+dropped and nothing else changes. The core is the exception: its pin moves from `=0.6.1` to
+`=0.6.2`, and the API corpus is rebuilt. U26 and U28 in `cvlr-todo.md` are the ship blockers that
+track this.
 
 ## What the probe established
 
@@ -442,8 +443,8 @@ This is generation-independent. A 2.x program without `no-entrypoint` has the sa
 
 ### A5. Reading an unpublished release from its commit
 
-**Done, for the 2.x line.** Only the crates' owner can publish to crates.io, so a release can be
-cut and tagged well before it is published. Until it is, the reference set names the commit the
+**Done, for the 2.x line.** A release can be cut and tagged well before it is published. Until it
+is, the reference set names the commit the
 release was cut from:
 
 - **The reference set.** `CrateRelease.unpublished` is a `GitCommit`: a repository and a commit
@@ -568,7 +569,8 @@ What follows is the original plan.
 **Done:**
 
 - C1 and C2, ported and released as commits.
-- 0.5.1 and `cvlr` 0.6.2, prepared and in review (#22, #52).
+- 0.5.1 prepared and in review (#22). `cvlr` 0.6.2 (#52) is in review but predates #53, and is
+  recut before it merges.
 - Every AutoProver item: A1 to A7, with A3b, and A8's setup.
 - The two-generation API corpus, generated and ingested.
 
@@ -577,10 +579,11 @@ chosen.
 
 **Alongside, outside AutoProver:**
 
+- Recut #52 on `c2df10a`, with `cvlr-rule-manifest` (*Where things stand*).
 - Merge #22 and #52 with merge commits and push their tags.
 - Move `v0.5` up to 0.5.1, and open the `eric/sdk3` PR.
-- Ask for a team owner on the crates (*Publishing*), then publish. Each publication drops a
-  `GitCommit`, and the last one closes U26.
+- Publish (*Publishing*). Each `cvlr-solana` publication drops a `GitCommit`, and the last one
+  closes U26. Publishing 0.6.2 and moving the core's pin to it closes U28.
 - **P1** goes to the Prover team. Nothing on the AutoProver side waits for it, but token programs
   on SDK 3 do.
 
