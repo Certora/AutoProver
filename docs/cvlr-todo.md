@@ -326,14 +326,14 @@ release, and rerun the CVLR gate against the released Prover first, since P8's t
 what the release has to have fixed.
 
 **U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.**
-`cvlr-solana` 0.5.1 (the documented API and the `rt` fix) is cut and tagged, but only the crates'
-owner can publish to crates.io, and it is not published yet. The reference set
+`cvlr-solana` 0.5.1 (the documented API and the `rt` fix) is cut and tagged, and not yet published
+to crates.io (`docs/cvlr-sdk3-support.md`, *Publishing*). The reference set
 ([reference.py](../composer/spec/cvlr/reference.py)) pins its three crates at that version and
 names the release commit (`GitCommit`), and the scaffold writes a `[patch.crates-io]` entry per
 crate so cargo reads them from the commit. A shipped product should not send every target to a git
 repository. Once the release is on crates.io, drop the `GitCommit`s; the pins and everything else
-stay. The SDK 3 line (`docs/cvlr-sdk3-support.md`, C1 and A5) uses the same mechanism and
-the same exit.
+stay. The SDK 3 line (0.6.0, `docs/cvlr-sdk3-support.md` C1 and A5) and the 1.18 line (0.4.6,
+`docs/cvlr-solana-1-18-support.md` G3) use the same mechanism and the same exit.
 
 **~~U27. The replay tape was recorded without the corpus and now replays with it.~~** —
 **re-recorded (5e856e39).** The vault tape was recorded with both corpora and the researcher bound,
@@ -347,8 +347,11 @@ commit (`465a022`), by the same mechanism as U26. All twelve crates are patched 
 `cvlr-solana` depends on the sub-crates directly and a lone `cvlr` patch would put two copies of each
 in the graph. Built from the pins, the corpus has 0 of 346 items without prose (2026-10-14). Once a
 documented release is on crates.io, pin it and drop the commit, then rebuild the corpus and check the
-producer's `--undocumented` report is still empty. `reference.py`'s docstring should also say that a
-bump means an API corpus rebuild; today nothing connects the two.
+producer's `--undocumented` report is still empty. That release is `cvlr` 0.6.2
+([cvlr#52](https://github.com/Certora/cvlr/pull/52)), and it has to be recut on `c2df10a` first: the
+landing line reads the `.cvlr_rules` section that commit added, and pins the `cvlr-rule-manifest`
+crate with it (`docs/cvlr-sdk3-support.md`, *Where things stand*). `reference.py`'s docstring should
+also say that a bump means an API corpus rebuild; today nothing connects the two.
 
 **U29. A scaffold could offer to move an off-reference project onto the pin.** The scaffold refuses a
 project on another CVLR line (`Mismatched`). Offering to rewrite its pins instead is the obvious next

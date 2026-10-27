@@ -1570,7 +1570,7 @@ crates and with both program models, is release commit `f054348` on branch `eric
 ([cvlr-solana#22](https://github.com/Certora/cvlr-solana/pull/22), open). AutoProver's
 `SOLANA_V3` reference set reads it from that commit through a `[patch.crates-io]` entry
 ([`reference.py`](../composer/spec/cvlr/reference.py)), so SDK 3 programs are scaffolded and run.
-On crates.io the newest release is still 0.5.0, and only the crates' one owner can publish
+On crates.io the newest release is still 0.5.0
 ([cvlr-sdk3-support.md](./cvlr-sdk3-support.md), *Publishing*). Reading a release from a commit is a
 ship blocker, [cvlr-todo.md](./cvlr-todo.md) U26.
 

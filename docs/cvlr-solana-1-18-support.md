@@ -108,7 +108,6 @@ applies seven of nine source files cleanly. By hand:
 
 Release it on `v0.4` as 0.4.6, and pin its release commit in `SOLANA_V1_18` with a `GitCommit`
 until it is published. That is how 0.5.1 and 0.6.0 are read (A5 in `docs/cvlr-sdk3-support.md`).
-Publishing needs the crates.io owner, as for those.
 
 **Done locally**, on branch `eric/v0.4-docs` off `origin/v0.4`: the port (`5bc229d`) and the 0.4.6
 bump with a changelog entry (`a5032ba`). The hand edits were the ones listed. The private
