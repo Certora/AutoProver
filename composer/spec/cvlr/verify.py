@@ -248,10 +248,6 @@ class VerifyDeps:
         )
 
 
-def _author_text(template: str, /, **values: object) -> str:
-    return load_jinja_template(template, **values).rstrip("\n")
-
-
 @tool_display("Compiling the harness", "Compile")
 class CargoCheck(
     WithInjectedState[CvlrGenerationState],
@@ -449,7 +445,7 @@ class VerifyRules(
         missed = unmatched(directives, symbols)
         if not missed:
             return None
-        return _author_text(
+        return load_jinja_template(
             "cvlr/inert_summaries.j2",
             missed_count=len(missed),
             total=len(directives),
