@@ -630,8 +630,8 @@ in the graph. One of them, `cvlr-rule-manifest`, is not on crates.io at any vers
 pins, the corpus has 0 of 354 items without prose (2026-10-22). Once a
 documented release is on crates.io, pin it and drop the commit, then rebuild the corpus and check the
 producer's `--undocumented` report is still empty. That release is `cvlr` 0.6.2
-([cvlr#52](https://github.com/Certora/cvlr/pull/52)), and it has to be recut on `c2df10a` first:
-`verify_rules` reads the `.cvlr_rules` section that commit added, and 0.6.2 has to publish
+([cvlr#52](https://github.com/Certora/cvlr/pull/52), release commit `de8dec0`), cut on `c2df10a`:
+`verify_rules` reads the `.cvlr_rules` section that commit added, and 0.6.2 publishes
 `cvlr-rule-manifest` with it (`docs/cvlr-sdk3-support.md`, *Where things stand*). `reference.py`'s
 docstring should also say that a bump means an API corpus rebuild; today nothing connects the two.
 
