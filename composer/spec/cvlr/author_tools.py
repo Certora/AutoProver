@@ -177,20 +177,20 @@ class AdjustProverConfig(
         "asserting it, false to assert it again. Omit to leave it.",
     )
     why: str = Field(
-        description="Which bounds you tried, what they reported, and why this setting is the "
-        "remedy. The conf ships with the deliverable, and when `optimistic_loop` is turned on this "
-        "is the reason stored with it."
+        default="",
+        description="Required when changing `loop_iter` or turning `optimistic_loop` on. Which "
+        "bounds you tried, what they reported, and why this setting is the remedy. Stored with "
+        "`optimistic_loop` when the call turns it on, and not written into the conf.",
     )
 
     @override
     def run(self) -> Command | str:
-        if not self.why.strip():
-            return (
-                "A non-empty `why` is required. The conf ships with the deliverable, and a setting "
-                "nobody explained is one a reader cannot weigh."
-            )
         if self.loop_iter is None and self.optimistic_loop is None:
             return "No edits given."
+        if (self.loop_iter is not None or self.optimistic_loop is True) and not self.why.strip():
+            return (
+                "A non-empty `why` is required to change `loop_iter` or turn `optimistic_loop` on."
+            )
         settings = self.state["prover_settings"]
         if self.loop_iter is not None:
             if self.loop_iter < 1:

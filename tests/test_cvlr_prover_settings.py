@@ -1,9 +1,10 @@
 """``adjust_prover_config``: the two prover settings the author may move.
 
-The list is closed. The loop bound decides how the prover spends its time. ``optimistic_loop``
-decides what a green verdict means, and is on the list because the sound remedies for a loop whose
-trip count the analysis cannot fix run out before the problem does. A ``rule_sanity`` downgrade and
-the prover flags are not on it.
+The list is closed. With ``optimistic_loop`` off, the loop bound decides how the prover spends its
+time. ``optimistic_loop`` decides what a green verdict means, and with it on the loop bound is part
+of that meaning. It is on the list because the sound remedies for a loop whose trip count the
+analysis cannot fix run out before the problem does. A ``rule_sanity`` downgrade and the prover
+flags are not on it.
 """
 
 from typing import Annotated, TypedDict
@@ -113,11 +114,29 @@ def test_one_refused_setting_lands_neither():
     assert state["prover_settings"] == TunableConf()
 
 
-def test_an_unexplained_config_change_is_refused():
-    """The conf ships with the deliverable, so a setting nobody explained is one a reader cannot
-    weigh."""
-    out = _adjust(_state(), loop_iter=3, why="  ")
+def test_turning_optimistic_loop_on_without_a_reason_is_refused():
+    out = _adjust(_state(), optimistic_loop=True, why="  ")
     assert isinstance(out, str) and "non-empty `why`" in out
+
+
+def test_a_loop_bound_change_without_a_reason_is_refused():
+    """A bound is part of what a verdict means once ``optimistic_loop`` is on."""
+    out = _adjust(_state(), loop_iter=4, why="")
+    assert isinstance(out, str) and "non-empty `why`" in out
+
+
+def test_a_loop_bound_change_that_turns_optimistic_loop_off_still_requires_a_reason():
+    on = TunableConf(optimistic_loop=OptimisticLoop(why="w"))
+    state = _state(on)
+    out = _adjust(state, loop_iter=4, optimistic_loop=False, why="")
+    assert isinstance(out, str) and "non-empty `why`" in out
+    assert state["prover_settings"] == on
+
+
+def test_turning_optimistic_loop_off_does_not_require_a_reason():
+    state = _state(TunableConf(optimistic_loop=OptimisticLoop(why="w")))
+    out = _adjust(state, optimistic_loop=False, why="")
+    assert _settings_after(state, out) == TunableConf()
 
 
 def test_a_config_change_invalidates_the_prover_stamp():
