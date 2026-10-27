@@ -41,7 +41,6 @@ def _no_staging(monkeypatch: pytest.MonkeyPatch) -> None:
 def _target(tmp_path: Path, sem: asyncio.Semaphore) -> HarnessTarget:
     return HarnessTarget(
         session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
-        module_path=tmp_path / "m.rs",
         package="p",
         package_root=tmp_path,
         tuning=SimpleNamespace(ensure_composite=lambda: None),  # type: ignore[arg-type]

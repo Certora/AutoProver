@@ -173,6 +173,10 @@ async def _stubbed_stage(draft, summaries=(), overlay={}) -> verify_mod.StagedUn
     )
 
 
+#: What a unit's target builds with: the shared feature and the unit's own.
+_FEATURES = ("certora", "certora_unit_vault")
+
+
 def _stubbed_slot() -> contextlib.nullcontext[SimpleNamespace]:
     return contextlib.nullcontext(SimpleNamespace(stage=_stubbed_stage))
 
@@ -218,7 +222,7 @@ class _FakeAnalyzer:
 
 def _deps(analyzer: _FakeAnalyzer, results: _FakeResults) -> verify_mod.VacuityDeps:
     verify = verify_mod.VerifyDeps(
-        target=SimpleNamespace(session=None, build_slot=_stubbed_slot),  # type: ignore[arg-type]
+        target=SimpleNamespace(session=None, build_slot=_stubbed_slot, features=_FEATURES),  # type: ignore[arg-type]
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit_x", msg="m"),
         submission_dir=Path("/w/submissions"),
         prover_opts=None,  # type: ignore[arg-type]

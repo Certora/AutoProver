@@ -12,7 +12,7 @@ and the program violates it. The marking records that claim.
 """
 
 import asyncio
-import dataclasses
+from dataclasses import dataclass, field, replace
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -84,6 +84,7 @@ from composer.spec.cvlr.author_tools import (
     stamp_under,
     unaccounted,
 )
+from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import (
     CvlrGenerationState,
     LastVerdicts,
@@ -157,11 +158,9 @@ _InertSummaries = TypedTemplate[_InertSummariesParams]("cvlr/inert_summaries.j2"
 
 
 class BuildPermit:
-    """The run's build permit, held by one unit.
+    """Held from staging until the prover reports the job link, or until the slot ends.
 
-    A submission holds it through the Prover's local rebuild and upload. Every
-    build of the crate writes the same ``.so``. The permit is released when
-    that upload finishes, before the cloud job finishes.
+    Staging goes through the permit, so no draft is staged without it.
     """
 
     def __init__(self, target: "HarnessTarget") -> None:
@@ -173,7 +172,7 @@ class BuildPermit:
         self._held = True
 
     def release(self) -> None:
-        """Release the permit. Releasing one that is already released does nothing."""
+        """A second call does nothing."""
         if self._held:
             self._held = False
             self._target.build_sem.release()
@@ -184,20 +183,10 @@ class BuildPermit:
         summaries: Sequence[SummaryDirective] = (),
         overlay: Mapping[str, str] = {},
     ) -> "StagedUnit":
-        """Make the tree match the unit's state, and return what builds it.
+        """Write the draft, the summaries, and this unit's program edits into the tree.
 
-        The draft, the summaries, and the source overlay are all inputs to the
-        build. Each is taken from already-merged state, so two concurrent calls
-        cannot each write their own view.
-
-        The summaries file is rewritten from ``summaries`` even when that is
-        empty. The composite the conf names has to exist, and a directive
-        dropped from state has to leave the file. The overlay replaces the
-        unit's edited files
-        (:meth:`composer.spec.cvlr.tree.SharedTree.reconcile`).
-
-        Staging needs the permit held. It keeps two units out of the tree at
-        once, and keeps a sibling's edits out of this build.
+        ``summaries`` is rewritten even when empty, so a dropped directive leaves
+        the file the conf names. Returns what builds the staged unit.
         """
         self.require_held()
         target = self._target
@@ -214,10 +203,10 @@ class BuildPermit:
 
 
 class StagedUnit:
-    """A unit's state in the tree, under the permit that staged it.
+    """A unit's draft in the tree, under the permit that staged it.
 
-    Every build of it goes through here, so none runs before staging or after
-    the permit is released, and all of them run in the target's session.
+    Every build of the draft goes through it, so none runs before staging or
+    after the permit is released, and all of them run in the target's session.
     """
 
     def __init__(self, permit: BuildPermit, target: "HarnessTarget") -> None:
@@ -243,22 +232,16 @@ class StagedUnit:
         return Prepared(session, build, await write_submission(session, submission, into=into))
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class HarnessTarget:
     """Where a draft is staged so the crate compiles with it.
 
-    The harness is a module inside the crate. Staging writes the file the
-    scaffold already declared. ``module_path`` is absolute. ``specs/mod.rs``
-    was written once for the run
+    Staging writes the file ``specs/mod.rs`` declares for :attr:`unit`
     (:meth:`composer.spec.cvlr.harness.CvlrArtifactStore.declare_modules`).
-
-    Every unit shares ``tree`` and ``build_sem``. A build selects ``certora``
-    plus :attr:`~composer.spec.cvlr.harness.HarnessModule.feature`, so no other
-    unit's module is compiled.
+    Every unit shares ``tree`` and ``build_sem``.
     """
 
     session: CargoSession
-    module_path: Path
     package: str
     package_root: Path
     tuning: TuningFiles
@@ -277,6 +260,10 @@ class HarnessTarget:
         self.tuning.ensure_composite()
 
     @property
+    def module_path(self) -> Path:
+        return self.package_root / SPECS_DIR / self.unit.artifact_file
+
+    @property
     def features(self) -> tuple[CargoFeature, ...]:
         """Features for every build of this unit: the harness, and this unit's module."""
         return (DEFAULT_FEATURE, self.unit.feature)
@@ -293,15 +280,10 @@ class HarnessTarget:
     async def build_slot(self) -> AsyncIterator[BuildPermit]:
         """Serialize staging and the cargo invocation that follows it.
 
-        Cargo already serializes concurrent builds on its build-directory lock.
-        The permit is a queue the host can see, and it keeps several sandboxed
-        builds from sitting on grants.
-
-        A submission needs the permit for another reason. Every SBF build
-        writes the same ``.so``. The Prover's local phase rebuilds it and
-        uploads it. A sibling build in between would replace that file with one
-        built for the sibling's feature. :func:`_stage_and_submit` releases the
-        permit through the yielded :class:`BuildPermit` once the upload is done.
+        Cargo's build-directory lock already serializes the builds. A build
+        waiting on that lock still holds its sandbox grants, so the permit
+        queues them here. A submission holds the permit longer
+        (:func:`_stage_and_submit`).
         """
         permit = BuildPermit(self)
         await permit.acquire()
@@ -312,10 +294,8 @@ class HarnessTarget:
 
 
 class _RunAccounting(RunAccounting):
-    """Accounts for the run, and releases ``permit`` when the Prover reports the job's link.
-
-    The link arrives after the local rebuild and upload. Until then a sibling's
-    build could replace the ``.so`` this job uploads.
+    """Accounts for the run, and releases ``permit`` when the Prover reports the
+    job's link, which is after the upload.
 
     Separate from :class:`_CaptureCallbacks` because a submission with no
     analysis store still spends prover time.
@@ -398,7 +378,7 @@ class AuthorModel:
         return self._llm
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class CexAnalysis:
     """Explains a violated rule and stores that explanation.
 
@@ -407,7 +387,7 @@ class CexAnalysis:
     """
 
     store: CexAnalysisStore
-    model: AuthorModel = dataclasses.field(default_factory=AuthorModel)
+    model: AuthorModel = field(default_factory=AuthorModel)
 
     def handler(self, state: CvlrGenerationState) -> CexHandler:
         return TrivialFanoutCexHandler(self.model.llm, state)
@@ -416,9 +396,9 @@ class CexAnalysis:
         return _CaptureCallbacks(self.store, permit)
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class VerifyDeps:
-    """What the prover gate needs beyond the draft."""
+    """What ``verify_rules`` needs beyond the draft."""
 
     target: HarnessTarget
     submission: Submission
@@ -430,15 +410,28 @@ class VerifyDeps:
     stamper: ValidationStamper
     analysis: CexAnalysis
 
+    @property
+    def unit_submission(self) -> Submission:
+        """The unit's submission, compiling this unit's module.
+
+        :attr:`HarnessTarget.features` is ``certora`` plus this unit's feature, the
+        same set ``cargo_check`` builds with. The submission's own default is only
+        ``certora``, and ``specs/mod.rs`` gates this unit's module on its feature,
+        so a build that kept the default would compile the staged file out.
+        """
+        return replace(self.submission, features=self.target.features)
+
     def submission_for(self, state: CvlrGenerationState, rules: Sequence[str]) -> Submission:
         """The unit's submission, checking ``rules`` under the current prover settings.
 
-        The settings come from state. A submission built from the run's starting
-        copy would send the old settings while ``version_history`` recorded the
-        new ones.
+        The settings come from state. A submission built earlier would send the old
+        settings, while :func:`~composer.spec.cvlr.conf.conf_history` is what the
+        stamp records.
         """
-        return dataclasses.replace(
-            self.submission, rules=SelectRules(tuple(rules)), settings=state["prover_settings"]
+        return replace(
+            self.unit_submission,
+            rules=SelectRules(tuple(rules)),
+            settings=state["prover_settings"],
         )
 
 
@@ -565,29 +558,29 @@ async def _stage_and_submit(
     choose: Callable[[set[str]], Submission | Command | str] | None = None,
     analyze: bool = True,
 ) -> CvlrOutcome | Command | str:
-    """Stage ``draft``, build it, and submit the submission ``choose`` returns.
+    """Stage ``draft`` with the unit's summaries and edits, build it, and submit what ``choose`` returns.
 
-    The rule names are in the ``.so`` this build writes. ``choose`` sees that
-    set and returns the submission to write, or a result that means nothing is
-    written. A missing or unreadable section is returned here, and no conf is
-    written.
+    ``choose`` sees the rule names in the ``.so`` and returns the submission to
+    write, or a message. A message, or a missing or unreadable section, writes
+    no conf.
+
+    Every SBF build of the crate writes the same ``.so``. ``run_submission``
+    rebuilds it into the shared target directory and uploads it. A sibling's
+    build in between would replace that ``.so`` with one built for the
+    sibling's feature (:func:`composer.spec.cvlr.prover.prepare_submission`).
+    The build permit is held from staging until the job's link arrives, after
+    the upload, or until ``run_submission`` returns without a link. The
+    prover's rebuild happens under that permit, so it lists the same rules and
+    the section is not read again.
+
+    The cloud job is not covered. A sibling that stages during it compiles
+    behind its own feature.
 
     When ``analyze`` is true, the counterexample handler is built from
     ``deps.analysis`` after the conf is written, immediately before
     :func:`run_submission`. Building it reads the author's model, so a run that
     returns earlier never builds one. ``explain_vacuity`` passes false: that
     job reads an unsat core, and a violated rule is rendered as its status.
-
-    One build permit is held until the Prover has uploaded. ``run_submission``
-    rebuilds the crate into the shared target directory and uploads that
-    ``.so``. A sibling must not build between this unit's gate build and that
-    upload (:func:`composer.spec.cvlr.prover.prepare_submission`). The permit
-    is released when the job's link arrives, which is after the upload, or
-    when ``run_submission`` returns without a link. The same ``.so`` is not
-    read again: the permit makes the prover's rebuild the same rules.
-
-    The cloud job itself is not covered. Files a sibling stages during it are
-    behind that sibling's feature.
     """
     async with deps.target.build_slot() as permit:
         staged = await permit.stage(draft, state["summaries"], state["vfs"])
@@ -632,7 +625,7 @@ def _submission_for_listed(submission: Submission, names: set[str]) -> Submissio
             "The build listed no rules, so nothing was submitted. A rule is a `#[rule]` "
             "function or a `cvlr_rules!` invocation."
         )
-    return dataclasses.replace(submission, rules=SelectRules(tuple(names)))
+    return replace(submission, rules=SelectRules(tuple(names)))
 
 
 @tool_display("Running the Solana Prover", "Prover")
@@ -673,7 +666,7 @@ class VerifyRules(
                 deps,
                 self.state,
                 draft,
-                deps.submission,
+                deps.unit_submission,
                 accounting=deps.analysis.callbacks,
                 tool_call_id=self.tool_call_id,
                 choose=choose,
@@ -836,7 +829,7 @@ class _DiagnosticAccounting(_RunAccounting):
         pass
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclass(frozen=True)
 class VacuityDeps:
     """What ``explain_vacuity`` needs beyond the gate's own dependencies."""
 
@@ -878,7 +871,7 @@ class ExplainVacuity(
             return "No harness written yet — put a draft first."
         with self.tool_deps() as deps:
             verify = deps.verify
-            submission = dataclasses.replace(
+            submission = replace(
                 verify.submission_for(self.state, (self.rule,)),
                 purpose=CollectUnsatCore(),
                 # Its own conf file: the unit's is part of the deliverable.

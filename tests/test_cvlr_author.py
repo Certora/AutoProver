@@ -317,6 +317,10 @@ async def _stubbed_stage(draft, summaries=(), overlay={}) -> verify_mod.StagedUn
     )
 
 
+#: What a unit's target builds with: the shared feature and the unit's own.
+_FEATURES = ("certora", "certora_unit_vault")
+
+
 def _stubbed_slot() -> contextlib.nullcontext[SimpleNamespace]:
     return contextlib.nullcontext(SimpleNamespace(stage=_stubbed_stage))
 
@@ -406,6 +410,7 @@ async def test_the_submission_names_the_rules_the_build_listed(tmp_path, monkeyp
         target=SimpleNamespace(  # type: ignore[arg-type]
             session=None,
             build_slot=_stubbed_slot,
+            features=_FEATURES,
         ),
         # What the run started from. The state below carries different settings, which is what a
         # settings edit would have produced and what the submission must actually use.
@@ -455,8 +460,9 @@ async def test_a_missing_rule_section_writes_no_conf(tmp_path, monkeypatch):
     monkeypatch.setattr(verify_mod, "write_submission", write)
 
     deps = SimpleNamespace(
-        target=SimpleNamespace(session=None, build_slot=_stubbed_slot),
+        target=SimpleNamespace(session=None, build_slot=_stubbed_slot, features=_FEATURES),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
+        unit_submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),
@@ -492,8 +498,9 @@ async def test_a_corrupt_rule_section_writes_no_conf(tmp_path, monkeypatch, capl
     monkeypatch.setattr(verify_mod, "write_submission", write)
 
     deps = SimpleNamespace(
-        target=SimpleNamespace(session=None, build_slot=_stubbed_slot),
+        target=SimpleNamespace(session=None, build_slot=_stubbed_slot, features=_FEATURES),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
+        unit_submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),
@@ -525,8 +532,9 @@ async def test_an_empty_rule_section_submits_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(verify_mod, "write_submission", write)
 
     deps = SimpleNamespace(
-        target=SimpleNamespace(session=None, build_slot=_stubbed_slot),
+        target=SimpleNamespace(session=None, build_slot=_stubbed_slot, features=_FEATURES),
         submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
+        unit_submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit", msg="m"),
         submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),

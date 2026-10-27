@@ -1,4 +1,5 @@
 from typing import Protocol, AsyncIterator, TYPE_CHECKING
+from collections.abc import Mapping
 import json
 import sys
 import pathlib
@@ -40,6 +41,7 @@ from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.io.context import DefaultRetryPolicy, install_retry_policy
 import composer.llm.registry as llm_registry
+from composer.llm.pricing import PriceProvider
 from composer.rag.models import get_model
 from composer.io.thread_logging import RunDataLogger, thread_logger, default_logging_ns
 from composer.rag.models import DefaultEmbedder
@@ -173,6 +175,23 @@ def resolve_budget(budget: str | None, budget_total: float | None) -> RunBudget 
     if budget_total is not None:
         return parse_budget_scalar(budget_total)
     return None
+
+
+def reject_unpriced_budget(
+    budget: RunBudget | None, pricing: Mapping[str, PriceProvider]
+) -> None:
+    """Refuse a budgeted run on a model with no known price. The budget is enforced
+    by pricing each call, and an unpriced model's calls cost $0, so the budget could
+    never trip. ``pricing`` maps each model name the run uses to its pricing curve."""
+    if budget is None:
+        return
+    unpriced = sorted(name for name, price in pricing.items() if price(0) is None)
+    if unpriced:
+        raise ValueError(
+            f"a run budget is set, but no price is known for {', '.join(unpriced)}: "
+            "its calls would cost $0 and the budget could never trip. Add the model to "
+            "composer/llm/pricing.py, or run without --budget/--budget-total."
+        )
 
 
 class PipelineArgs(ExtendedModelOptions, Protocol):
@@ -319,6 +338,10 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
     # import time keeps pointing at the original. The replay symptom is a real (paid) model in a
     # test that believes it is taped; the recording symptom is "no LLM responses captured".
     tiered = llm_registry.get_provider_for(tiered=args)
+    reject_unpriced_budget(budget, {
+        args.heavy_model: tiered.heavy.price_provider,
+        args.lite_model: tiered.lite.price_provider,
+    })
 
     semaphore = asyncio.Semaphore(args.max_concurrent)
     cpu_semaphore = asyncio.Semaphore(args.max_cpu_tasks)

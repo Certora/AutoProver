@@ -12,12 +12,8 @@ The fastest way from a clean clone to a working run. Everything — Python deps,
 git clone --recurse-submodules git@github.com:Certora/AutoProver.git
 cd AutoProver
 
-# Cloud Certora Prover credentials + Claude key (see the table below).
+# Claude key, plus your Certora organization API key.
 export ANTHROPIC_API_KEY=sk-... CERTORAKEY=...
-
-# One-time Certora cloud login
-uv tool install certora-cloud
-certora-cloud login
 
 # A ready-to-run example project (public).
 git clone https://github.com/Certora/AutoProverExamples.git
@@ -66,7 +62,7 @@ of failing, and the CI pyright job runs this way.
 
 ### Certora Prover
 
-**Cloud mode (the default):** Two credentials are needed. `CERTORAKEY` (set in your environment) authenticates `certoraRun` when it submits prover jobs. The job *results* are fetched with the Certora cloud credentials produced by `certora-cloud login` — install the public CLI (`uv tool install certora-cloud`) and run it once (`certora-cloud login`); it writes `~/.certora/credentials.json`, which is read automatically. Exporting `CERTORA_USER`/`CERTORA_TOKEN`/`CERTORA_REFRESH_TOKEN` instead is an optional override.
+**Cloud mode (the default):** One organization API key in `CERTORAKEY` submits the jobs and fetches their results. Create it on the organization's **API** page with **Use Certora Prover** ticked.
 
 **Local mode:** You need a full local Prover build from https://github.com/Certora/CertoraProver. From the Prover repo root, run `./gradlew copy-assets` and set `CERTORA` to point to `CertoraProver/target`. (N.B. Local mode is not yet wired through the `scripts/autoprove` Docker wrapper.)
 
@@ -170,7 +166,7 @@ You will likely want to install the tool using the `--editable` flag. You'll als
 | `--cloud` | off | Run prover jobs in the Certora cloud instead of locally |
 | `--model` | `claude-opus-4-6` | Anthropic model to use |
 | `--tokens` | 10000 | Token budget for LLM responses |
-| `--thinking-tokens` | 2048 | Thinking token budget |
+| `--thinking-tokens` | 16384 | Thinking token budget (OpenAI models: `high` reasoning effort) |
 | `--rag-db` | `postgresql://rag_user:rag_password@localhost:5432/rag_db` | RAG database connection string |
 
 ### Example

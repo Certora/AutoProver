@@ -56,8 +56,11 @@ Usage Examples:
   # Debug summaries generation by stopping after that phase
   certora-autosetup--stop-after-summaries Contract.sol
 
-  # Skip LLM analysis for faster debugging (static analysis only)
+  # Skip every LLM call (static analysis only)
   certora-autosetup--skip-llm Contract.sol
+
+  # Skip the LLM summaries
+  certora-autosetup --skip-llm-summaries Contract.sol
 
   # Skip generating harness wrappers for contracts behind indexed storage paths
   certora-autosetup --skip-harnessing Contract.sol
@@ -270,7 +273,14 @@ Default Behavior: By default, all configurations must be successfully submitted.
     parser.add_argument(
         '--skip-llm',
         action='store_true',
-        help='Skip LLM analysis entirely for faster debugging (only use static analysis)'
+        help='Skip every LLM call (summaries, ERC-7201 annotation patching, proxy detection); '
+             'static analysis only'
+    )
+
+    parser.add_argument(
+        '--skip-llm-summaries',
+        action='store_true',
+        help='Skip the LLM summary generation'
     )
 
 
@@ -334,6 +344,19 @@ Default Behavior: By default, all configurations must be successfully submitted.
         '--skip-proxy-detection',
         action='store_true',
         help='Skip proxy pattern detection and implementation contract discovery'
+    )
+
+    parser.add_argument(
+        '--proxy-mapping',
+        action='append',
+        default=[],
+        metavar='PROXY=IMPL[,IMPL...]',
+        help=(
+            'Declare a proxy and its implementation contract(s) by contract name. Call '
+            'resolution adds the implementations to the scene and maps them onto the proxy '
+            'with contract_extensions, in place of proxy detection for that contract. '
+            'Repeatable.'
+        )
     )
 
     parser.add_argument(
@@ -470,3 +493,21 @@ Default Behavior: By default, all configurations must be successfully submitted.
     )
 
     return parser
+
+
+def parse_proxy_mappings(specs: list[str]) -> dict[str, list[str]]:
+    """Parse ``--proxy-mapping PROXY=IMPL[,IMPL...]`` values into proxy name -> implementation
+    names. A proxy named twice gets the union of its implementations, in order."""
+    mappings: dict[str, list[str]] = {}
+    for spec in specs:
+        proxy, sep, impls = spec.partition("=")
+        proxy = proxy.strip()
+        impl_names = [name.strip() for name in impls.split(",") if name.strip()]
+        if not sep or not proxy or not impl_names:
+            raise ValueError(
+                f"Invalid --proxy-mapping {spec!r}: expected PROXY=IMPL[,IMPL...] "
+                f"(contract names)"
+            )
+        known = mappings.setdefault(proxy, [])
+        known.extend(name for name in impl_names if name not in known)
+    return mappings

@@ -77,7 +77,7 @@ from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, Harn
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
 from composer.spec.cvlr.patch import snapshot, write_component_patches, write_patch
 from composer.spec.cvlr.prover import Submission
-from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, declare_unit_features
+from composer.spec.cvlr.scaffold import ENVS_DIR, declare_unit_features
 from composer.spec.cvlr.tree import SharedTree
 from composer.spec.cvlr.tuning import SUMMARIES, TuningFiles
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
@@ -267,7 +267,6 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         await asyncio.to_thread(tuning.write, ())
         target = HarnessTarget(
             session=session,
-            module_path=package_root / SPECS_DIR / identity.artifact_file,
             package=self.deps.preflight.package,
             package_root=package_root,
             tuning=tuning,

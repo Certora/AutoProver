@@ -88,7 +88,6 @@ async def _target(project: Path, verdict=None):
     root = tree.root
     return HarnessTarget(
         session=_Session(root, verdict or Compiled()),  # type: ignore[arg-type]
-        module_path=root / _MARKER,
         package="p",
         package_root=root / "programs" / "p",
         tuning=SimpleNamespace(write=lambda _summaries: None, ensure_composite=lambda: None),  # type: ignore[arg-type]

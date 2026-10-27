@@ -32,6 +32,14 @@ jobs:
       - name: Install the pinned Rust toolchain
         run: rustup toolchain install --no-self-update
 
+      # `.python-version` names only the minor version; uv resolves it to the newest
+      # patch release, which is the interpreter `uv sync` below uses.
+      - name: Resolve the Python version
+        id: python
+        run: |
+          uv python install
+          echo "version=$("$(uv python find)" -c 'import platform; print(platform.python_version())')" >> "$GITHUB_OUTPUT"
+
       - name: Cache the Rust build
         uses: actions/cache@v4
         with:
@@ -40,8 +48,10 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             rust/target
-          key: cargo-pytest-${{ hashFiles('rust/Cargo.lock') }}
-          restore-keys: cargo-pytest-
+          # The crates link against libpython, so a build is only reusable on the same
+          # interpreter version.
+          key: cargo-pytest-${{ steps.python.outputs.version }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: cargo-pytest-${{ steps.python.outputs.version }}-
 
       - name: sync-deps
         run: |

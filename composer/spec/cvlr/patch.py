@@ -2,7 +2,7 @@
 
 A CVLR harness is not a file beside the program: it is a module inside the crate, wired in through
 the crate's ``Cargo.toml`` and ``lib.rs``, with tuning files next to it. A consumer that takes only
-:data:`~composer.spec.cvlr.harness.DELIVERABLE_DIR` gets none of that, so the run also writes
+:data:`~composer.spec.gen_types.CVLR_DELIVERABLE_DIR` gets none of that, so the run also writes
 :data:`PATCH_PATH` there, a unified diff that ``git apply`` lays onto the project as it was before
 the run.
 
@@ -25,14 +25,14 @@ import re
 import shutil
 from pathlib import Path
 
-from composer.spec.cvlr.harness import DELIVERABLE_DIR, INTERNAL_DIR
+from composer.spec.gen_types import CVLR_DELIVERABLE_DIR, CVLR_INTERNAL_DIR
 from composer.spec.source.munge.vfs_diff import compute_diff
 
-BASELINE_DIR = INTERNAL_DIR / "baseline"
-PATCH_PATH = DELIVERABLE_DIR / "harness.patch"
+BASELINE_DIR = CVLR_INTERNAL_DIR / "baseline"
+PATCH_PATH = CVLR_DELIVERABLE_DIR / "harness.patch"
 #: One self-contained patch per harness module that edited the program. A sibling of
-#: :data:`PATCH_PATH`, and under :data:`DELIVERABLE_DIR` so neither patch diffs the other in.
-COMPONENTS_DIR = DELIVERABLE_DIR / "components"
+#: :data:`PATCH_PATH`, and under :data:`CVLR_DELIVERABLE_DIR` so neither patch diffs the other in.
+COMPONENTS_DIR = CVLR_DELIVERABLE_DIR / "components"
 
 #: A harness module name, which is the only stem these patches are given.
 _MODULE_STEM = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -45,7 +45,7 @@ _SKIPPED_FILES = frozenset({"Cargo.lock"})
 
 
 def _is_source(relative: Path) -> bool:
-    if relative.is_relative_to(DELIVERABLE_DIR):
+    if relative.is_relative_to(CVLR_DELIVERABLE_DIR):
         return False
     if _SKIPPED_DIRS.intersection(relative.parts[:-1]) or relative.name in _SKIPPED_DIRS:
         return False

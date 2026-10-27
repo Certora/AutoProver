@@ -30,6 +30,7 @@ from prover_output_utility.models import CallResolutionInfo  # type: ignore
 
 from certora_autosetup.setup.proxy_detection import (
     ImplementationContract,
+    ProxyAnalysisResult,
     ProxyDetector,
     ProxyMapping,
 )
@@ -150,6 +151,7 @@ class CallResolutionPhase:
         max_prover_invocations: int = 10,
         verbose: bool = False,
         skip_proxy_detection: bool = False,
+        proxy_mappings: Optional[Dict[str, List[str]]] = None,
         skip_harnessing: bool = False,
     ):
         self.scope = scope
@@ -188,6 +190,9 @@ class CallResolutionPhase:
             ProxyDetector(scope.project_root, verbose=verbose) if not skip_proxy_detection else None
         )
         self.proxy_mappings: List[ProxyMapping] = []
+        # Proxy name -> implementation names given up front (--proxy-mapping). A contract
+        # named here takes this mapping in place of proxy detection.
+        self.declared_proxy_mappings: Dict[str, List[str]] = dict(proxy_mappings or {})
         self._already_scanned_for_proxy: Set[ContractHandle] = set()
         self._proxy_state_lock = asyncio.Lock()
 
@@ -372,6 +377,14 @@ class CallResolutionPhase:
         elif not remaining:
             logger.info(f"All calls resolved for {self.contract_name}")
 
+        scanned_names = {h.contract_name for h in self._already_scanned_for_proxy}
+        for proxy_name in self.declared_proxy_mappings:
+            if proxy_name not in scanned_names:
+                logger.warning(
+                    f"--proxy-mapping names {proxy_name!r}, which never entered the scene of "
+                    f"{self.contract_name}; its mapping was not applied"
+                )
+
         # Generate final report
         report_file = self.reports_dir / f"{self.contract_name}_call_resolution_report.md"
         self._generate_report(report_file, limit_reached)
@@ -394,7 +407,7 @@ class CallResolutionPhase:
         """Scan any contracts currently in the config that haven't been scanned yet.
         Runs detection in parallel across all candidates. Skips libraries — they're
         inlined at compile time and can't be proxies."""
-        if self.proxy_detector is None:
+        if self.proxy_detector is None and not self.declared_proxy_mappings:
             return
         current = set(self.config_manager.get_referenced_contracts(self.config_file))
         candidates = [
@@ -434,10 +447,22 @@ class CallResolutionPhase:
         """Per-contract proxy detection. The lock serializes the consolidated
         contract_extensions write since update_config_with_properties does top-level
         replace, not merge, so each writer must include all prior mappings."""
-        if self.proxy_detector is None:
+        declared = self.declared_proxy_mappings.get(handle.contract_name)
+        if declared is not None:
+            result = ProxyAnalysisResult(
+                is_proxy=True,
+                proxy_pattern="Declared",
+                explanation="--proxy-mapping",
+                implementations=[
+                    ImplementationContract(contract_name=name, source_file="", reasoning="--proxy-mapping")
+                    for name in declared
+                ],
+            )
+        elif self.proxy_detector is None:
             return
-        with ledger_component("proxy_detection"):
-            result = await self.proxy_detector.analyze_contract(handle)
+        else:
+            with ledger_component("proxy_detection"):
+                result = await self.proxy_detector.analyze_contract(handle)
 
         if not result.search_completed:
             logger.warning(

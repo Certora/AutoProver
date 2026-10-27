@@ -14,10 +14,12 @@ call raises, validation rejects the grouping, or the grouping covers no properti
 import logging
 from typing import Iterable
 
+from langchain_core.exceptions import OutputParserException
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, ValidationError
 
+from composer.llm.structured import with_structured_output
 from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
     FormalizedProperty, GroupStatus, Outcome, PropertyGroup, PropertyKey, RuleRef,
@@ -101,13 +103,13 @@ async def call_grouping_llm(
         contract_name=contract_name,
         properties=properties,
     )
-    bound = llm.with_structured_output(GroupingResult)
+    bound = with_structured_output(llm, GroupingResult)
 
     prompt = user
     for attempt in range(max_attempts):
         try:
             result = await bound.ainvoke([SystemMessage(system), HumanMessage(prompt)])
-        except ValidationError as e:
+        except (OutputParserException, ValidationError) as e:
             if attempt == max_attempts - 1:
                 raise
             _log.warning("report grouping rejected (attempt %d): %s", attempt + 1, e)

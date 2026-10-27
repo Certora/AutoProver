@@ -1,188 +1,319 @@
-"""A draft stamps when every rule it declares verified.
+"""``verify_rules``, driven as the author calls it.
 
-No cargo and no Prover. The report is a stand-in, and the stamp is the digest
-of the draft.
+No cargo and no Prover: the build, the section read, the conf write, and the
+submission are stand-ins. The stamp is the digest of the draft. A submission
+holds the build permit until the job's link arrives, and not through the cloud
+job.
 """
 
+import asyncio
+import dataclasses
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
+from langchain_core.messages import ToolMessage
 
 from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CompileFailed
-from composer.prover.core import ProverReport, _report_without_analysis
-from composer.prover.ptypes import Counterexample, LoopUnwound, RulePath, RuleResult
+from composer.diagnostics.timing import RunSummary, install_run_summary
+from composer.prover.conf import SelectRules
+from composer.prover.core import ProverReport
+from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.conf import TunableConf
-from composer.spec.cvlr.prover import BuildRejected, Checked, SubmissionFailed
+from composer.spec.cvlr.env_paths import PathDialect
+from composer.spec.cvlr.harness import HarnessModule
+from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing
+from composer.spec.cvlr.prover import Checked, Submission, SubmissionFailed
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
-from composer.spec.cvlr.tuning import SummaryDirective
-from composer.spec.cvlr.verify import VerifyRules
+from composer.spec.cvlr.tree import ProjectSource, SharedTree
+from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.cvlr.verify import (
+    BuildPermit,
+    HarnessTarget,
+    AuthorModel,
+    CexAnalysis,
+    StagedUnit,
+    VerifyDeps,
+    VerifyRules,
+)
+
+pytestmark = pytest.mark.asyncio
 
 _DRAFT = "#[rule]\nfn rule_a() {}\n#[rule]\nfn rule_b() {}\n"
 _LINK = "https://prover.certora.com/jobStatus/1/abc"
+_BUILT = SbfRun(duration_ms=1, verdict=Built(manifest=SimpleNamespace(artifact=Path("/w/prog.so"))), confined=True)  # type: ignore[arg-type]
 
 
-def _state(draft: str | None = _DRAFT) -> dict:
-    return {
+def _checked(*pairs: tuple[str, str]) -> Checked:
+    report = ProverReport(
+        raw_rule_status={RulePath(name): status for name, status in pairs},  # type: ignore[misc]
+        result_str="rules",
+        link=_LINK,
+        certora_run_stdout="",
+    )
+    return Checked(build=_BUILT, report=report)
+
+
+@dataclasses.dataclass
+class _Gate:
+    """The gate's stand-ins. Each test replaces what it is about."""
+
+    deps: VerifyDeps
+    build: SbfRun = _BUILT
+    names: set[str] | Exception = dataclasses.field(default_factory=lambda: {"rule_a", "rule_b"})
+    outcome: Any = dataclasses.field(default_factory=lambda: _checked(("rule_a", "VERIFIED"), ("rule_b", "VERIFIED")))
+    written: list[Submission] = dataclasses.field(default_factory=list)
+
+    state: dict[str, Any] = dataclasses.field(default_factory=lambda: {
         "messages": [],
-        "curr_spec": draft,
         "skipped": [],
-        "expected_failures": {},
         "summaries": [],
         "vfs": {},
         "version_history": [],
         "prover_settings": TunableConf(),
         "validations": {},
         "required_validations": [PROVER_VALIDATION_KEY],
+        "expected_failures": {},
         "property_rules": [],
         "rule_subjects": [],
         "failed": None,
         "budget_curtailed": False,
-    }
+    })
+
+    async def verify(self, draft: str | None = _DRAFT) -> Any:
+        state = {**self.state, "curr_spec": draft}
+        tool = VerifyRules.bind(self.deps).as_tool("verify_rules")
+        return await tool.ainvoke(
+            {"name": tool.name, "args": {"state": state}, "id": "tc", "type": "tool_call"}
+        )
+
+    @property
+    def sem(self) -> asyncio.Semaphore:
+        return self.deps.target.build_sem
 
 
-def _tool(draft: str | None = _DRAFT) -> VerifyRules:
-    return VerifyRules(state=_state(draft), tool_call_id="tc")  # type: ignore[arg-type]
-
-
-def _deps():
-    return SimpleNamespace(stamper=make_validation_stamper(PROVER_VALIDATION_KEY))
-
-
-def _report(
-    *pairs: tuple[str, str], incomplete: dict[str, LoopUnwound] | None = None
-) -> ProverReport:
-    return ProverReport(
-        raw_rule_status={RulePath(name): status for name, status in pairs},  # type: ignore[misc]
-        result_str="rules",
-        link=_LINK,
-        certora_run_stdout="",
-        incomplete=incomplete or {},
+def _target(tmp_path: Path) -> HarnessTarget:
+    return HarnessTarget(
+        session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
+        package="p",
+        package_root=tmp_path,
+        tuning=TuningFiles(envs_dir=tmp_path / "envs", dialect=PathDialect(), unit="deposits"),
+        unit=HarnessModule("deposits"),
+        tree=SharedTree(pristine=tmp_path / "project", root=tmp_path / "build", source=ProjectSource(roots=())),
+        build_sem=asyncio.Semaphore(1),
     )
 
 
-@pytest.mark.asyncio
-async def test_every_declared_rule_verified_stamps_the_draft():
-    tool = _tool()
-    out = await tool._report(
-        Checked(build=None, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VERIFIED"))),  # type: ignore[arg-type]
-        _deps(),  # type: ignore[arg-type]
-        declared=("rule_a", "rule_b"),
+def _bound_model() -> AuthorModel:
+    """Bound to a stand-in: the handler is built before every submission, and the submission is
+    a stand-in too, so nothing calls the model."""
+    model = AuthorModel()
+    model.bind(SimpleNamespace())  # type: ignore[arg-type]
+    return model
+
+
+@pytest.fixture
+def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
+    install_run_summary(RunSummary())
+    g = _Gate(
+        VerifyDeps(
+            target=_target(tmp_path),
+            submission=Submission(manifest_path=Path("p/Cargo.toml"), stem="unit", msg="m"),
+            submission_dir=tmp_path / "submissions",
+            prover_opts=None,  # type: ignore[arg-type]
+            stamper=make_validation_stamper(PROVER_VALIDATION_KEY),
+            analysis=CexAnalysis(store=None, model=_bound_model()),  # type: ignore[arg-type]
+        )
     )
 
-    history = tuning_history(tool.state)  # type: ignore[arg-type]
+    async def stage(self, _draft, _summaries, _overlay):
+        assert g.sem.locked(), "staged outside the build permit"
+        return StagedUnit(self, g.deps.target)
+
+    async def build(_session, _submission):
+        return g.build
+
+    def names(_so):
+        if isinstance(g.names, Exception):
+            raise g.names
+        return g.names
+
+    async def write(_session, submission, *, into):
+        g.written.append(submission)
+        return into / "unit.conf"
+
+    async def run_submission(*_args, **_kwargs):
+        return g.outcome
+
+    monkeypatch.setattr(BuildPermit, "stage", stage)
+    monkeypatch.setattr(verify_mod, "build_for_submission", build)
+    monkeypatch.setattr(verify_mod, "rule_names_in_elf", names)
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+    monkeypatch.setattr(verify_mod, "run_submission", run_submission)
+    return g
+
+
+def _text(out: Any) -> str:
+    return out.content if isinstance(out, ToolMessage) else out.update["messages"][0].content
+
+
+async def test_every_listed_rule_verified_stamps_the_draft(gate: _Gate):
+    out = await gate.verify()
+
+    history = tuning_history({**gate.state, "curr_spec": _DRAFT})  # type: ignore[arg-type]
     assert out.update["validations"] == {PROVER_VALIDATION_KEY: spec_digest(_DRAFT, [], history)}
     assert out.update["prover_link"] == _LINK
-    assert "stamped" in out.update["messages"][0].content
-    assert out.update["last_verdicts"].rules == ("rule_a", "rule_b")
+    assert "stamped" in _text(out)
 
 
-@pytest.mark.asyncio
-async def test_a_failing_rule_does_not_stamp():
-    out = await _tool()._report(
-        Checked(build=None, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))),  # type: ignore[arg-type]
-        _deps(),  # type: ignore[arg-type]
-        declared=("rule_a", "rule_b"),
-    )
+async def test_the_conf_names_the_section_and_selects_the_units_feature_and_settings(gate: _Gate):
+    """The section, not the draft, names the rules. The submission default is only `certora`,
+    which compiles the unit's module out. The settings are the unit's current ones."""
+    gate.state["prover_settings"] = TunableConf(loop_iter=4)
+    gate.names = {"rule_balance_conserved", "rule_only_authority_withdraws"}
+    gate.outcome = _checked()
+
+    await gate.verify()
+
+    [submission] = gate.written
+    assert submission.rules == SelectRules(("rule_balance_conserved", "rule_only_authority_withdraws"))
+    assert submission.features == ("certora", "certora_unit_deposits")
+    assert submission.settings == TunableConf(loop_iter=4)
+
+
+@pytest.mark.parametrize(
+    ("outcome", "said"),
+    [
+        pytest.param(
+            _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED")),
+            "Not accounted for: rule_b.",
+            id="a rule failed",
+        ),
+        pytest.param(_checked(("rule_a", "VERIFIED")), "No verdict came back for: rule_b.", id="a rule has no verdict"),
+    ],
+)
+async def test_a_listed_rule_that_did_not_verify_does_not_stamp(
+    gate: _Gate, outcome: Checked, said: str
+):
+    gate.outcome = outcome
+
+    out = await gate.verify()
 
     assert "validations" not in out.update
     assert out.update["prover_link"] == _LINK
-    assert "rule_b" in out.update["messages"][0].content
+    assert said in _text(out)
 
 
-@pytest.mark.asyncio
-async def test_a_missing_verdict_does_not_stamp():
-    out = await _tool()._report(
-        Checked(build=None, report=_report(("rule_a", "VERIFIED"))),  # type: ignore[arg-type]
-        _deps(),  # type: ignore[arg-type]
-        declared=("rule_a", "rule_b"),
-    )
+async def test_unreadable_symbols_are_said_rather_than_left_as_a_match(gate: _Gate):
+    gate.state["summaries"] = [SummaryDirective(pattern="^foo$", why="formatting")]
 
+    out = await gate.verify()
+
+    assert "could not be read" in _text(out)
+    assert "stamped" in _text(out)
+
+
+async def test_a_submission_without_results_does_not_stamp(gate: _Gate):
+    gate.outcome = SubmissionFailed(build=_BUILT, reason="the cloud job failed")
+
+    out = await gate.verify()
+
+    assert "cloud job failed" in _text(out)
     assert "validations" not in out.update
-    assert "rule_b" in out.update["messages"][0].content
+    assert not gate.sem.locked()
 
 
-@pytest.mark.asyncio
-async def test_a_rejected_build_reports_the_compiler_and_does_not_stamp():
-    rejected = BuildRejected(
-        build=SimpleNamespace(verdict=CompileFailed(diagnostics="error[E0425]: cannot find", exit_code=1))  # type: ignore[arg-type]
-    )
-
-    out = await _tool()._report(rejected, _deps(), declared=("rule_a",))  # type: ignore[arg-type]
-
-    assert "E0425" in out.update["messages"][0].content
-    assert "validations" not in out.update
-
-
-@pytest.mark.asyncio
-async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart():
-    """A loop bound is the prover's limit, not a finding about the program."""
-    assertion = "Unwinding condition in a loop. Try increasing the unwinding bound."
-    out = await _tool()._report(
-        Checked(
-            build=None,  # type: ignore[arg-type]
-            report=_report(
-                ("rule_a", "VERIFIED"),
-                ("rule_b", "VIOLATED"),
-                incomplete={"rule_b": LoopUnwound(assertion)},
-            ),
+@pytest.mark.parametrize(
+    ("build", "names", "said"),
+    [
+        pytest.param(
+            SbfRun(duration_ms=1, verdict=CompileFailed(diagnostics="error[E0425]: cannot find", exit_code=1), confined=True),
+            set(),
+            "E0425",
+            id="rejected build",
         ),
-        _deps(),  # type: ignore[arg-type]
-        declared=("rule_a", "rule_b"),
-    )
+        pytest.param(_BUILT, ManifestMissing("no section"), "no `.cvlr_rules` section", id="missing section"),
+        pytest.param(_BUILT, ManifestCorrupt("bad record", offset=12), "offset 12", id="corrupt section"),
+        pytest.param(_BUILT, set(), "nothing to submit", id="empty section"),
+    ],
+)
+async def test_nothing_is_written_or_stamped_and_the_permit_is_freed(
+    gate: _Gate, build: SbfRun, names: set[str] | Exception, said: str
+):
+    gate.build, gate.names = build, names
 
-    assert "validations" not in out.update
-    assert f"rule_b: {assertion}" in out.update["messages"][0].content
-    assert out.update["last_verdicts"].incomplete == ["rule_b"]
+    out = await gate.verify()
 
-
-@pytest.mark.asyncio
-async def test_a_submission_without_results_does_not_stamp():
-    out = await _tool()._report(
-        SubmissionFailed(build=None, reason="the cloud job failed"),  # type: ignore[arg-type]
-        _deps(),  # type: ignore[arg-type]
-        declared=("rule_a",),
-    )
-
-    assert "cloud job failed" in out.update["messages"][0].content
-    assert "validations" not in out.update
+    assert said in _text(out)
+    assert "nothing was submitted" in _text(out).lower() or "nothing to submit" in _text(out)
+    assert gate.written == []
+    assert not gate.sem.locked()
 
 
-@pytest.mark.asyncio
-async def test_unreadable_symbols_are_said_rather_than_left_as_a_match():
-    tool = _tool()
-    tool.state["summaries"] = [SummaryDirective(pattern="^foo$", why="formatting")]
-    build = SbfRun(
-        duration_ms=1,
-        verdict=Built(manifest=SimpleNamespace(artifact=Path("/nonexistent/prog.so"))),  # type: ignore[arg-type]
-        confined=True,
-    )
+async def test_no_draft_is_not_submitted(gate: _Gate):
+    out = await gate.verify(None)
 
-    out = await tool._report(
-        Checked(build=build, report=_report(("rule_a", "VERIFIED"), ("rule_b", "VERIFIED"))),
-        _deps(),  # type: ignore[arg-type]
-        declared=("rule_a", "rule_b"),
-    )
-
-    content = out.update["messages"][0].content
-    assert "could not be read" in content
-    assert "stamped" in content
+    assert _text(out) == "No harness written yet — put a draft first."
 
 
-@pytest.mark.asyncio
-async def test_no_draft_is_not_submitted():
-    out = await _tool(None).run()
+async def test_the_permit_is_held_until_the_upload_and_not_through_the_cloud_job(
+    gate: _Gate, monkeypatch: pytest.MonkeyPatch
+):
+    uploaded, cloud_done = asyncio.Event(), asyncio.Event()
+    held_during_local_phase: list[bool] = []
 
-    assert out == "No harness written yet — put a draft first."
+    async def run_submission(_prepared, *, callbacks, **_kwargs):
+        held_during_local_phase.append(gate.sem.locked())
+        await callbacks.on_prover_link(_LINK)
+        uploaded.set()
+        await cloud_done.wait()
+        return gate.outcome
+
+    monkeypatch.setattr(verify_mod, "run_submission", run_submission)
+
+    first = asyncio.create_task(gate.verify())
+    await uploaded.wait()
+
+    assert held_during_local_phase == [True], "a sibling could replace the .so being uploaded"
+    # The job is still in the cloud, and a sibling can build now.
+    async with asyncio.timeout(1):
+        async with gate.deps.target.build_slot():
+            pass
+
+    cloud_done.set()
+    assert "stamped" in _text(await first)
+    assert not gate.sem.locked()
 
 
-def test_a_report_without_analysis_leaves_out_the_counterexample():
-    """A dump per violated rule would flood the context of whoever reads the report."""
-    violated = RuleResult(
-        path=RulePath(rule="rule_b"),
-        counterexample=Counterexample(trace="<the-whole-trace/>"),
-        status="VIOLATED",
-    )
-    assert _report_without_analysis([violated]) == "rule_b: VIOLATED"
+async def test_releasing_a_permit_twice_releases_it_once(tmp_path: Path):
+    """Releasing twice must not leave an extra permit for another unit to take."""
+    target = _target(tmp_path)
+    sem = target.build_sem
+    permit = BuildPermit(target)
+    await permit.acquire()
+    permit.release()
+    permit.release()
+    await sem.acquire()
+    assert sem.locked(), "the semaphore was over-released"
+
+
+async def test_a_released_permit_does_not_stage(tmp_path: Path):
+    """A submission releases its permit at upload. A sibling may be building by then."""
+    async with _target(tmp_path).build_slot() as permit:
+        permit.release()
+        with pytest.raises(RuntimeError):
+            await permit.stage("// draft\n", (), {})
+
+
+async def test_a_released_permit_does_not_build(tmp_path: Path):
+    """What staging returned keeps no build alive past the permit."""
+    target = _target(tmp_path)
+    async with target.build_slot() as permit:
+        staged = StagedUnit(permit, target)
+        permit.release()
+        with pytest.raises(RuntimeError):
+            await staged.check()

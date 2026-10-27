@@ -46,7 +46,7 @@ from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, platform_tools_installed
 from composer.diagnostics.timing import RunSummary
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
-from composer.spec.cvlr.harness import DELIVERABLE_DIR
+from composer.spec.gen_types import CVLR_DELIVERABLE_DIR
 from composer.testing.cvlr_tape import (
     TAPE_NAME, missing_corpora, run_scenario, stage_scenario, tape_args,
 )
@@ -134,7 +134,7 @@ async def test_the_taped_run_writes_a_report_that_marks_its_builds(
 
     await run_scenario(project, RunSummary(), GenericRustConsoleHandler(set()).make_handler)
 
-    report = json.loads((project / DELIVERABLE_DIR / "reports" / "report.json").read_text())
+    report = json.loads((project / CVLR_DELIVERABLE_DIR / "reports" / "report.json").read_text())
     environment = report["build_environment"]
     assert environment is not None, "a backend that compiles the project must answer for its builds"
     if cvlr_confinement.enabled:

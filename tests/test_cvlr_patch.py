@@ -362,7 +362,7 @@ async def test_a_delivered_unit_gets_a_conf_and_the_summaries_it_names(tmp_path)
     assert sorted(p.name for p in (root / CONFS_DIR).iterdir()) == ["vault.conf"]
     conf = json.loads((root / CONFS_DIR / "vault.conf").read_text())
     assert "build_script" not in conf
-    assert conf["cargo_features"] == ["certora", "unit_vault"]
+    assert conf["cargo_features"] == ["certora", "certora_unit_vault"]
     assert conf["cargo_tools_version"] == PLATFORM_TOOLS_VERSION
     assert conf["loop_iter"] == "4" and conf["optimistic_loop"] is True
     assert conf["rule"] == ["rule_a", "rule_b"]

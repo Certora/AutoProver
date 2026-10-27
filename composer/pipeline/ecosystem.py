@@ -339,10 +339,8 @@ def _validate_program_components(prog: SolanaProgram) -> list[str]:
         slug = slugify_rust_module(comp.name)
         if slug in slug_origin:
             errors.append(
-                f"Components {slug_origin[slug]!r} and {comp.name!r} in {prog.name} both reduce "
-                f"to the slug {slug!r}, which names their Rust harness module (case is dropped, "
-                f"punctuation and symbols become underscores, and a leading digit or a Rust keyword "
-                f"gets a 'spec_' prefix); give them names that differ in more than that."
+                f"Components {slug_origin[slug]!r} and {comp.name!r} in {prog.name} "
+                f"reduce to the same slug {slug!r}; give them more-distinct names."
             )
         else:
             slug_origin[slug] = comp.name
@@ -561,10 +559,8 @@ def _validate_contract_components(contract: SorobanContract) -> list[str]:
         slug = slugify_rust_module(comp.name)
         if slug in slug_origin:
             errors.append(
-                f"Components {slug_origin[slug]!r} and {comp.name!r} in {contract.name} both "
-                f"reduce to the slug {slug!r}, which names their Rust harness module (case is "
-                f"dropped, punctuation and symbols become underscores, and a leading digit or a Rust "
-                f"keyword gets a 'spec_' prefix); give them names that differ in more than that."
+                f"Components {slug_origin[slug]!r} and {comp.name!r} in {contract.name} "
+                f"reduce to the same slug {slug!r}; give them more-distinct names."
             )
         else:
             slug_origin[slug] = comp.name

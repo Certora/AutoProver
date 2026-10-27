@@ -649,12 +649,13 @@ def _plan_feature_forwarding(
     library declares itself. Turning on the program's ``certora`` feature turns on each library's
     ``certora`` feature too.
 
-    Each verification unit also has its own feature (``unit_x``). Those features are empty and
-    affect only the program's own code (:func:`declare_unit_features`). If they were passed down
-    to the libraries (``unit_x = ["library/unit_x"]``), every unit would build the libraries with
-    different switches, so cargo would recompile them for each unit. Passing down only the shared
-    ``certora`` feature means every unit builds the libraries the same way. The trade-off is that
-    a library change marked this way is on for every unit, not only the one that needed it.
+    Each verification unit also has its own feature (``certora_unit_x``). Those features are
+    empty and affect only the program's own code (:func:`declare_unit_features`). If they were
+    passed down to the libraries (``certora_unit_x = ["library/certora_unit_x"]``), every unit
+    would build the libraries with different switches, so cargo would recompile them for each
+    unit. Passing down only the shared ``certora`` feature means every unit builds the libraries
+    the same way. The trade-off is that a library change marked this way is on for every unit,
+    not only the one that needed it.
 
     This runs at setup, not when the first library change is made. Cargo decides which features
     are on when a build starts, so a feature added to a library after that is not seen by that
@@ -983,10 +984,10 @@ def declare_unit_features(
 ) -> tuple[CargoFeature, ...]:
     """Declare one empty cargo feature per name, and return the ones this call added.
 
-    ``--features certora,unit_x`` fails with "Package does not contain this feature" unless
-    ``unit_x`` is declared. The features are empty. A feature that enabled a dependency feature
-    would change that dependency's resolved feature set and rebuild it per unit. Empty means only
-    this crate's own code varies with the feature.
+    ``--features certora,certora_unit_x`` fails with "Package does not contain this feature"
+    unless ``certora_unit_x`` is declared. The features are empty. A feature that enabled a
+    dependency feature would change that dependency's resolved feature set and rebuild it per
+    unit. Empty means only this crate's own code varies with the feature.
 
     A feature that is already declared is left as it is.
     """

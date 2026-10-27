@@ -995,11 +995,7 @@ def test_a_failed_compile_carries_the_compilers_own_words():
 
 @pytest.mark.asyncio
 async def test_a_prover_run_is_accounted_for():
-    """Link, runtime, and wall clock are recorded from the prover callbacks.
-
-    ``ProverCallbacks`` defaults do nothing, so a subclass that overrides only
-    some events records none of these.
-    """
+    """Link, runtime, and wall clock are recorded from the prover callbacks."""
     summary = RunSummary()
     install_run_summary(summary)
     callbacks = RunAccounting()

@@ -308,4 +308,6 @@ def summary_history(directives: tuple[SummaryDirective, ...]) -> tuple[str, ...]
     differently. ``why`` is left out, so rewording a justification does not
     require a new submission.
     """
-    return tuple(f"summary:{d.pattern}:{d.returns or ''}" for d in directives)
+    return tuple(
+        f"summary:{d.pattern}:{'' if d.returns is None else d.returns}" for d in directives
+    )

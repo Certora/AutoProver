@@ -41,8 +41,9 @@ ahead of all five as
 [#244](https://github.com/Certora/AutoProver/pull/244). **P3a2 is dropped.** The branch replaced the
 munge records with text edits ([who-edits-the-program.md](./who-edits-the-program.md) §18), so there is no
 munge vocabulary left to land; see [P3a](#p3a--the-working-copy-and-what-may-be-changed-in-it).
-`feature/solana` took master after #260 by merge (`899981fd`), and takes it again after #267 and
-#268. The next PR is **P3b2b**, [#280](https://github.com/Certora/AutoProver/pull/280), what a
+`feature/solana` took master after #260 by merge (`899981fd`). Since 2026-10-27 master reaches it
+only through `eric/solana-staging`, which merged `feature/solana` and then master after #268; the
+two branches merge each other and do not cherry-pick. The next PR is **P3b2b**, [#280](https://github.com/Certora/AutoProver/pull/280), what a
 verdict means. It was stacked on #268 and still carries #268's first commit, so it is rebased onto
 master before review. **P1b**, SDK 3 targets, follows it: a follow-up to master that the merge of
 `eric/solanaProver` made necessary. P3b2 was split in two on 2026-10-23, after its rebase onto
@@ -481,8 +482,9 @@ session. The gate submits with no counterexample handler, so `UnanalyzedCexHandl
 land: `verify_rules` reports a violated rule itself, and its report leaves the counterexample out.
 Counterexample analysis still rides **P6**. Unit features are prefixed `certora_unit_`, the conf
 directory is `submission_dir`, the deliverables stay out of the working tree, and the unit
-submission helpers (`submission_for`) are `VerifyDeps` methods. `rule_names_in_elf` refuses anything
-but an ELF64 little-endian object, and a `.cvlr_rules` section with no file bytes.
+submission helpers (`submission_for`) are `VerifyDeps` methods. `rule_names_in_elf` refuses a
+second `.cvlr_rules` section and leaves any other unreadable file to pyelftools: the ELF64 and
+`SHT_NOBITS` checks went in review, since rustc produces neither.
 
 **A follow-up the review asked for: choosing which rules to run.** `verify_rules` always submits
 every rule the build lists, and the reviewer prefers that it take a selection. Postponed; see

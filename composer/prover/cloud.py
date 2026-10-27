@@ -93,13 +93,13 @@ def parse_cloud_link(link: str) -> CloudJob:
     """Parse a CertoraRunResult.link URL into a CloudJob.
 
     Expected format:
-        https://prover.certora.com/jobStatus/{user_id}/{job_id}?anonymousKey=...
+        https://prover.certora.com/{jobStatus|output}/{user_id}/{job_id}?anonymousKey=...
     """
     parsed = urlparse(link)
     parts = [p for p in parsed.path.strip("/").split("/") if p]
 
-    # Expect: ["jobStatus", user_id, job_id]
-    if len(parts) < 3 or parts[0] != "jobStatus":
+    # Expect: [{"jobStatus"|"output"}, user_id, job_id]
+    if len(parts) < 3 or parts[0] not in ("jobStatus", "output"):
         raise ValueError(f"Unexpected cloud link format: {link}")
 
     user_id = parts[1]

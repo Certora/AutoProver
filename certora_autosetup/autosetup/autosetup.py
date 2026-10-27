@@ -49,6 +49,7 @@ from certora_autosetup.utils.paths import (
 )
 from certora_autosetup.utils.contract_utils import split_contract_spec
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager, FileContent, ProverJobSpec
+from certora_autosetup.utils.job_utils import extract_job_hash_from_url
 from certora_autosetup.utils.llm_util import get_ledger_rows
 from certora_autosetup.utils.project_dir import describe_build_config_dir, find_build_config_dir
 from certora_autosetup.utils.scope import Scope
@@ -925,9 +926,11 @@ class Autosetup:
                 return False
 
             if warmup_result.success:
-                self.log(
-                    f"✓ Completed: {warmup_result.job_handle.phase} for {warmup_result.job_handle.job_id.split('/')[-1]}"
-                )
+                job_ref = warmup_result.job_handle.job_id
+                # A cloud job_id is the job URL; its last path segment can be "report", so name
+                # the job by its hash instead.
+                job_label = extract_job_hash_from_url(job_ref) if job_ref.startswith("http") else job_ref.split('/')[-1]
+                self.log(f"✓ Completed: {warmup_result.job_handle.phase} for {job_label}")
                 if warmup_result.job_handle.job_id.startswith("http"):
                     self.log(f"📎 Job URL: {warmup_result.job_handle.job_id}")
                 self.log("✅ Sanity job completed")
@@ -964,6 +967,7 @@ class Autosetup:
                 max_prover_invocations=10,
                 verbose=bool(self.config.verbose),
                 skip_proxy_detection=self.config.skip_proxy_detection,
+                proxy_mappings=self.config.proxy_mappings,
                 skip_harnessing=self.config.skip_harnessing,
                 summary_setup=self.setup_prover.summary_setup,
                 library_resolver=self.libraries_for_contracts,
