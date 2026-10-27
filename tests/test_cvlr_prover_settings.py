@@ -97,27 +97,24 @@ def test_turning_optimistic_loop_on_without_a_reason_is_refused():
     assert isinstance(out, str) and "non-empty `why`" in out
 
 
-def test_a_loop_bound_change_does_not_require_a_reason():
-    """With ``optimistic_loop`` off, a loop bound does not change what a green verdict means."""
+def test_a_loop_bound_change_without_a_reason_is_refused():
+    """A bound is part of what a verdict means once ``optimistic_loop`` is on."""
     out = _adjust(_state(), loop_iter=4, why="")
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"].loop_iter == 4
-    assert out.update["prover_settings"].optimistic_loop is False
+    assert isinstance(out, str) and "non-empty `why`" in out
 
 
-def test_a_loop_bound_change_under_optimistic_loop_requires_a_reason():
-    """With ``optimistic_loop`` on, the bound is what every green verdict assumes."""
+def test_a_loop_bound_change_that_turns_optimistic_loop_off_still_requires_a_reason():
     state = _state(TunableConf(optimistic_loop=True))
-    out = _adjust(state, loop_iter=1, why="")
+    out = _adjust(state, loop_iter=4, optimistic_loop=False, why="")
     assert isinstance(out, str) and "non-empty `why`" in out
     assert state["prover_settings"] == TunableConf(optimistic_loop=True)
 
 
-def test_a_loop_bound_change_that_turns_optimistic_loop_off_does_not_require_a_reason():
+def test_turning_optimistic_loop_off_does_not_require_a_reason():
     state = _state(TunableConf(optimistic_loop=True))
-    out = _adjust(state, loop_iter=4, optimistic_loop=False, why="")
+    out = _adjust(state, optimistic_loop=False, why="")
     assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == TunableConf(loop_iter=4)
+    assert out.update["prover_settings"] == TunableConf()
 
 
 def test_a_config_change_invalidates_the_prover_stamp():

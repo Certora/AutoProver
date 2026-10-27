@@ -164,9 +164,10 @@ class AdjustProverConfig(
     )
     why: str = Field(
         default="",
-        description="Required when turning `optimistic_loop` on, and when changing `loop_iter` "
-        "while it is on. What you tried first, and why assuming every loop finishes within "
-        "`loop_iter` is sound for this batch. Not written into the conf. A loop-bound change with "
+        description="Required when changing `loop_iter` or turning `optimistic_loop` on. For a "
+        "bound, what the last run reported and why this bound suits the property. With "
+        "`optimistic_loop` on, also what you tried first, and why assuming every loop finishes "
+        "within `loop_iter` is sound for this batch. Not written into the conf. Turning "
         "`optimistic_loop` off does not use it.",
     )
 
@@ -174,15 +175,11 @@ class AdjustProverConfig(
     def run(self) -> Command | str:
         if self.loop_iter is None and self.optimistic_loop is None:
             return "No edits given."
-        settings = self.state["prover_settings"]
-        optimistic_after = (
-            settings.optimistic_loop if self.optimistic_loop is None else self.optimistic_loop
-        )
-        if optimistic_after and not self.why.strip():
+        if (self.loop_iter is not None or self.optimistic_loop is True) and not self.why.strip():
             return (
-                "A non-empty `why` is required to turn `optimistic_loop` on, or to change "
-                "`loop_iter` while it is on."
+                "A non-empty `why` is required to change `loop_iter` or turn `optimistic_loop` on."
             )
+        settings = self.state["prover_settings"]
         if self.loop_iter is not None:
             if self.loop_iter < 1:
                 return f"A loop bound of {self.loop_iter} is not a bound; it has to be at least 1."
