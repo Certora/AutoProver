@@ -123,9 +123,14 @@ class AdjustProverConfig(
 ):
     """Change this unit's prover settings.
 
-    The list is closed. ``loop_iter`` decides how far the prover unrolls a loop
-    and does not change what a green verdict means. ``optimistic_loop`` does,
-    and it applies to every rule in the unit.
+    The list is closed. Both settings apply to every rule in the unit.
+
+    With ``optimistic_loop`` off, ``loop_iter`` only decides how far the prover
+    unrolls a loop. A rule that verifies is verified at any bound; a bound too
+    low shows up as a violation, not as a weaker green. With ``optimistic_loop``
+    on, ``loop_iter`` is the assumption itself: a green verdict covers only
+    executions whose loops finish within ``loop_iter`` iterations, so lowering
+    the bound weakens every verdict in the unit.
 
     Omit a field to leave it. A call that sets neither is refused. A change
     invalidates the prover stamp. Re-run ``verify_rules``.
@@ -136,7 +141,10 @@ class AdjustProverConfig(
         description="The new loop bound, or omit to leave it. While `optimistic_loop` is off, the "
         "Prover unrolls an unbounded loop this many times and then asserts that the loop has "
         "finished. A rule that verifies at this bound is verified. A rule that cannot comes back "
-        "VIOLATED on \"Unwinding condition in a loop\". Set it as low as the property allows. Cost "
+        "VIOLATED on \"Unwinding condition in a loop\". While `optimistic_loop` is on, the bound "
+        "is no longer checked but assumed: a VERIFIED rule holds only for executions whose loops "
+        "finish within this many iterations, so the bound is part of what every verdict in the "
+        "unit means. Set it as low as the property allows. Cost "
         "grows exponentially, and above 3 or 4 it grows faster than the answer is usually worth. "
         "Raise it after bounding whatever determines the trip count, and after deciding whether "
         "the loop is in the property's way.",
@@ -144,9 +152,9 @@ class AdjustProverConfig(
     optimistic_loop: bool | None = Field(
         default=None,
         description="True to assume loops finish within the bound, false to assert it again, or "
-        "omit to leave the setting. This is the setting that changes what a verdict means. With it "
-        "on, the Prover does not check that the unroll bound was enough, so a violation on a later "
-        "iteration is never found and the rule reports VERIFIED. Every rule in the submission is "
+        "omit to leave the setting. This is the setting that makes `loop_iter` part of what a "
+        "verdict means. With it on, the Prover does not check that the unroll bound was enough, so "
+        "a violation on a later iteration is never found and the rule reports VERIFIED. Every rule in the submission is "
         "affected. Use it only for a loop whose trip count the analysis cannot fix: raising the "
         "bound does not terminate, because the reported iteration goes up with the bound, and no "
         "summary directive can name the loop. Check that first by moving the bound and reading "
@@ -156,18 +164,25 @@ class AdjustProverConfig(
     )
     why: str = Field(
         default="",
-        description="Required when turning `optimistic_loop` on. What you tried first, and why "
-        "assuming every loop finishes within `loop_iter` is sound for this batch. Not written into "
-        "the conf. A loop-bound change does not use it.",
+        description="Required when turning `optimistic_loop` on, and when changing `loop_iter` "
+        "while it is on. What you tried first, and why assuming every loop finishes within "
+        "`loop_iter` is sound for this batch. Not written into the conf. A loop-bound change with "
+        "`optimistic_loop` off does not use it.",
     )
 
     @override
     def run(self) -> Command | str:
         if self.loop_iter is None and self.optimistic_loop is None:
             return "No edits given."
-        if self.optimistic_loop is True and not self.why.strip():
-            return "A non-empty `why` is required to turn `optimistic_loop` on."
         settings = self.state["prover_settings"]
+        optimistic_after = (
+            settings.optimistic_loop if self.optimistic_loop is None else self.optimistic_loop
+        )
+        if optimistic_after and not self.why.strip():
+            return (
+                "A non-empty `why` is required to turn `optimistic_loop` on, or to change "
+                "`loop_iter` while it is on."
+            )
         if self.loop_iter is not None:
             if self.loop_iter < 1:
                 return f"A loop bound of {self.loop_iter} is not a bound; it has to be at least 1."

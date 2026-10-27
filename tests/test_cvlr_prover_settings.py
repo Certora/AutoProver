@@ -1,9 +1,10 @@
 """``adjust_prover_config``: the two prover settings the author may move.
 
-The list is closed. The loop bound decides how the prover spends its time. ``optimistic_loop``
-decides what a green verdict means, and is on the list because the sound remedies for a loop whose
-trip count the analysis cannot fix run out before the problem does. A ``rule_sanity`` downgrade and
-the prover flags are not on it.
+The list is closed. With ``optimistic_loop`` off, the loop bound decides how the prover spends its
+time. ``optimistic_loop`` decides what a green verdict means, and with it on the loop bound is part
+of that meaning. It is on the list because the sound remedies for a loop whose trip count the
+analysis cannot fix run out before the problem does. A ``rule_sanity`` downgrade and the prover
+flags are not on it.
 """
 
 from composer.spec.cvlr.author_tools import AdjustProverConfig
@@ -97,11 +98,26 @@ def test_turning_optimistic_loop_on_without_a_reason_is_refused():
 
 
 def test_a_loop_bound_change_does_not_require_a_reason():
-    """A loop bound does not change what a green verdict means."""
+    """With ``optimistic_loop`` off, a loop bound does not change what a green verdict means."""
     out = _adjust(_state(), loop_iter=4, why="")
     assert not isinstance(out, str), out
     assert out.update["prover_settings"].loop_iter == 4
     assert out.update["prover_settings"].optimistic_loop is False
+
+
+def test_a_loop_bound_change_under_optimistic_loop_requires_a_reason():
+    """With ``optimistic_loop`` on, the bound is what every green verdict assumes."""
+    state = _state(TunableConf(optimistic_loop=True))
+    out = _adjust(state, loop_iter=1, why="")
+    assert isinstance(out, str) and "non-empty `why`" in out
+    assert state["prover_settings"] == TunableConf(optimistic_loop=True)
+
+
+def test_a_loop_bound_change_that_turns_optimistic_loop_off_does_not_require_a_reason():
+    state = _state(TunableConf(optimistic_loop=True))
+    out = _adjust(state, loop_iter=4, optimistic_loop=False, why="")
+    assert not isinstance(out, str), out
+    assert out.update["prover_settings"] == TunableConf(loop_iter=4)
 
 
 def test_a_config_change_invalidates_the_prover_stamp():
