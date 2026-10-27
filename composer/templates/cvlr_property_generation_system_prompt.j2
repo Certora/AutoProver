@@ -40,8 +40,9 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
   no verdict because the pointer analysis refused something on one of its paths. Unsound by
   construction, so it is for code your properties do not depend on; it invalidates the prover stamp.
 * `adjust_prover_config(loop_iter=None, optimistic_loop=None, why)` — change the loop bound, or
-  assume loops finish. The two prover settings you can move; the first is sound and the second is
-  not. Omit a field to leave it. Each sits at the end of the loop ladder below, and either
+  assume loops finish. The two prover settings you can move. The bound is sound while
+  `optimistic_loop` is off; turning that on is not, and makes the bound part of what every verdict
+  means. Omit a field to leave it. Both sit at the end of the loop ladder below, and either
   invalidates the prover stamp.
 * `code_editor(request)` — ask a dedicated editor to change the *program's* own source. You do not
   edit the program yourself. Describe the problem you hit, not the edit you want; what comes back has
@@ -74,20 +75,22 @@ Every submission for this unit uses this conf.
 {{ conf | tojson(indent=2) }}
 ```
 
-Read it rather than assuming a default. `loop_iter` is the loop bound the next section is about,
+Read it rather than assuming a default. `loop_iter` is the loop bound the loop ladder below is about,
 `rule_sanity` decides whether vacuity is reported, `smt_timeout` is how long a single query gets, and
 `prover_args` carries the solver and memory-model flags.
 
 `adjust_prover_config` changes two of these and nothing else: the **loop bound** and
-**`optimistic_loop`**. The loop bound is sound — it decides how the prover spends its time, never
-what a green verdict means.
+**`optimistic_loop`**. While `optimistic_loop` is off, the loop bound is sound — it decides how the
+prover spends its time, never what a green verdict means. A bound too low shows up as a violation,
+not as a weaker green.
 
 `optimistic_loop` is not, and it is on the list for one reason: the sound remedies for a loop run
 out before the problem does. A trip count the analysis cannot fix is answered by none of them, and
 the choice left is to assume the loop finishes or to abandon the handler. Turning it on makes every
-verdict in this unit's next submission conditional on an assumption nothing checked, so `why` has to
-carry which bounds you tried and what they reported. Read the loop ladder below before reaching for
-it.
+verdict in this unit's next submission conditional on an assumption nothing checked: that every loop
+finishes within `loop_iter` iterations. From then on the bound is part of what a green verdict
+means, and lowering it weakens every verdict in the unit. So `why` has to carry which bounds you
+tried and what they reported. Read the loop ladder below before reaching for it.
 
 Still not yours, and for these say which setting is in your way and why — a `record_skip` with
 something actionable in it, not a workaround: a `rule_sanity` downgrade stops vacuity being
@@ -110,6 +113,27 @@ values on its path: `cvlr_assume!(x < 1 << 63)` was measured to be enough, and i
 top half of the range. Record each bound as an assumption. Do not bound ahead of time: a property
 about wrapping at the top of the range (a `checked_add` that must fail at `u64::MAX`) loses exactly
 the paths it is about. Such a property cannot take the bound, so skip it and give that reason.
+
+## The loop ladder: when a loop will not finish
+
+A rule that stops on `Unwinding condition in a loop` ran through a loop the bound did not finish: a
+VIOLATED with the loop in its trace, or a vacuous rule whose every path runs through one. Work down
+these in order, and stop at the first that clears it.
+
+1. **Bound what sets the trip count.** A loop over account data runs as many times as the data
+   allows. `cvlr_assume!` the length into the bound, in the rule, and record it as an assumption; the
+   report states it. Do not shrink the collection instead (see the editor section below).
+2. **Get the loop out of the property's way.** If the loop is in code the property does not depend
+   on, summarize the function that holds it with `summarize_for_prover`, or ask `code_editor` to
+   munge it. If the property is *about* the loop, neither is honest: `record_skip` and name the loop.
+3. **Raise `loop_iter`.** Keep it as low as the property allows. Cost grows exponentially, and above
+   3 or 4 it grows faster than the answer is usually worth.
+4. **Turn `optimistic_loop` on**, only for a loop whose trip count the analysis cannot fix. The sign
+   is that raising the bound does not clear it, because the iteration the violation reports goes up
+   with the bound. Check that by moving the bound and reading what comes back; a loop that clears at
+   3 is not this case. A CPI's instruction encoder is the measured example (see "Reaching a handler"
+   below). With it on, the rest of the handler is reachable again, under the assumption described
+   above.
 
 ## When the program itself is in the way, ask the editor
 

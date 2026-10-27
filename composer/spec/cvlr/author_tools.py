@@ -81,22 +81,11 @@ class SummarizeForProver(
 ):
     """Tell the prover to replace a function with an unconstrained stand-in.
 
-    Use this when a rule gets no verdict because the pointer analysis refused
-    something on its path. The usual case is [3308] on an Anchor
-    ``#[error_code]`` enum formatting its ``#[msg]`` string, which any
-    ``require!`` or ``?`` in a called handler can reach. Summarizing that
-    formatting code makes the rest of the handler analyzable.
+    The stand-in returns an unconstrained value and writes only the locations
+    ``returns`` names. Every other store the real function makes is dropped.
 
-    A summary is unsound, and the prover does not report that. The call returns
-    an unconstrained value and writes only the locations ``returns`` names.
-    Every other store the real function makes is dropped. Summarizing code a
-    property is about can make the rule pass having checked nothing, with no
-    trace in the harness. Summarize only code the properties do not depend on.
-    Do not summarize a handler, a function that writes state you assert over,
-    or one that computes a value you assert over.
-
-    Adding one invalidates the prover stamp. The previous run's verdicts were
-    about a different build. Re-run ``verify_rules``.
+    The directive applies from the next build. Adding one invalidates the
+    prover stamp. Re-run ``verify_rules``.
     """
 
     symbol_pattern: str = Field(
@@ -111,9 +100,11 @@ class SummarizeForProver(
     )
     returns: str | None = Field(
         default=None,
-        description="The `#[type(...)]` body, without the wrapper, when the summarized function's "
-        "return value needs a shape — e.g. `(*i32)(r1+0):num`. Omit for an unconstrained return, "
-        "which is right for a function whose result nothing asserts over.",
+        description="What the summarized function returns, as `<location>:<kind>` — e.g. "
+        "`(*i32)(r1+0):num`. A location is `r0` (the return register) or memory at an offset from "
+        "a register, such as `(*i64)(r1+8)` for an out-pointer return. A kind is `num`, "
+        "`ptr_heap` or `ptr_external`. Give only that text; the `#[type(` and `)]` around it are "
+        "added for you. Omit to leave the return unconstrained.",
     )
 
     @override
@@ -163,45 +154,29 @@ def _config_change(args: dict) -> str:
 class AdjustProverConfig(
     WithInjectedState[CvlrGenerationState], WithInjectedId, WithImplementation[Command | str]
 ):
-    """Change this unit's prover settings.
+    """Change this unit's loop bound or its ``optimistic_loop`` setting.
 
-    The list is closed. ``loop_iter`` decides how far the prover unrolls a loop
-    and does not change what a green verdict means. ``optimistic_loop`` does,
-    and it applies to every rule in the unit. ``rule_sanity`` and the
-    memory-model flags are not settings here.
-
-    Omit a field to leave it. A call that sets neither is refused. A change
-    invalidates the prover stamp. Re-run ``verify_rules``.
+    No other prover setting can be changed here. Both apply to every rule in
+    the unit. Omit a field to leave it. A call that sets neither is refused. A
+    change invalidates the prover stamp. Re-run ``verify_rules``.
     """
 
     loop_iter: int | None = Field(
         default=None,
-        description="The new loop bound, or omit to leave it. While `optimistic_loop` is off, the "
-        "Prover unrolls an unbounded loop this many times and then asserts that the loop has "
-        "finished. A rule that verifies at this bound is verified. A rule that cannot comes back "
-        "VIOLATED on \"Unwinding condition in a loop\". Set it as low as the property allows. Cost "
-        "grows exponentially, and above 3 or 4 it grows faster than the answer is usually worth. "
-        "Raise it after bounding whatever determines the trip count, and after deciding whether "
-        "the loop is in the property's way.",
+        description="How many times the prover unrolls a loop, at least 1. Omit to leave it. "
+        "While `optimistic_loop` is off, the prover then asserts the loop has finished, and a loop "
+        "that needs more iterations comes back VIOLATED on \"Unwinding condition in a loop\". "
+        "While it is on, the prover assumes the loop has finished instead.",
     )
     optimistic_loop: bool | None = Field(
         default=None,
-        description="True to assume loops finish within the bound, false to assert it again, or "
-        "omit to leave the setting. This is the setting that changes what a verdict means. With it "
-        "on, the Prover does not check that the unroll bound was enough, so a violation on a later "
-        "iteration is never found and the rule reports VERIFIED. Every rule in the submission is "
-        "affected. Use it only for a loop whose trip count the analysis cannot fix: raising the "
-        "bound does not terminate, because the reported iteration goes up with the bound, and no "
-        "summary directive can name the loop. Check that first by moving the bound and reading "
-        "what comes back. A loop that discharges at 3 is not this case. If the property is about "
-        "the loop, use `record_skip` and name the loop. With the setting on, the rest of the "
-        "handler is reachable again. Say in `why` which bounds you tried and what they reported. "
-        "A reader weighs every verdict in the unit against that account.",
+        description="True to assume every loop finishes within `loop_iter` iterations instead of "
+        "asserting it, false to assert it again. Omit to leave it.",
     )
     why: str = Field(
-        description="What you tried first and why this setting is the remedy. The conf is written "
-        "into the deliverable, so this is the account a reader gets of why it differs from the "
-        "starting one. When `optimistic_loop` is turned on, this is the reason stored with it."
+        description="Which bounds you tried, what they reported, and why this setting is the "
+        "remedy. The conf ships with the deliverable, and when `optimistic_loop` is turned on this "
+        "is the reason stored with it."
     )
 
     @override

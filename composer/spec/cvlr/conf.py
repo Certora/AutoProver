@@ -74,7 +74,8 @@ class TunableConf:
     #: Off. The author treats it as a last resort, preferring to bound the inputs that set the trip
     #: count first, then summarize or munge the code that holds the loop, then raise ``loop_iter``,
     #: and finally turn it on only for a trip count that no bound discharges. Once it is on, every
-    #: rule in the submission is verified under that assumption.
+    #: rule in the submission is verified assuming its loops finish within ``loop_iter``, so the
+    #: bound becomes part of what a verdict means.
     optimistic_loop: OptimisticLoop | None = None
 
 

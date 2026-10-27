@@ -211,8 +211,8 @@ class SummaryDirective:
     #: Why analyzing it fails, and why summarizing it is sound for this batch.
     #: Written into the unit's tuning file and the report.
     why: str
-    #: The ``#[type(...)]`` body, without the wrapper. ``None`` leaves the return
-    #: unconstrained.
+    #: ``<location>:<kind>``, such as ``(*i32)(r1+0):num``. :meth:`render` wraps
+    #: it in ``#[type(...)]``. ``None`` leaves the return unconstrained.
     returns: str | None = None
 
     def render(self) -> str:
