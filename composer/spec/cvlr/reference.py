@@ -309,25 +309,18 @@ class ChainReference:
 _CORE = CrateRelease("cvlr", "0.6.2")
 
 #: ``cvlr-solana`` 0.5.1: 0.5.0 with the public API documented and the ``rt`` feature fixed. The
-#: three crates of that repository are released together, at one version and from one commit.
-#:
-#: TODO(cvlr-todo U26): pin the crates.io release once it is published, and drop the commit.
-_CVLR_SOLANA_0_5_1 = GitCommit(
-    repo="https://github.com/Certora/cvlr-solana.git",
-    rev="2e53877a4d9ffb10aff5dc21829fd073f00333a6",
-)
-
+#: three crates of that repository are released together, at one version.
 SOLANA_V2 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.5.1", _CVLR_SOLANA_0_5_1),
+    chain_crate=CrateRelease("cvlr-solana", "0.5.1"),
     models=(
         ProgramModel(
-            CrateRelease("cvlr-solana-stake", "0.5.1", _CVLR_SOLANA_0_5_1), "the stake program"
+            CrateRelease("cvlr-solana-stake", "0.5.1"), "the stake program"
         ),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
         # summaries. Split out of the chain crate, and released with it.
         ProgramModel(
-            CrateRelease("cvlr-spl-token", "0.5.1", _CVLR_SOLANA_0_5_1), "the SPL token program"
+            CrateRelease("cvlr-spl-token", "0.5.1"), "the SPL token program"
         ),
     ),
     forks=(ANCHOR_FORK, FIXED_FORK),
@@ -458,16 +451,9 @@ SOLANA_V3 = replace(
 #: ``cvlr-solana`` 0.4.6, the release for ``solana-program`` 1.18 (branch ``v0.4``): 0.4.5 with
 #: the public API documented and the ``rt`` feature fixed. It requires ``cvlr-*`` ``>=0.4, <1``,
 #: so it resolves onto the shared 0.6.2 core with one copy of each core crate.
-#:
-#: TODO(cvlr-todo U26): pin the crates.io release once it is published, and drop the commit.
-_CVLR_SOLANA_0_4_6 = GitCommit(
-    repo="https://github.com/Certora/cvlr-solana.git",
-    rev="b1988a4a8e6a6f8c56b35b5c980e5b2d2a4f01fc",
-)
-
 SOLANA_V1_18 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.4.6", _CVLR_SOLANA_0_4_6),
+    chain_crate=CrateRelease("cvlr-solana", "0.4.6"),
     # None. The 0.4 line has no stake model, and its token helpers are in the chain crate. It has
     # no SPL Token CPI model either: a token CPI reaches ``invoke_signed_unchecked``, which the
     # core summaries make opaque.

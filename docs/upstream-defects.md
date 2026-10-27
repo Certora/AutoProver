@@ -1565,12 +1565,12 @@ That is fixed too (`SOLANA_TRACE` in `composer/prover/results.py`).
 ### `cvlr-solana` is bound to `solana-program` 2.2, so a program on the current SDK cannot be scaffolded at all
 
 **Ported, released as a commit, not published.** `cvlr-solana` 0.6.0, on the split `solana-*` 3.x
-crates and with both program models, is release commit `f054348` on branch `eric/sdk3` of
-`Certora/cvlr-solana`. The 0.5.1 release it builds on is merged
-([cvlr-solana#22](https://github.com/Certora/cvlr-solana/pull/22)); its own PR is not open yet.
+crates and with both program models, is release commit `f054348` on branch `eric/release-0.6.0` of
+`Certora/cvlr-solana`, in review as
+[cvlr-solana#24](https://github.com/Certora/cvlr-solana/pull/24).
 AutoProver's `SOLANA_V3` reference set reads it from that commit through a `[patch.crates-io]` entry
 ([`reference.py`](../composer/spec/cvlr/reference.py)), so SDK 3 programs are scaffolded and run.
-On crates.io the newest release is still 0.5.0
+On crates.io the newest release is 0.5.1, the SDK 2 line
 ([cvlr-sdk3-support.md](./cvlr-sdk3-support.md), *Publishing*). Reading a release from a commit is a
 ship blocker, [cvlr-todo.md](./cvlr-todo.md) U26.
 

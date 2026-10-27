@@ -40,6 +40,7 @@ from composer.spec.cvlr.scaffold import (
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
 from composer.spec.cvlr.reference import SOLANA_V1_18, SOLANA_V2, SOLANA_V3, SOROBAN, generations
 from composer.sandbox.config import SandboxConfig
+from tests.conftest import CVLR_SOLANA_0_5_1_COMMIT, read_from_commit
 
 PROGRAM = """\
 use solana_program::account_info::AccountInfo;
@@ -1023,6 +1024,8 @@ def test_the_forks_planned_are_the_reference_chains_own(tmp_path):
 # ---------------------------------------------------------------------------------------------
 # unpublished CVLR releases
 
+_UNPUBLISHED = read_from_commit(SOLANA_V2, CVLR_SOLANA_0_5_1_COMMIT)
+
 
 def _commit_patches(plan) -> dict[str, AddTable]:
     return {
@@ -1036,11 +1039,12 @@ def _commit_patches(plan) -> dict[str, AddTable]:
 def test_an_unpublished_release_is_read_from_its_commit(tmp_path):
     """The project declares the crates.io spelling, so the pin gate reads it like any release, and
     the patch is what sends cargo to the commit."""
-    plan, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    plan = plan_scaffold(workspace, package, _UNPUBLISHED)
     assert not plan.blocked
     patches = _commit_patches(plan)
-    assert set(patches) == {p.name for p in SOLANA_V2.from_commits()}
-    for patch in SOLANA_V2.from_commits():
+    assert set(patches) == {p.name for p in _UNPUBLISHED.from_commits()}
+    for patch in _UNPUBLISHED.from_commits():
         body = patches[patch.name].body
         assert ("git", patch.commit.repo) in body and ("rev", patch.commit.rev) in body
     tomllib.loads(apply_and_read(plan, tmp_path))
@@ -1054,7 +1058,7 @@ def apply_and_read(plan, root: Path) -> str:
 def test_a_withheld_model_gets_no_patch(tmp_path):
     """Cargo warns, on every build, about a patch for a crate nothing depends on."""
     workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
-    plan = plan_scaffold(workspace, package, SOLANA_V2.withholding("cvlr-solana-stake"))
+    plan = plan_scaffold(workspace, package, _UNPUBLISHED.withholding("cvlr-solana-stake"))
     assert "cvlr-solana-stake" not in _commit_patches(plan)
     assert "cvlr-solana" in _commit_patches(plan)
 
@@ -1062,16 +1066,16 @@ def test_a_withheld_model_gets_no_patch(tmp_path):
 def test_a_project_already_reading_the_commit_is_left_as_it_is(tmp_path):
     kwargs = dict(manifest=STANDALONE, workspace_manifest=STANDALONE)
     workspace, package = _project(tmp_path, **kwargs)
-    apply(plan_scaffold(workspace, package, SOLANA_V2), tmp_path)
+    apply(plan_scaffold(workspace, package, _UNPUBLISHED), tmp_path)
 
-    crate = next(p for p in SOLANA_V2.from_commits() if p.name == "cvlr-solana")
+    crate = next(p for p in _UNPUBLISHED.from_commits() if p.name == "cvlr-solana")
     commit = crate.commit
     at_commit = GitSource.parse(f"git+{commit.repo}?rev={commit.rev}#{commit.rev}")
     workspace, package = _project(
         tmp_path, **kwargs,
         cvlr_resolved={crate.name: crate.version}, sources={crate.name: at_commit},
     )
-    again = plan_scaffold(workspace, package, SOLANA_V2)
+    again = plan_scaffold(workspace, package, _UNPUBLISHED)
     assert not again.blocked
     assert not _commit_patches(again)
     assert any(f"already read from {commit.repo}" in note for note in again.satisfied)
@@ -1081,14 +1085,14 @@ def test_a_project_already_reading_the_commit_is_left_as_it_is(tmp_path):
 def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
     """Its entry is somebody's decision, and building on it verifies against a release this build
     does not pin."""
-    crate = next(p for p in SOLANA_V2.from_commits() if p.name == "cvlr-solana")
+    crate = next(p for p in _UNPUBLISHED.from_commits() if p.name == "cvlr-solana")
     commit = crate.commit
     manifest = STANDALONE + f'\n[patch.crates-io]\n{crate.name} = {{ path = "../cvlr-solana" }}\n'
     workspace, package = _project(
         tmp_path, manifest=manifest, workspace_manifest=manifest,
         cvlr_resolved={crate.name: crate.version}, sources={crate.name: None},
     )
-    plan = plan_scaffold(workspace, package, SOLANA_V2)
+    plan = plan_scaffold(workspace, package, _UNPUBLISHED)
     (blocked,) = [b for b in plan.blocked if crate.name in b.problem]
     assert "a path in this workspace" in blocked.problem and commit.rev in blocked.problem
 

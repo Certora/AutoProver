@@ -14,7 +14,7 @@ G1, G2, G5, G6 and G7 are implemented. The probe below establishes that the comb
 |---|---|---|
 | G1 | A 1.18 reference set | **done** |
 | G2 | Telling 1.17 from 1.18 | **done**: 1.x keyed on major.minor |
-| G3 | Document `cvlr-solana` 0.4.x | **done**: 0.4.6, pinned by its `v0.4` commit ([cvlr-solana#23](https://github.com/Certora/cvlr-solana/pull/23)) |
+| G3 | Document `cvlr-solana` 0.4.x | **done**: 0.4.6, published ([cvlr-solana#23](https://github.com/Certora/cvlr-solana/pull/23)) |
 | G4 | Scope the API corpus to 1.18 | **done**: generated and ingested locally |
 | G5 | Knowledge text: what the manual gets wrong on 1.18 | **done** |
 | G6 | Run the compile gate against the SBF target | **done** |
@@ -115,8 +115,8 @@ bump with a changelog entry (`a5032ba`). The hand edits were the ones listed. Th
 CI's checks pass: `cargo doc -D warnings -D missing_docs` with all features (so `rt` builds),
 clippy and fmt. Pushed to `Certora/cvlr-solana` and opened as
 [#23](https://github.com/Certora/cvlr-solana/pull/23), squash-merged into `v0.4` as `b1988a4` (the
-same tree as `a5032ba`). `SOLANA_V1_18` pins `b1988a4`, and a crate declaring the set resolves and
-compiles it from GitHub.
+same tree as `a5032ba`). `SOLANA_V1_18` pinned `b1988a4` until 0.4.6 was published on 2026-10-27,
+tagged `cvlr-solana-v0.4.6`; it now reads the release from crates.io.
 
 ### G4. Scope the API corpus to 1.18
 
