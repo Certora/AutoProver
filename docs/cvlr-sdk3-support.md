@@ -19,7 +19,7 @@ Every CVLR release AutoProver pins. All but 0.6.0 are on crates.io.
 |---|---|---|---|---|
 | `cvlr` 0.6.2, 13 crates | `Certora/cvlr` | [#52](https://github.com/Certora/cvlr/pull/52) | `0ef58e4` (squash of `de8dec0`): `main` (API docs #51, [#53](https://github.com/Certora/cvlr/pull/53)'s `.cvlr_rules` and `cvlr-rule-manifest`) released | merged; tags pushed; **published** 2026-10-27 |
 | `cvlr-solana` 0.5.1, 3 crates (SDK 2) | `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | `2e53877`: `main` (API docs #21, `rt` fix) released | merged (`a9898ba`, a merge commit); tags pushed; `v0.5` moved up to it; **published** 2026-10-27 |
-| `cvlr-solana` 0.6.0, 3 crates (SDK 3) | `Certora/cvlr-solana` | `eric/release-0.6.0` (the port, C1 and C2, on 0.5.1), [#24](https://github.com/Certora/cvlr-solana/pull/24) | `f054348` | open, asking for a merge commit; tags local |
+| `cvlr-solana` 0.6.0, 3 crates (SDK 3) | `Certora/cvlr-solana` | `eric/release-0.6.0` (the port, C1 and C2, on 0.5.1), [#24](https://github.com/Certora/cvlr-solana/pull/24) | `13bb381` | open, asking for a merge commit; tags local |
 
 Each release commit is what `cargo-release` would produce: versions, CHANGELOG and README. Each
 passes the repository's CI checks and `cargo publish --dry-run --workspace`. `cvlr-solana` PRs are
@@ -44,7 +44,7 @@ publishes from CI, so a release is published by hand, from its tag.
 **Until a release is published, AutoProver reads it from its release commit** (A5). The
 reference set pins the crates.io version and names the commit, and the scaffold writes a
 `[patch.crates-io]` entry per crate. Only one release is read this way now: `cvlr-solana` 0.6.0,
-from `f054348`. The core (until 0.6.2) and 0.5.1 (from `2e53877`) were read the same way until they
+from `13bb381`. The core (until 0.6.2) and 0.5.1 (from `2e53877`) were read the same way until they
 were published. The commit depends on the core by version, so it resolves onto the published
 0.6.2.
 
@@ -138,7 +138,7 @@ a release-notes commit, rebased onto the 0.5.1 release. The cherry-pick was reso
 CI's checks pass on the branch: `fmt`, `clippy -D warnings`, `doc -D missing_docs`, and the tests.
 The stake probe verifies all ten rules against it
 ([job](https://prover.certora.com/jobStatus/37632/357dc4fa69324cb6be0509048e0c7b9d?anonymousKey=f559cc790f6f81ec87f20767473839f283569fcc)).
-The 0.6.0 release commit is `f054348` on `eric/release-0.6.0`. The release notes say that SPL
+The 0.6.0 release commit is `13bb381` on `eric/release-0.6.0`. The release notes say that SPL
 Token CPI substitution does not yet apply to SDK 3 programs (P1). #22 has merged, so what remains
 is a PR, review, and publication.
 
@@ -197,7 +197,7 @@ The port comments `cvlr-solana-stake` and `cvlr-spl-token` out of the workspace.
 - **`cvlr-solana-stake`** does not block the stake benchmark, which withholds it from that target
   anyway. It is still needed for any other program that calls into stake.
 
-**Status: ported on `eric/sdk3` (`61e8661`) and released with it at 0.6.0 (`f054348`), but only
+**Status: ported on `eric/sdk3` (`61e8661`) and released with it at 0.6.0 (`13bb381`), but only
 compiled, never verified against a program.** A1's reference set can include both models, read
 from the 0.6.0 commit.
 
@@ -247,7 +247,7 @@ change.
 **Done.** `REFERENCE_SET["solana"]` is `(SOLANA_V3, SOLANA_V2)`, newest first:
 
 - `SOLANA_V3` is `cvlr-solana`, `cvlr-solana-stake` and `cvlr-spl-token` 0.6.0, read from
-  `f054348` (A5), on the same `cvlr` 0.6.2 core as `SOLANA_V2`.
+  `13bb381` (A5), on the same `cvlr` 0.6.2 core as `SOLANA_V2`.
 - `scaffold.select_generation` picks the set whose platform witness the package links. It reads
   the witnesses the same way `_check_platform` does, and it requires a witness to be linked.
 - `preflight.select_package` calls it at the point the run first reads the workspace, before any
@@ -279,7 +279,7 @@ The change:
   generation instead of one.
 - The SDK 3 reference:
   - `core` is `cvlr` 0.6.2, shared with 2.x;
-  - `chain_crate` is `cvlr-solana` 0.6.0, read from `f054348` until it is published (A5);
+  - `chain_crate` is `cvlr-solana` 0.6.0, read from `13bb381` until it is published (A5);
   - `models` are `cvlr-solana-stake` and `cvlr-spl-token` 0.6.0, from the same commit;
   - `forks` is empty (no Anchor fork applies);
   - its `PlatformGeneration` has label `solana-* 3.x`, witness `solana-account-info` 3.0 and SDK
@@ -461,7 +461,7 @@ release was cut from:
 `cvlr-solana` 0.5.1 is pinned this way (`2e53877`). A sandboxed scaffold, warm and SBF build of the
 SDK 2.2 stake snapshot, with the pin pointed at a local `file://` clone, resolved `cvlr-solana`
 0.5.1 from that commit. A second run of the scaffold changed nothing. The SDK 3 reference set
-(A1) pins the 0.6.0 release commit (`f054348`) the same way.
+(A1) pins the 0.6.0 release commit (`13bb381`) the same way.
 
 Both release commits are pushed (see *Where things stand*). Cargo fetches the 0.5.1 commit from
 GitHub with an empty cargo home.
