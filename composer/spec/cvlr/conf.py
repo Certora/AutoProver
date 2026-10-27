@@ -15,7 +15,7 @@ every other unit. The run names a per-unit file, composed from the starting laye
 own. Naming any value stops the prover from also applying the package's own declaration.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from composer.cargo.features import CargoFeature
@@ -56,6 +56,35 @@ class TunableConf:
     #: rule in the submission is verified assuming its loops finish within ``loop_iter``, so the
     #: bound becomes part of what a verdict means.
     optimistic_loop: bool = False
+
+
+@dataclass(frozen=True)
+class SettingsEdit:
+    """The fields one ``adjust_prover_config`` call set. ``None`` leaves a field as it is."""
+
+    loop_iter: int | None = None
+    optimistic_loop: bool | None = None
+
+    def apply(self, settings: TunableConf) -> TunableConf:
+        if self.loop_iter is not None:
+            settings = replace(settings, loop_iter=self.loop_iter)
+        if self.optimistic_loop is not None:
+            settings = replace(settings, optimistic_loop=self.optimistic_loop)
+        return settings
+
+
+def merge_settings(current: TunableConf, update: TunableConf | SettingsEdit) -> TunableConf:
+    """A :class:`TunableConf` replaces the settings; a :class:`SettingsEdit` is applied to them.
+
+    Several ``adjust_prover_config`` calls can land in one graph step. Each writes only the fields
+    it set, so edits to different fields all land. Two edits to the same field leave the later.
+    The state's initial value is a whole :class:`TunableConf`.
+    """
+    match update:
+        case TunableConf():
+            return update
+        case SettingsEdit():
+            return update.apply(current)
 
 
 def tunable_conf(tunable: TunableConf) -> Conf:

@@ -11,17 +11,12 @@ from typing import Annotated, NotRequired
 from langgraph.graph import MessagesState
 
 from composer.authoring.state import AuthoringExtra
-from composer.spec.cvlr.conf import TunableConf, conf_history
+from composer.spec.cvlr.conf import TunableConf, conf_history, merge_settings
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.source.live_explorer import VersionedHistory
 
 #: Stamped when every rule the build listed verified. ``cargo_check`` does not stamp.
 PROVER_VALIDATION_KEY = "prover"
-
-
-def _latest_settings(_current: TunableConf, update: TunableConf) -> TunableConf:
-    """Last write wins. The settings edit tool writes every field, so there is nothing to merge."""
-    return update
 
 
 class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
@@ -35,9 +30,9 @@ class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     #: The prover settings this unit submits under. Every unit starts from the
     #: defaults. One unit's change must not reach a sibling.
     #:
-    #: Last write wins. ``adjust_prover_config`` writes the whole settings, and
-    #: two writes in one graph step raise ``InvalidUpdateError`` on a plain field.
-    prover_settings: Annotated[TunableConf, _latest_settings]
+    #: ``adjust_prover_config`` writes only the fields it set, and the reducer
+    #: applies them, so several calls in one graph step each land.
+    prover_settings: Annotated[TunableConf, merge_settings]
     #: The job link from the most recent prover run that produced results,
     #: including a run that did not verify. Absent until then.
     prover_link: NotRequired[str | None]

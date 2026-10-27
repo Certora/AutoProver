@@ -7,7 +7,6 @@ Each one changes the unit's state, and each invalidates the prover stamp. ``veri
 builds with that state and earns the stamp.
 """
 
-import dataclasses
 from typing import override
 
 from pydantic import Field
@@ -22,7 +21,7 @@ from graphcore.tools.schemas import (
 )
 
 from composer.prover.conf import dump_conf
-from composer.spec.cvlr.conf import tunable_conf
+from composer.spec.cvlr.conf import SettingsEdit, tunable_conf
 from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.ui.tool_display import tool_display
@@ -114,6 +113,10 @@ class AdjustProverConfig(
     No other prover setting can be changed here. Both apply to every rule in
     the unit. Omit a field to leave it. A call that sets neither is refused. A
     change invalidates the prover stamp. Re-run ``verify_rules``.
+
+    To change both settings, set both in one call. Do not make parallel calls:
+    each reports the conf as if it were the only one, and of two that set the
+    same field only one takes effect.
     """
 
     loop_iter: int | None = Field(
@@ -153,13 +156,10 @@ class AdjustProverConfig(
             on = self.optimistic_loop
             if settings.optimistic_loop == on:
                 return "`optimistic_loop` is already " + ("on" if on else "off") + " in this conf."
-        if self.loop_iter is not None:
-            settings = dataclasses.replace(settings, loop_iter=self.loop_iter)
-        if self.optimistic_loop is not None:
-            settings = dataclasses.replace(settings, optimistic_loop=self.optimistic_loop)
+        edit = SettingsEdit(loop_iter=self.loop_iter, optimistic_loop=self.optimistic_loop)
         return tool_state_update(
             self.tool_call_id,
             "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"
-            f"```json\n{dump_conf(tunable_conf(settings))}```",
-            prover_settings=settings,
+            f"```json\n{dump_conf(tunable_conf(edit.apply(settings)))}```",
+            prover_settings=edit,
         )

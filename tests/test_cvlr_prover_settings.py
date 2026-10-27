@@ -7,8 +7,12 @@ analysis cannot fix run out before the problem does. A ``rule_sanity`` downgrade
 flags are not on it.
 """
 
+from typing import Annotated, TypedDict
+
+from langgraph.graph import START, StateGraph
+
 from composer.spec.cvlr.author_tools import AdjustProverConfig
-from composer.spec.cvlr.conf import TunableConf
+from composer.spec.cvlr.conf import SettingsEdit, TunableConf, merge_settings
 from composer.spec.cvlr.state import tuning_history
 
 DRAFT = "#[rule] pub fn rule_a() {}\n"
@@ -33,18 +37,24 @@ def _adjust(state: dict, *, why: str = WHY, **fields):
     return AdjustProverConfig(state=state, tool_call_id="tc", why=why, **fields).run()
 
 
-def test_raising_the_loop_bound_sets_it():
-    out = _adjust(_state(), loop_iter=4)
+def _settings_after(state: dict, out) -> TunableConf:
+    """The settings once the state's reducer has applied what the call wrote."""
     assert not isinstance(out, str), out
-    assert out.update["prover_settings"].loop_iter == 4
+    return merge_settings(state["prover_settings"], out.update["prover_settings"])
+
+
+def test_raising_the_loop_bound_sets_it():
+    state = _state()
+    out = _adjust(state, loop_iter=4)
+    assert _settings_after(state, out).loop_iter == 4
 
 
 def test_the_loop_bound_is_not_capped():
     """The CVL backend's ``loop_iter`` (``composer/tools/prover.py``) is a plain int steered by
     prose, not a ceiling. A bound the author cannot exceed would turn a cost trade into a refusal."""
-    out = _adjust(_state(), loop_iter=9)
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"].loop_iter == 9
+    state = _state()
+    out = _adjust(state, loop_iter=9)
+    assert _settings_after(state, out).loop_iter == 9
 
 
 def test_a_loop_bound_below_one_is_refused():
@@ -58,10 +68,9 @@ def test_a_setting_that_is_already_what_you_asked_for_is_refused():
 
 
 def test_optimistic_loop_goes_on_and_the_whole_conf_comes_back():
-    out = _adjust(_state(), optimistic_loop=True)
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"].optimistic_loop is True
-    assert out.update["prover_settings"].loop_iter == 2
+    state = _state()
+    out = _adjust(state, optimistic_loop=True)
+    assert _settings_after(state, out) == TunableConf(optimistic_loop=True)
     assert '"optimistic_loop": true' in out.update["messages"][0].content
 
 
@@ -74,14 +83,13 @@ def test_optimistic_loop_already_on_is_refused():
 def test_optimistic_loop_goes_off():
     state = _state(TunableConf(optimistic_loop=True))
     out = _adjust(state, optimistic_loop=False)
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == TunableConf()
+    assert _settings_after(state, out) == TunableConf()
 
 
 def test_two_settings_in_one_call_both_land():
-    out = _adjust(_state(), loop_iter=4, optimistic_loop=True)
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == TunableConf(loop_iter=4, optimistic_loop=True)
+    state = _state()
+    out = _adjust(state, loop_iter=4, optimistic_loop=True)
+    assert _settings_after(state, out) == TunableConf(loop_iter=4, optimistic_loop=True)
 
 
 def test_one_refused_setting_lands_neither():
@@ -113,8 +121,7 @@ def test_a_loop_bound_change_that_turns_optimistic_loop_off_still_requires_a_rea
 def test_turning_optimistic_loop_off_does_not_require_a_reason():
     state = _state(TunableConf(optimistic_loop=True))
     out = _adjust(state, optimistic_loop=False, why="")
-    assert not isinstance(out, str), out
-    assert out.update["prover_settings"] == TunableConf()
+    assert _settings_after(state, out) == TunableConf()
 
 
 def test_a_config_change_invalidates_the_prover_stamp():
@@ -122,5 +129,26 @@ def test_a_config_change_invalidates_the_prover_stamp():
     before = _state()
     out = _adjust(before, loop_iter=4)
     assert not isinstance(out, str), out
-    after = {**before, "prover_settings": out.update["prover_settings"]}
+    after = {**before, "prover_settings": _settings_after(before, out)}
     assert tuning_history(before) != tuning_history(after)
+
+
+def test_parallel_calls_that_set_different_settings_both_land():
+    """Several ``adjust_prover_config`` calls can land in one graph step. Each read the settings
+    before the step, so each writes only what it set, and the reducer applies both."""
+
+    class S(TypedDict):
+        prover_settings: Annotated[TunableConf, merge_settings]
+
+    graph = StateGraph(S)
+    graph.add_node("bound", lambda _s: {"prover_settings": SettingsEdit(loop_iter=4)})
+    graph.add_node("optimistic", lambda _s: {"prover_settings": SettingsEdit(optimistic_loop=True)})
+    graph.add_edge(START, "bound")
+    graph.add_edge(START, "optimistic")
+    out = graph.compile().invoke({"prover_settings": TunableConf()})
+    assert out["prover_settings"] == TunableConf(loop_iter=4, optimistic_loop=True)
+
+
+def test_the_initial_settings_replace_the_defaults():
+    """A unit's starting settings arrive as a whole conf, not an edit."""
+    assert merge_settings(TunableConf(), TunableConf(loop_iter=3)) == TunableConf(loop_iter=3)
