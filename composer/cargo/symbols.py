@@ -9,6 +9,7 @@ names is refused: the prover discards that result and keeps the mangled names.
 """
 
 import asyncio
+import difflib
 import re
 import shutil
 from collections import Counter
@@ -131,16 +132,11 @@ def unmatched(patterns: tuple[str, ...], symbols: tuple[str, ...]) -> tuple[str,
 
 
 def nearest(pattern: str, symbols: tuple[str, ...], *, limit: int = 3) -> tuple[str, ...]:
-    """Symbols to suggest for a pattern that matched nothing.
+    """Symbols to suggest for a pattern that matched nothing, most similar first.
 
-    Uses the pattern's longest run of identifier characters as a substring
-    probe, then the next longest, until one occurs in a symbol. For
-    ``^<vault::VaultError as core::fmt::Display>::fmt$`` the longest run is
-    ``VaultError``.
+    Compares the pattern's text, not what it matches. A pattern is nearly
+    always one symbol name between ``^`` and ``$``, so a misspelled or
+    mis-pathed name is still textually close to the symbol it meant. Empty
+    when nothing is close.
     """
-    literals = sorted(re.findall(r"[A-Za-z_][A-Za-z0-9_]{2,}", pattern), key=len, reverse=True)
-    for literal in literals:
-        hits = [s for s in symbols if literal in s]
-        if hits:
-            return tuple(hits[:limit])
-    return ()
+    return tuple(difflib.get_close_matches(pattern, symbols, n=limit))

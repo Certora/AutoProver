@@ -95,10 +95,20 @@ def test_an_invalid_regex_counts_as_unmatched_rather_than_raising():
     assert unmatched((r"^<vault::(unclosed$",), _SYMBOLS) == (r"^<vault::(unclosed$",)
 
 
-def test_the_suggestion_points_at_what_the_build_does_define():
-    """A miss names a symbol the build does define. The probe tries identifier runs, longest first."""
-    suggestions = nearest(r"^<vault::VaultError as core::fmt::Display>::fmt$", _SYMBOLS)
-    assert "<anchor_lang::error::ErrorCode as core::fmt::Display>::fmt" in suggestions
+def test_a_misspelled_name_suggests_the_symbol_it_meant_first():
+    """A typo leaves the pattern textually close to the symbol the build defines."""
+    suggestions = nearest(r"^<anchor_lang::error::ErorCode as core::fmt::Display>::fmt$", _SYMBOLS)
+    assert suggestions[0] == "<anchor_lang::error::ErrorCode as core::fmt::Display>::fmt"
+
+
+def test_a_name_without_its_number_suggests_the_numbered_symbols():
+    """A shared name exists only as ``name_0`` … ``name_{n-1}``, so the bare name misses."""
+    symbols = ("vault::helper_0", "vault::helper_1", "vault::vault_program::initialize")
+    assert set(nearest(r"^vault::helper$", symbols)) >= {"vault::helper_0", "vault::helper_1"}
+
+
+def test_a_pattern_like_no_symbol_suggests_nothing():
+    assert nearest(r"^spl_token::processor::Processor::process_transfer$", _SYMBOLS) == ()
 
 
 @pytest.mark.asyncio
