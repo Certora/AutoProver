@@ -409,7 +409,7 @@ def test_a_checkout_enters_as_a_patch_and_not_as_a_dependency(tmp_path):
     _probe_crate(tmp_path, SOLANA_V2, {"cvlr-asserts": _checkout("cvlr-asserts")})
     manifest = (tmp_path / "Cargo.toml").read_text()
     deps, patch = manifest.split("[patch.crates-io]")
-    assert 'cvlr = "=0.6.1"' in deps
+    assert 'cvlr = "=0.6.2"' in deps
     assert "path" not in deps
     assert 'cvlr-asserts = { path = "/home/eric/src/cvlr/cvlr-asserts" }' in patch
 
@@ -500,7 +500,7 @@ def test_the_manifest_source_names_every_checkout_it_read():
     source = manifest_source(
         SOLANA_V2, {"cvlr-asserts": _checkout("cvlr-asserts"), "cvlr-log": _checkout("cvlr-log")}
     )
-    assert "cvlr 0.6.1" in source
+    assert "cvlr 0.6.2" in source
     assert source.count("/home/eric/src/cvlr @ cvlr-v0.6.1-3-g8d9d463-dirty") == 1
     assert "cvlr-asserts, cvlr-log" in source
 

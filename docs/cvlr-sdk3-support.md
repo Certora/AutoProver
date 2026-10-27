@@ -11,11 +11,11 @@ CVLR releases, and one Prover fix for token CPIs.
 
 ## Where things stand (2026-10-27)
 
-Every CVLR release AutoProver pins, for all three Solana generations. None is on crates.io yet.
+Every CVLR release AutoProver pins, for all three Solana generations. Only the core is on crates.io.
 
 | Release | Repository | Branch, PR | Release commit | State |
 |---|---|---|---|---|
-| `cvlr` 0.6.2, 13 crates | `Certora/cvlr` | `eric/release-0.6.2`, [#52](https://github.com/Certora/cvlr/pull/52) | `de8dec0`: `main` (API docs #51, [#53](https://github.com/Certora/cvlr/pull/53)'s `.cvlr_rules` and `cvlr-rule-manifest`) released | open; tags local |
+| `cvlr` 0.6.2, 13 crates | `Certora/cvlr` | [#52](https://github.com/Certora/cvlr/pull/52) | `0ef58e4` (squash of `de8dec0`): `main` (API docs #51, [#53](https://github.com/Certora/cvlr/pull/53)'s `.cvlr_rules` and `cvlr-rule-manifest`) released | merged; tags pushed; **published** 2026-10-27 |
 | `cvlr-solana` 0.5.1, 3 crates (SDK 2) | `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | `2e53877`: `main` (API docs #21, `rt` fix) released | merged (`a9898ba`, a merge commit); tags local |
 | `cvlr-solana` 0.6.0, 3 crates (SDK 3) | `Certora/cvlr-solana` | `eric/release-0.6.0`, on `eric/sdk3` (the port, C1 and C2, on 0.5.1) | `f054348` | pushed, no PR yet; tags local |
 | `cvlr-solana` 0.4.6, 1 crate (`solana-program` 1.18) | `Certora/cvlr-solana` | `v0.4`, [#23](https://github.com/Certora/cvlr-solana/pull/23) (`cvlr-solana-1-18-support.md` G3) | `b1988a4` | merged; not tagged |
@@ -25,16 +25,14 @@ passes the repository's CI checks and `cargo publish --dry-run --workspace`. #22
 merge commit, so `cvlr-solana`'s `main` contains `2e53877`, the commit its tags and AutoProver's
 pin name. `Certora/cvlr` does not allow merge commits, so #52 is squash-merged. The squashed
 commit has the release commit's tree under a new hash: the `cvlr` tags are recreated on it,
-after checking the two trees match, and then pushed. AutoProver pins `cvlr` by a commit already
-on `main`, so its pin does not move.
+after checking the two trees match, and then pushed.
 
 `cvlr` needs nothing for SDK 3. The core crates do not depend on the Solana SDK, and every
 `cvlr-solana` line requires its `cvlr-*` crates at `<1` only (0.6.0 at `>=0.6`, 0.4.6 and 0.5.1 at
 `>=0.4`), so any 0.6.x core serves all three. AutoProver needs 0.6.2 for two other reasons: the
 published 0.6.1 has no API docs (`cvlr-todo.md` U28), and the landing line (`eric/solana-staging`)
-reads rule names from the `.cvlr_rules` section that #53 added. #52 is cut on `c2df10a`, so it has
-both, and `cvlr-rule-manifest` is among its crates and its tags. That crate is new to crates.io and
-is published before `cvlr-log`, `cvlr-macros` and `cvlr`, which depend on it.
+reads rule names from the `.cvlr_rules` section that #53 added. 0.6.2 has both, and
+`cvlr-rule-manifest` is among its crates.
 
 ### Publishing, and git dependencies until then
 
@@ -49,9 +47,9 @@ reference set pins the crates.io version and names the commit, and the scaffold 
 - **2.x:** `cvlr-solana` 0.5.1, from `2e53877`.
 - **SDK 3:** `cvlr-solana` 0.6.0, from `f054348`.
 - **1.18:** `cvlr-solana` 0.4.6, from `b1988a4`.
-- **`cvlr`:** 0.6.1, from a commit on `main`, where the API is documented and the version is still
-  0.6.1: `465a022` on this branch, `c2df10a` on the landing line, which adds `cvlr-rule-manifest`.
-  Every core crate is patched together, or a build gets two copies of each (`cvlr-todo.md` U28).
+
+The core was read the same way, from a commit on `cvlr`'s `main`, until 0.6.2 was published. Each
+`cvlr-solana` commit depends on the core by version, so it resolves onto the published 0.6.2.
 
 **Fetching works before the PRs merge.** Cargo, starting from an empty cargo home, resolves
 `cvlr-solana` 0.5.1 from GitHub at `2e53877`; the pushed branch makes the commit reachable.
@@ -60,9 +58,7 @@ reference set pins the crates.io version and names the commit, and the scaffold 
 hash, and the pin in `reference.py` moves with it. Pushing the tags makes the commits permanent.
 
 **The exit is publication.** Once a `cvlr-solana` release is on crates.io, its `GitCommit` is
-dropped and nothing else changes. The core is the exception: its pin moves from `=0.6.1` to
-`=0.6.2`, and the API corpus is rebuilt. U26 and U28 in `cvlr-todo.md` are the ship blockers that
-track this.
+dropped and nothing else changes. U26 in `cvlr-todo.md` is the ship blocker that tracks this.
 
 ## What the probe established
 
@@ -216,7 +212,7 @@ makes token CPIs waits on it; nothing in AutoProver does.
 **Done.** `REFERENCE_SET["solana"]` is `(SOLANA_V3, SOLANA_V2)`, newest first:
 
 - `SOLANA_V3` is `cvlr-solana`, `cvlr-solana-stake` and `cvlr-spl-token` 0.6.0, read from
-  `f054348` (A5), on the same `cvlr` 0.6.1 core as `SOLANA_V2`.
+  `f054348` (A5), on the same `cvlr` 0.6.2 core as `SOLANA_V2`.
 - `scaffold.select_generation` picks the set whose platform witness the package links. It reads
   the witnesses the same way `_check_platform` does, and it requires a witness to be linked.
 - `preflight.select_package` calls it at the point the run first reads the workspace, before any
@@ -376,8 +372,8 @@ set names the commit the release was cut from:
   commit is satisfied; anything else is refused.
 - **The API-docs producer** patches its probe crate the same way. A `--crate-source` checkout
   replaces the commit for the crates it defines. The manifest's source line records the commit.
-- **The ship blockers.** U26 and U28 in `cvlr-todo.md` are the exit: once a release is published,
-  drop its `GitCommit` and nothing else changes.
+- **The ship blocker.** U26 in `cvlr-todo.md` is the exit: once a release is published, drop its
+  `GitCommit` and nothing else changes. The core took this exit with 0.6.2 (U28).
 
 A sandboxed scaffold, warm and SBF build of the
 SDK 2.2 stake snapshot, with the pin pointed at a local `file://` clone, resolved `cvlr-solana`
@@ -434,11 +430,10 @@ crash showed up (`upstream-defects.md` P15).
 
 All of it is outside AutoProver:
 
-- Squash-merge #52, and recreate its tags on the squashed commit. Push the 0.6.2 and 0.5.1 tags, and
-  tag 0.4.6 on `v0.4`.
+- Push the 0.5.1 tags, and tag 0.4.6 on `v0.4`.
 - Move `v0.5` up to 0.5.1, and open the `eric/sdk3` PR.
-- Publish (*Publishing*). Each `cvlr-solana` publication drops a `GitCommit`, and the last one
-  closes U26. Publishing 0.6.2 and moving the core's pin to it closes U28.
+- Publish the `cvlr-solana` releases (*Publishing*). Each publication drops a `GitCommit`, and the
+  last one closes U26.
 - **P1** (`upstream-defects.md` P14) goes to the Prover team. Token programs on SDK 3 wait on it.
 
 ## Reproducing the probe

@@ -48,16 +48,16 @@ generations, because a chain crate is bound to one SDK line and each line has it
 
 | Generation | Core | `cvlr-solana`, `cvlr-solana-stake`, `cvlr-spl-token` |
 |---|---|---|
-| `solana-program` 2.x (`SOLANA_V2`) | `cvlr` 0.6.1 | 0.5.1 |
-| `solana-*` 3.x (`SOLANA_V3`) | `cvlr` 0.6.1 | 0.6.0 |
+| `solana-program` 2.x (`SOLANA_V2`) | `cvlr` 0.6.2 | 0.5.1 |
+| `solana-*` 3.x (`SOLANA_V3`) | `cvlr` 0.6.2 | 0.6.0 |
 
 Soroban has one, `cvlr-soroban` and `cvlr-soroban-derive` 0.4.0. The scaffold reads which generation
 the project is on and pins that set. What the run compiles is guaranteed equal to it, because
 anything else was refused.
 
-None of the Solana releases is on crates.io yet. Each is read from its release commit through a
-`[patch.crates-io]` entry the scaffold writes, so the project still declares the crates.io version
-([cvlr-todo.md](./cvlr-todo.md) U26 for `cvlr-solana`, U28 for the core).
+The core is on crates.io. None of the `cvlr-solana` releases is yet. Each is read from its release
+commit through a `[patch.crates-io]` entry the scaffold writes, so the project still declares the
+crates.io version ([cvlr-todo.md](./cvlr-todo.md) U26).
 
 The refusal widens one that already existed — `scaffold` refusing a CVLR pin that does not match the
 project's platform generation — to any pin that is not ours, in the same place and before any LLM
@@ -81,8 +81,7 @@ researcher gives, and there is no such flag for CVL either. Two consequences are
 
 * **A bump means a corpus rebuild**, and the two must land together or every answer is about the
   wrong release. In the image they do, since the manifest is generated from the same checkout
-  (§6); a host database has to be repopulated. `reference.py`'s docstring does not yet say so ([cvlr-todo.md](./cvlr-todo.md)
-  U28).
+  (§6); a host database has to be repopulated. `reference.py`'s docstring says so.
 * **The scaffold could offer to bump an off-reference project** instead of refusing it. That edits
   the client's dependency graph, so it is a decision rather than a task (U29).
 

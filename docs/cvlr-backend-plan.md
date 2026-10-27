@@ -330,7 +330,7 @@ carries the same ground truth as a *contract*. The version-identity property the
 stamping every path with its release is given instead by pinning one CVLR line per platform
 generation. [reference.py](../composer/spec/cvlr/reference.py) names one reference set for each
 Solana generation it supports — `cvlr-solana` 0.5.1 for `solana-program` 2.x, 0.6.0 for the
-`solana-*` 3.x crates, both on the `cvlr` 0.6.1 core — and the preflight sets a project up with the
+`solana-*` 3.x crates, both on the `cvlr` 0.6.2 core — and the preflight sets a project up with the
 one whose platform crates it links (`scaffold.select_generation`). The API corpus documents every
 generation, and a run's lookups see only its own generation's pins. A project already on another
 CVLR line is refused (`Mismatched`, from [crates.py](../composer/spec/cvlr/crates.py)) rather than
@@ -1488,7 +1488,7 @@ a feature-gated `use` rather than a rewrite:
 | literal array sizes replaced by named constants | 2 | the constants shrink under the feature, so loops over the collection fit the unroll bound |
 | `inline(never)`, always paired with `early_panic` | 3 | keeps the function a frame the prover can see |
 
-Both attributes are in the pinned reference set (`cvlr` 0.6.1 re-exports `early_panic` and
+Both attributes are in the pinned reference set (`cvlr` 0.6.2 re-exports `early_panic` and
 `mock_fn`), so this is a small declarative vocabulary, not free-form source editing. Four things in
 it are worth stating plainly.
 

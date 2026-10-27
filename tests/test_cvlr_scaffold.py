@@ -231,7 +231,7 @@ def test_the_manifest_a_fresh_project_ends_up_with_still_parses(tmp_path):
         "dep:cvlr", "dep:cvlr-solana", "dep:cvlr-solana-stake", "dep:cvlr-spl-token",
     ]
     # Optional is what keeps CVLR out of a release build, and what makes `dep:` legal above.
-    assert parsed["dependencies"]["cvlr"] == {"version": "=0.6.1", "optional": True}
+    assert parsed["dependencies"]["cvlr"] == {"version": "=0.6.2", "optional": True}
     metadata = parsed["package"]["metadata"]["certora"]
     assert metadata["sources"] == ["Cargo.toml", "src/**/*.rs"]
     assert metadata["solana_inlining"] == ["src/certora/envs/cvlr_inlining.txt"]
@@ -339,7 +339,7 @@ def test_a_workspace_gets_the_pins_and_its_member_inherits_them(tmp_path):
     apply(plan, workspace.root)
 
     root = tomllib.loads((tmp_path / "Cargo.toml").read_text())
-    assert root["workspace"]["dependencies"]["cvlr"] == {"version": "=0.6.1"}
+    assert root["workspace"]["dependencies"]["cvlr"] == {"version": "=0.6.2"}
     member = tomllib.loads((tmp_path / "programs" / "prog" / "Cargo.toml").read_text())
     assert member["dependencies"]["cvlr"] == {"workspace": True, "optional": True}
 
@@ -389,7 +389,7 @@ def test_a_project_already_set_up_is_read_rather_than_refused(tmp_path):
     # "nothing to do" rather than a refusal.
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
-        '[features]\ncertora = ["dep:cvlr"]\n\n[dependencies]\ncvlr = "0.6.1"\nsolana-program',
+        '[features]\ncertora = ["dep:cvlr"]\n\n[dependencies]\ncvlr = "0.6.2"\nsolana-program',
     )
     plan, _ = _plan(tmp_path, manifest=manifest, workspace_manifest=manifest)
     assert not plan.blocked
@@ -573,9 +573,9 @@ def test_a_line_refusal_is_put_in_terms_the_project_author_can_act_on(
 
 
 def test_a_project_already_on_the_pinned_release_is_not_refused(tmp_path):
-    # The idempotence case, and the one the gate must not catch: `=0.6.1` is what the scaffold
-    # itself writes, and a bare `0.6.1` is the same release written by hand.
-    for requirement in ("=0.6.1", "0.6.1"):
+    # The idempotence case, and the one the gate must not catch: `=0.6.2` is what the scaffold
+    # itself writes, and a bare `0.6.2` is the same release written by hand.
+    for requirement in ("=0.6.2", "0.6.2"):
         root = tmp_path / requirement
         manifest = STANDALONE.replace(
             "[dependencies]\nsolana-program",
@@ -585,7 +585,7 @@ def test_a_project_already_on_the_pinned_release_is_not_refused(tmp_path):
             root,
             manifest=manifest,
             workspace_manifest=manifest,
-            cvlr_resolved={"cvlr": "0.6.1"},
+            cvlr_resolved={"cvlr": "0.6.2"},
         )
         assert not plan.blocked, requirement
 
@@ -597,13 +597,13 @@ def test_a_reference_set_crate_the_project_does_not_name_is_not_a_refusal(tmp_pa
     # up, starting with the fresh one.
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
-        '[dependencies]\ncvlr = "=0.6.1"\ncvlr-solana = "=0.5.1"\nsolana-program',
+        '[dependencies]\ncvlr = "=0.6.2"\ncvlr-solana = "=0.5.1"\nsolana-program',
     )
     plan, _ = _plan(
         tmp_path,
         manifest=manifest,
         workspace_manifest=manifest,
-        cvlr_resolved={"cvlr": "0.6.1", "cvlr-solana": "0.5.1"},
+        cvlr_resolved={"cvlr": "0.6.2", "cvlr-solana": "0.5.1"},
     )
     assert not plan.blocked
     (dependencies,) = [a for a in _additions(plan) if a.table == ("dependencies",)]

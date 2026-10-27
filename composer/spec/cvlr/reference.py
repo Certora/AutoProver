@@ -16,7 +16,9 @@ Exact versions, not ranges. The core and the chain crates are versioned separate
 can pair a new core with an old chain crate. A bump is an edit here, and it moves every project
 this build sets up: what is named here is the one CVLR line supported per platform generation, the
 way a Prover release ships one CVL. That is why :mod:`composer.spec.cvlr.scaffold` refuses a project
-already on a different line rather than deferring to it.
+already on a different line rather than deferring to it. A bump also means rebuilding the
+``cvlr_api_kb`` corpus (``scripts/populate_cvlr_rag.sh``), which is generated from the releases
+named here and describes nothing else.
 
 A chain crate is bound to one platform generation, and each generation has its own ``AccountInfo``.
 ``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.x with 2.2, and 0.6.x with the
@@ -71,11 +73,6 @@ class CrateRelease:
     #: Where cargo reads the release from while crates.io does not have it. ``None`` for a
     #: release on crates.io.
     unpublished: GitCommit | None = None
-    #: The crates released with this one, at its version, that it depends on. Read from
-    #: :attr:`unpublished` together with it: patched alone, it would pull them from its commit
-    #: while every other CVLR crate pulled them from crates.io, and the graph would hold two copies
-    #: of each, whose types do not unify.
-    released_with: tuple[str, ...] = ()
 
     def dependency_line(self) -> str:
         """A ``Cargo.toml`` dependency line. Exact (``=version``), not a caret range.
@@ -95,13 +92,12 @@ class CommitPatch:
 
 
 def commit_patches(crates: Iterable[CrateRelease]) -> tuple[CommitPatch, ...]:
-    """The patches that read these releases, and the crates released with them, from their
-    commits. Empty for releases that are all on crates.io."""
+    """The patches that read these releases from their commits. Empty for releases that are all on
+    crates.io."""
     return tuple(
-        CommitPatch(name, crate.version, crate.unpublished)
+        CommitPatch(crate.name, crate.version, crate.unpublished)
         for crate in crates
         if crate.unpublished is not None
-        for name in (crate.name, *crate.released_with)
     )
 
 
@@ -307,38 +303,10 @@ class ChainReference:
         return commit_patches(self.crates())
 
 
-#: ``cvlr`` 0.6.1 with the public API documented, which crates.io's 0.6.1 is not. The commit is on
-#: the repository's main branch and keeps the version, so the pin stays ``=0.6.1``.
-#:
-#: TODO(cvlr-todo U28): pin the crates.io release once a documented one is published, and drop the
-#: commit.
-_CVLR_0_6_1_DOCUMENTED = GitCommit(
-    repo="https://github.com/Certora/cvlr.git",
-    rev="465a0229b3a6c9708eeb2f6dd1c167e2eca81e4e",
-)
-
 #: The core line, shared by every chain. ``cvlr-spec`` (``cvlr_spec!``, ``cvlr_rules!``,
 #: ``cvlr_lemma!``) is a dependency of ``cvlr``, so a target names one crate and gets the
-#: parametric-rule layer with it. ``cvlr`` depends on every other crate of its repository, and the
-#: chain crates depend on several of them directly.
-_CORE = CrateRelease(
-    "cvlr",
-    "0.6.1",
-    _CVLR_0_6_1_DOCUMENTED,
-    released_with=(
-        "cvlr-asserts",
-        "cvlr-decimal",
-        "cvlr-derive",
-        "cvlr-early-panic",
-        "cvlr-fixed",
-        "cvlr-hook",
-        "cvlr-log",
-        "cvlr-macros",
-        "cvlr-mathint",
-        "cvlr-nondet",
-        "cvlr-spec",
-    ),
-)
+#: parametric-rule layer with it. 0.6.2 is the first release with the public API documented.
+_CORE = CrateRelease("cvlr", "0.6.2")
 
 #: ``cvlr-solana`` 0.5.1: 0.5.0 with the public API documented and the ``rt`` feature fixed. The
 #: three crates of that repository are released together, at one version and from one commit.
@@ -489,7 +457,7 @@ SOLANA_V3 = replace(
 
 #: ``cvlr-solana`` 0.4.6, the release for ``solana-program`` 1.18 (branch ``v0.4``): 0.4.5 with
 #: the public API documented and the ``rt`` feature fixed. It requires ``cvlr-*`` ``>=0.4, <1``,
-#: so it resolves onto the shared 0.6.1 core with one copy of each core crate.
+#: so it resolves onto the shared 0.6.2 core with one copy of each core crate.
 #:
 #: TODO(cvlr-todo U26): pin the crates.io release once it is published, and drop the commit.
 _CVLR_SOLANA_0_4_6 = GitCommit(
