@@ -8,14 +8,17 @@ no CVLR dependency lands first.
 It is a decomposition, not a schedule. Nothing here says who does the work or when, and the sizes
 are the argument for the split rather than an estimate of effort.
 
-**The source branch is `feature/solana`, from 2026-10-14.** It was cut from
-`eric/solanaProverRebase`, the line rebased onto master after #258, and takes master by merge from
-then on. `eric/solanaProver` carried parallel work, and was merged into `feature/solana` on
-2026-10-15 (`a7e0251d`). New Solana work lands on `feature/solana` before master. So every
-`git checkout <branch> -- <paths>` below names `feature/solana`, and the counts in the next two
-paragraphs describe `eric/solanaProver` and the rebased line as they were then.
+**Two branches carry the work, and the PRs are cut from `eric/solana-staging`.** `feature/solana`,
+from 2026-10-14, is where the end-to-end runs and the alpha are prepared. It was cut from
+`eric/solanaProverRebase`, the line rebased onto master after #258. `eric/solanaProver` carried
+parallel work, and was merged into `feature/solana` on 2026-10-15 (`a7e0251d`).
+`eric/solana-staging` is where the slices are shaped for review, and where review changes come
+back. How the two stay in step with each other and with master is in
+[Keeping the branches in step](#keeping-the-branches-in-step). Every `git checkout <branch> --
+<paths>` below names `eric/solana-staging`, and the counts in the next two paragraphs describe
+`eric/solanaProver` and the rebased line as they were then.
 
-New work on `feature/solana` rides the slice that owns the files it changes, under rule 5: the
+New work on either branch rides the slice that owns the files it changes, under rule 5: the
 first unlanded PR whose capability it extends. Work on files a merged PR owns is a follow-up PR to
 master. Work that needs a new file names its slice in the appendix in the same commit. What the
 merge brought, and the work since, is assigned in
@@ -41,9 +44,9 @@ ahead of all five as
 [#244](https://github.com/Certora/AutoProver/pull/244). **P3a2 is dropped.** The branch replaced the
 munge records with text edits ([who-edits-the-program.md](./who-edits-the-program.md) §18), so there is no
 munge vocabulary left to land; see [P3a](#p3a--the-working-copy-and-what-may-be-changed-in-it).
-`feature/solana` took master after #260 by merge (`899981fd`). Since 2026-10-27 master reaches it
-only through `eric/solana-staging`, which merged `feature/solana` and then master after #268; the
-two branches merge each other and do not cherry-pick. The next PR is **P3b2b**, [#280](https://github.com/Certora/AutoProver/pull/280), what a
+`feature/solana` took master after #260 by merge (`899981fd`). On 2026-10-27 the two branches were
+brought into step: `eric/solana-staging` merged `feature/solana` (`068ab6d4`) and then master after
+#268 (`5e2f7470`), and `feature/solana` fast-forwarded to it. The next PR is **P3b2b**, [#280](https://github.com/Certora/AutoProver/pull/280), what a
 verdict means. It was stacked on #268 and still carries #268's first commit, so it is rebased onto
 master before review. **P1b**, SDK 3 targets, follows it: a follow-up to master that the merge of
 `eric/solanaProver` made necessary. P3b2 was split in two on 2026-10-23, after its rebase onto
@@ -89,7 +92,7 @@ below touches shared code that somebody else may also be fixing, so the first st
 
 **2. Assemble by file-set, not by commit range.** The branch's history interleaves shared-code edits
 with CVLR ones — a single commit routinely does both, because that is how the work was done. So a
-PR is built by branching from `origin/master`, `git checkout feature/solana -- <paths>`, and
+PR is built by branching from `origin/master`, `git checkout eric/solana-staging -- <paths>`, and
 committing once with a message written for a reader who has no Solana context. Cherry-picking the
 branch's commits does not produce these PRs and will fight you.
 
@@ -101,16 +104,13 @@ wave 1 look the way they do.
 
 **4. Shared-code work goes to master directly.** The rough-draft gate fix
 ([#233](https://github.com/Certora/AutoProver/pull/233)) was written on this branch and landed on
-master as its own PR, and the branch then dropped it in a rebase at no cost. That is the pattern.
+master as its own PR, and the branch, rebased in those days, then dropped it at no cost. Landing
+shared fixes on master first is the pattern; a merge drops them as cheaply.
 Every shared fix that instead waits on this branch is a merge conflict being saved up. The
 exception rule 5 carves out is a *refactor* with no second user, which is not a fix.
 
-**`feature/solana` takes master by merge, never by rebase.** A rebase rewrites commits that other
-branches name: AIAutoProver's `feature/solana` pins `feature/solana` commits by SHA, and the merge
-of `eric/solanaProver` (`a7e0251d`) sits on the line's history. After a PR lands, merge `origin/master` into
-`feature/solana`. Where the PR changed in review, the merge conflicts on its files. Resolve each
-conflict to master's reviewed version plus whatever the branch has added to that file since the
-cut.
+**Both branches take changes by merge, never by rebase or cherry-pick.** The full procedure is
+[Keeping the branches in step](#keeping-the-branches-in-step).
 
 The history below is from the rebase era, before `feature/solana`. Its one lesson still applies: a
 file's conflict resolution must start from history that has merged.
@@ -140,6 +140,50 @@ Three corollaries, because the rule is easy to over-apply:
 * *It has a floor.* A fifteen-line defensive parse called from the function above it does not get
   held back for the caller that will exercise its new branch. `job_input` was planned as that case
   in **S4**. Since #232 it has no caller on master at all (wave 1, below), so it waits for P3b3.
+
+## Keeping the branches in step
+
+Two workstreams run at once: slicing PRs out of `eric/solana-staging` and taking their review back,
+and end-to-end testing on `feature/solana`. Changes move between the branches and master only by
+merge:
+
+```
+master ──merge──▶ eric/solana-staging ◀──merge──▶ feature/solana
+   ▲                     │
+   └──── slice PRs ──────┘
+```
+
+* **Master reaches the branches only through `eric/solana-staging`.** After a slice merges, merge
+  `origin/master` into `eric/solana-staging`. `feature/solana` gets master by merging staging, so
+  a squashed PR is reconciled once, by whoever cut it.
+* **Check the slice before that merge.** A slice lands as a squash commit, so nothing ties it to
+  the branch's commits, and a merge resolved as "keep the branch" drops every review change that
+  was not taken back. List the lines the squash adds that the branch lacks, file by file, and
+  account for each: taken back, superseded by later work, or deliberately held. #267's check on
+  2026-10-27 found the `certora_unit_` prefix, the deliverable directories in `gen_types`, the
+  simpler `.cvlr_rules` reader and the derived `HarnessTarget.module_path` never taken back.
+  Where a review change can be written on staging first and cherry-picked onto the PR branch, do
+  that. The PR branch is squashed away, so copying in that direction costs nothing.
+* **`eric/solana-staging` and `feature/solana` merge each other in both directions, and never
+  cherry-pick.** Each merge moves the merge base, so the next one conflicts only on what changed
+  since. A fix found in an end-to-end run is committed on `feature/solana` and reaches staging by
+  merge, often. Staging reaches `feature/solana` when the alpha side chooses, after the fast
+  suite and a tape replay pass.
+* **Neither branch is rebased.** A rebase rewrites the merge base the other branch depends on, and
+  AIAutoProver's `feature/solana` pins `feature/solana` commits by SHA. PR branches cut from
+  staging can be rebased freely.
+* **An alpha freeze is a release branch** cut from `feature/solana`. Fixes are cherry-picked into
+  it, which is safe because it never merges back.
+* **Everything on either branch reaches the other, so material that is not public stays out of
+  the repository.** AutoProver is public. Slices are cut by hand, so alpha-only documents on
+  staging do not reach master, but they are published by being pushed.
+
+When a merge brings a slice back, resolve each conflict to master's reviewed version plus what the
+branch has added to that file since. Two things a clean merge does not show: a definition both
+sides added in different places merges as two definitions (`conf.py`'s `SettingsEdit` did), and
+rerere can replay a resolution recorded for a different merge (it did for `uv.lock`). Run the fast
+suite and pyright after every merge, and sync a worktree's venv in full when the merge brings a
+new dependency.
 
 ## Wave 1 — shared code, no CVLR dependency
 
@@ -556,7 +600,8 @@ predicate is still P3b1's: every listed rule verified.
   `template_manifest.json` gained its entry.
 
 The commits cited are #268's own, squashed in the merge. `eric/solana-staging` took all of it back
-(`70b009a7`, `c5fe4241`, `98c681ee`) except the plain bool; `feature/solana` has not yet.
+(`70b009a7`, `c5fe4241`, `98c681ee`, and the merge of master, `5e2f7470`) except the plain bool, and
+`feature/solana` has it through that merge.
 
 ##### P3b2b — What a verdict means
 
@@ -1283,7 +1328,7 @@ master's, and `KNOWLEDGE_BASES` holds only `cvlr_api_kb`, for `rag_import`.
 
 ## Appendix: the paths each PR takes
 
-What to hand `git checkout feature/solana -- …` after branching from `origin/master`. Every file
+What to hand `git checkout eric/solana-staging -- …` after branching from `origin/master`. Every file
 the branch changes appears below, except those carrying only the dropped build-environment field.
 A path under two PRs, and the shared pipeline files marked *(hunks)*, are the overlaps noted in
 wave 1 — take the feature's hunks there, not the whole file. Rows for merged PRs are kept as the
