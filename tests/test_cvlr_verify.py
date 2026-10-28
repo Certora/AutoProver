@@ -22,10 +22,11 @@ from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.prover.conf import SelectRules
 from composer.prover.core import ProverReport
 from composer.prover.ptypes import Counterexample, LoopUnwound, RulePath, RuleResult
-from composer.prover.results import ExternalWarnings, UnreadableAlertReport
+from composer.prover.results import AlertReport, UnreadableAlertReport
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.env_paths import PathDialect
+from composer.spec.cvlr.externals import ExternalWarnings
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing
 from composer.spec.cvlr.prover import Checked, Submission, SubmissionFailed
@@ -51,7 +52,7 @@ _BUILT = SbfRun(duration_ms=1, verdict=Built(manifest=SimpleNamespace(artifact=P
 def _checked(
     *pairs: tuple[str, str],
     incomplete: dict[str, LoopUnwound] | None = None,
-    externals: ExternalWarnings | UnreadableAlertReport | None = None,
+    alerts: AlertReport | UnreadableAlertReport | None = None,
 ) -> Checked:
     report = ProverReport(
         raw_rule_status={RulePath(name): status for name, status in pairs},  # type: ignore[misc]
@@ -59,7 +60,7 @@ def _checked(
         link=_LINK,
         certora_run_stdout="",
         incomplete=incomplete or {},
-        **({} if externals is None else {"external_functions": externals}),
+        **({} if alerts is None else {"alerts": alerts}),
     )
     return Checked(build=_BUILT, report=report)
 
@@ -256,11 +257,26 @@ async def test_unreadable_symbols_are_said_rather_than_left_as_a_match(gate: _Ga
     assert "stamped" in _text(out)
 
 
+async def test_only_the_external_function_alerts_are_reported(gate: _Gate):
+    warning = "The following functions are neither inlined nor summarized. [solana_program::program::invoke]"
+    gate.outcome = _checked(
+        ("rule_a", "VERIFIED"),
+        ("rule_b", "VERIFIED"),
+        alerts=AlertReport((warning, "an unrelated alert", warning)),
+    )
+
+    out = await gate.verify()
+
+    assert "solana_program::program::invoke" in _text(out)
+    assert "an unrelated alert" not in _text(out)
+    assert out.update["external_functions"] == ExternalWarnings((warning,))
+
+
 async def test_an_unreadable_alert_report_is_not_reported_as_no_externals(gate: _Gate):
     gate.outcome = _checked(
         ("rule_a", "VERIFIED"),
         ("rule_b", "VERIFIED"),
-        externals=UnreadableAlertReport(),
+        alerts=UnreadableAlertReport(),
     )
 
     out = await gate.verify()

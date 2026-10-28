@@ -57,10 +57,10 @@ from composer.prover.ptypes import (
     classify_violation,
 )
 from composer.prover.results import (
-    ExternalWarnings,
+    AlertReport,
     FetchedResults,
     UnreadableAlertReport,
-    external_functions,
+    read_alert_report,
     read_and_format_run_result,
 )
 from composer.templates.loader import load_jinja_template
@@ -152,11 +152,9 @@ class ProverReport:
     result_str: str
     link: str
     certora_run_stdout: str
-    #: The Prover's own warnings about functions it treated as external, from the
-    #: job's alert report (:func:`composer.prover.results.external_functions`).
-    #: :class:`UnreadableAlertReport` means the report was present and could not
-    #: be read, which is not an empty list. The verdicts do not name them.
-    external_functions: ExternalWarnings | UnreadableAlertReport = field(default_factory=ExternalWarnings)
+    #: The job's alert report. Alerts carry what the verdicts do not, e.g. soundness
+    #: caveats about how the program was modeled.
+    alerts: AlertReport | UnreadableAlertReport = field(default_factory=AlertReport)
     #: Rules that stopped on an assertion the prover generated, keyed by rule
     #: name. The counterexample is not kept. Empty when every violation is the
     #: rule's own assertion, or the run reported none.
@@ -495,7 +493,7 @@ async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[FetchedRe
     ``cloud_results`` computes the runtime from the polled job, the local run already
     happened in ``run_prover_inner``, so its wall-clock (queue-free — local isn't queued)
     is measured there and handed in here."""
-    yield FetchedResults(path, runtime_ms, external_functions(path))
+    yield FetchedResults(path, runtime_ms, read_alert_report(path))
 
 
 async def _report_to_todo_list(
@@ -833,7 +831,7 @@ async def run_prover(
 
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"
-            externals = fetched.external_functions
+            alerts = fetched.alerts
             incomplete = _incomplete_checks(parsed)
 
             # 9. Notify runtime + prover_result callbacks
@@ -876,7 +874,7 @@ async def run_prover(
 
     return ProverReport(
         raw_rule_status=raw_rule_results,
-        external_functions=externals,
+        alerts=alerts,
         incomplete=incomplete,
         result_str=result_str,
         link=run_result["link"],

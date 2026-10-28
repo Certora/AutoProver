@@ -39,7 +39,7 @@ from composer.prover.core import (
 )
 from composer.prover.accounting import RunAccounting
 from composer.prover.ptypes import GeneratedAssertion, LoopUnwound, OverflowUnproven, RuleResult, StatusCodes
-from composer.prover.results import ExternalWarnings, UnreadableAlertReport
+from composer.prover.results import AlertReport, UnreadableAlertReport
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.prover import (
@@ -59,6 +59,7 @@ from composer.spec.cvlr.author_tools import (
     stamp_under,
     unaccounted,
 )
+from composer.spec.cvlr.externals import ExternalWarnings, external_warnings
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR
@@ -616,14 +617,17 @@ class VerifyRules(
                     lines.append(_names_note(_Unaccounted, property_failures))
                 if unfinished:
                     lines.append(_names_note(_NoPropertyVerdict, unfinished))
-                match report.external_functions:
-                    case UnreadableAlertReport():
+                externals: ExternalWarnings | UnreadableAlertReport
+                match report.alerts:
+                    case UnreadableAlertReport() as unreadable:
+                        externals = unreadable
                         lines.append(
                             "The alert report could not be read, so the functions this run "
                             "treated as external are unknown."
                         )
-                    case ExternalWarnings(messages=messages):
-                        if (note := _externals_note(messages)) is not None:
+                    case AlertReport() as alerts:
+                        externals = external_warnings(alerts)
+                        if (note := _externals_note(externals.messages)) is not None:
                             lines.append(note)
                 last = LastVerdicts(
                     status=status,
@@ -649,7 +653,7 @@ class VerifyRules(
                     self.tool_call_id,
                     "\n\n".join(lines),
                     prover_link=report.link,
-                    external_functions=report.external_functions,
+                    external_functions=externals,
                     last_verdicts=last,
                     **validations,
                 )

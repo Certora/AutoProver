@@ -14,8 +14,9 @@ from pydantic import BaseModel
 
 from composer.authoring.state import AuthoringExtra, merge_expected_failures
 from composer.prover.ptypes import StatusCodes
-from composer.prover.results import ExternalWarnings, UnreadableAlertReport
+from composer.prover.results import UnreadableAlertReport
 from composer.spec.cvlr.conf import TunableConf, conf_history, merge_settings
+from composer.spec.cvlr.externals import ExternalWarnings
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.source.live_explorer import VersionedHistory
 from composer.spec.types import CheckName

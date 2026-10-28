@@ -262,12 +262,14 @@ def flatten_tree_view(
 #: Where a job's alert report lives, relative to its results directory.
 ALERT_REPORT = Path("Reports") / "alertReport.json"
 
-_EXTERNALS_ALERT = "The following functions are neither inlined nor summarized"
-
 
 @dataclass(frozen=True)
-class ExternalWarnings:
-    """Warnings read from an alert report. Empty when the report is absent or names none."""
+class AlertReport:
+    """The messages of a job's alert report, in the Prover's words and order.
+
+    Empty when the job raised no alerts. The alerts do not name their rule, so a
+    message repeats once per rule that raised it.
+    """
 
     messages: tuple[str, ...] = ()
 
@@ -279,29 +281,25 @@ class UnreadableAlertReport:
 
 @dataclass(frozen=True)
 class FetchedResults:
-    """A finished run's results directory, and what its alert report said."""
+    """A finished run's results directory, and its alert report."""
 
     root: Path
     #: The prover's queue-free run time, when it is known.
     runtime_ms: int | None
-    external_functions: ExternalWarnings | UnreadableAlertReport
+    alerts: AlertReport | UnreadableAlertReport
 
 
-def external_functions(results_root: Path) -> ExternalWarnings | UnreadableAlertReport:
-    """The Prover's warnings about functions it treated as external, deduplicated.
+def read_alert_report(results_root: Path) -> AlertReport | UnreadableAlertReport:
+    """The alert report under ``results_root``.
 
-    Read from the alert report. Each warning is the Prover's own text. The alerts
-    do not name their rule, so the same warning is repeated. An external call
-    writes nothing but its return value, and no verdict says so.
-
-    An absent report is :class:`ExternalWarnings` with no messages. A report that
-    is not a JSON list is :class:`UnreadableAlertReport`: that is not an empty list.
+    An absent report is an empty :class:`AlertReport`. A report that is not a JSON
+    list is :class:`UnreadableAlertReport`: that is not an empty list.
     """
     path = results_root / ALERT_REPORT
     try:
         text = path.read_text()
     except FileNotFoundError:
-        return ExternalWarnings()
+        return AlertReport()
     except OSError:
         return UnreadableAlertReport()
     try:
@@ -310,12 +308,8 @@ def external_functions(results_root: Path) -> ExternalWarnings | UnreadableAlert
         return UnreadableAlertReport()
     if not isinstance(alerts, list):
         return UnreadableAlertReport()
-    found: set[str] = set()
-    for alert in alerts:
-        message = alert.get("message") if isinstance(alert, dict) else None
-        if isinstance(message, str) and _EXTERNALS_ALERT in message:
-            found.add(message)
-    return ExternalWarnings(tuple(sorted(found)))
+    messages = (alert.get("message") if isinstance(alert, dict) else None for alert in alerts)
+    return AlertReport(tuple(m for m in messages if isinstance(m, str)))
 
 
 class NoTreeViewResultError(RuntimeError):

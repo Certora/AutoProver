@@ -26,10 +26,10 @@ from prover_output_utility.models import JobStatus, convert_job_status
 
 from composer.prover.results import (
     ALERT_REPORT,
-    ExternalWarnings,
+    AlertReport,
     FetchedResults,
     UnreadableAlertReport,
-    external_functions,
+    read_alert_report,
 )
 
 logger = logging.getLogger("composer.spec")
@@ -214,10 +214,9 @@ async def _fetch_results(job_id: str, dest: Path) -> None:
             await asyncio.sleep(backoff)
 
 
-async def _fetch_alert_report(job_id: str, dest: Path) -> ExternalWarnings | UnreadableAlertReport:
+async def _fetch_alert_report(job_id: str, dest: Path) -> AlertReport | UnreadableAlertReport:
     """Save the job's alert report at ``Reports/alertReport.json``, where a local run puts it, and
-    read the functions the Prover treated as external from it
-    (:func:`composer.prover.results.external_functions`).
+    read it (:func:`composer.prover.results.read_alert_report`).
 
     A job with no alerts has no report. A fetch that fails otherwise does not fail the run: the
     verdicts stand without the report.
@@ -228,14 +227,14 @@ async def _fetch_alert_report(job_id: str, dest: Path) -> ExternalWarnings | Unr
         )
     except JobNotFoundError:
         logger.info("Cloud job %s has no alert report", job_id)
-        return ExternalWarnings()
+        return AlertReport()
     except Exception as exc:  # noqa: BLE001 — a missing report does not fail the run
         logger.warning("Cloud job %s: fetching the alert report failed (%s)", job_id, exc)
         return UnreadableAlertReport()
     target = dest / ALERT_REPORT
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text)
-    return external_functions(dest)
+    return read_alert_report(dest)
 
 
 @asynccontextmanager
@@ -281,5 +280,5 @@ async def cloud_results(
         # jobs measured here these two subtrees are ~3% of the archive. POU writes
         # them in the same layout the archive had, so the parse is unchanged.
         await _fetch_results(cloud_job.job_id, dest)
-        externals = await _fetch_alert_report(cloud_job.job_id, dest)
-        yield FetchedResults(dest, runtime_ms, externals)
+        alerts = await _fetch_alert_report(cloud_job.job_id, dest)
+        yield FetchedResults(dest, runtime_ms, alerts)
