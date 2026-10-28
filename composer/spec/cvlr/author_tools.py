@@ -49,23 +49,25 @@ def unaccounted(
     expected_failures: Mapping[CheckName, str],
     incomplete: Container[str],
 ) -> list[str]:
-    """Rules that are not verified, and that a marking does not excuse.
+    """Rules whose verdict does not match what the markings say.
 
-    A marking excuses a ``VIOLATED`` rule whose assertion is the rule's own.
-    An incomplete check, a timeout, an error, a sanity failure, and a skip
-    stay unaccounted.
+    An unmarked rule is accounted for when it verified. A marked rule is
+    accounted for when it is ``VIOLATED`` on its own assertion. An incomplete
+    check, a timeout, an error, a sanity failure, and a skip stay unaccounted,
+    and so does a marked rule that verified.
     """
-    return sorted(
-        name
-        for name, code in status.items()
-        if code != "VERIFIED"
-        and not (code == "VIOLATED" and name in expected_failures and name not in incomplete)
-    )
+
+    def accounted(name: str, code: StatusCodes) -> bool:
+        if name in expected_failures:
+            return code == "VIOLATED" and name not in incomplete
+        return code == "VERIFIED"
+
+    return sorted(name for name, code in status.items() if not accounted(name, code))
 
 
 def stamp_under(last: LastVerdicts, expected: dict[CheckName, str]) -> dict[str, str]:
     """The prover stamp ``last`` earns under the markings ``expected``: its own stamp when they
-    account for every failure it reported, otherwise a cleared one."""
+    account for every verdict it reported, otherwise a cleared one."""
     if last.unverdicted or unaccounted(last.status, expected, last.incomplete):
         return {key: "" for key in last.stamp}
     return last.stamp
@@ -245,12 +247,12 @@ def _remarked(
     held = state["validations"].get(PROVER_VALIDATION_KEY) == current[PROVER_VALIDATION_KEY]
     if stamp == current and not held:
         said += (
-            " Every failure the last prover run reported is now accounted for, so this draft is "
+            " Every verdict the last prover run reported is now accounted for, so this draft is "
             "stamped without another run."
         )
     elif stamp != current and held:
         said += (
-            " The last prover run's failures are no longer all accounted for, so this draft's "
+            " The last prover run's verdicts are no longer all accounted for, so this draft's "
             "prover stamp is withdrawn."
         )
     return tool_state_update(tool_call_id, said, expected_failures=marking, validations=stamp)
@@ -267,6 +269,10 @@ class ExpectRuleFailure(
     the counterexample and concluding the defect is real. When the marking
     accounts for every failure of the last run, the draft is stamped from that
     run, with no new submission.
+
+    Mark one rule per step. Do not make parallel calls to this tool or to
+    ``expect_rule_passage``: each decides the stamp as if it were the only
+    marking, and the last to land overwrites the others' decision.
     """
 
     rule_name: str = Field(description="The name of the rule expected to fail")
@@ -276,8 +282,9 @@ class ExpectRuleFailure(
 
     @override
     async def run(self) -> Command:
-        # An empty reason removes the marking. Do not record one. An unexplained
-        # expected failure looks like a broken rule.
+        # An empty reason is the sentinel ``merge_expected_failures`` reads as an
+        # unmarking, so it cannot be a marking's reason. An unexplained expected
+        # failure looks like a broken rule.
         if not self.reason.strip():
             return tool_state_update(
                 self.tool_call_id,
@@ -298,12 +305,21 @@ class ExpectRulePassage(
     WithInjectedState[CvlrGenerationState], WithAsyncImplementation[Command], WithInjectedId
 ):
     """Withdraw an ``expect_rule_failure`` marking, putting the rule back under the gate. If the
-    last run reported the rule failing, the draft's prover stamp goes with it."""
+    last run reported the rule failing, the draft's prover stamp goes with it.
+
+    Do not make parallel calls to this tool or to ``expect_rule_failure``: each
+    decides the stamp as if it were the only marking, and the last to land
+    overwrites the others' decision.
+    """
 
     rule_name: str = Field(description="The name of the rule that should verify after all")
 
     @override
     async def run(self) -> Command:
+        if self.rule_name not in self.state["expected_failures"]:
+            return tool_state_update(
+                self.tool_call_id, f"{self.rule_name} is not marked as expected to fail."
+            )
         return _remarked(
             self.state,
             self.tool_call_id,

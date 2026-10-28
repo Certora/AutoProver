@@ -119,6 +119,48 @@
     "template_name": "cvlr/inert_summaries.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.cvlr.verify:_IncompleteCheck": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_IncompleteCheck",
+    "template_name": "cvlr/incomplete_check.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.verify:_IncompleteAdvice": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_IncompleteAdvice",
+    "template_name": "cvlr/incomplete_advice.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.verify:_ExternalFunctions": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_ExternalFunctions",
+    "template_name": "cvlr/external_functions.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.verify:_ExpectedVerified": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_ExpectedVerified",
+    "template_name": "cvlr/expected_verified.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.verify:_NoVerdict": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_NoVerdict",
+    "template_name": "cvlr/no_verdict.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.verify:_Unaccounted": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_Unaccounted",
+    "template_name": "cvlr/unaccounted.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.verify:_NoPropertyVerdict": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_NoPropertyVerdict",
+    "template_name": "cvlr/no_property_verdict.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.feedback:FeedbackTemplate": {
     "module": "composer.spec.feedback",
     "qualname": "FeedbackTemplate",

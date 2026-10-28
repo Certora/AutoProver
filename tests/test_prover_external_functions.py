@@ -5,9 +5,13 @@ unsound without any verdict saying so. The alert text is the Prover's own
 (`Reports/alertReport.json`, one `Summarization` alert per rule translated) and is passed on whole.
 """
 
+import asyncio
 import json
 from pathlib import Path
 
+from prover_output_utility.exceptions import JobNotFoundError
+
+import composer.prover.cloud as cloud
 from composer.prover.results import ALERT_REPORT, ExternalWarnings, UnreadableAlertReport, external_functions
 
 _PREFIX = (
@@ -56,3 +60,37 @@ def test_a_report_that_is_not_a_json_list_is_not_an_empty_one(tmp_path):
     assert isinstance(external_functions(tmp_path), UnreadableAlertReport)
     (tmp_path / ALERT_REPORT).write_text(json.dumps({"message": "not a list"}))
     assert isinstance(external_functions(tmp_path), UnreadableAlertReport)
+
+
+class _AlertAPI:
+    def __init__(self, outcome: str | Exception):
+        self.outcome = outcome
+
+    def fetch_output_file(self, job_id: str, rel_path: str) -> str:
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+def _fetch_alerts(outcome: str | Exception, dest: Path, monkeypatch) -> ExternalWarnings | UnreadableAlertReport:
+    monkeypatch.setattr(cloud, "_results_api", lambda: _AlertAPI(outcome))
+    return asyncio.run(cloud._fetch_alert_report("deadbeefcafebabe", dest))
+
+
+def test_a_job_with_no_alert_report_has_no_externals(tmp_path, monkeypatch):
+    assert _fetch_alerts(JobNotFoundError("404"), tmp_path, monkeypatch) == ExternalWarnings()
+
+
+def test_a_failed_alert_report_fetch_is_not_reported_as_no_externals(tmp_path, monkeypatch):
+    out = _fetch_alerts(ConnectionResetError("reset"), tmp_path, monkeypatch)
+
+    assert isinstance(out, UnreadableAlertReport)
+
+
+def test_a_fetched_alert_report_is_saved_and_read(tmp_path, monkeypatch):
+    message = "The following functions are neither inlined nor summarized: f"
+
+    out = _fetch_alerts(json.dumps([{"message": message}]), tmp_path, monkeypatch)
+
+    assert out == ExternalWarnings((message,))
+    assert (tmp_path / ALERT_REPORT).exists()

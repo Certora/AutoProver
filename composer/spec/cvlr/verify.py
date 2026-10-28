@@ -71,7 +71,6 @@ from composer.spec.cvlr.state import (
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.gen_types import TypedTemplate
-from composer.spec.types import CheckName
 from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display
 
@@ -90,6 +89,40 @@ class _InertSummariesParams(TypedDict):
 
 
 _InertSummaries = TypedTemplate[_InertSummariesParams]("cvlr/inert_summaries.j2")
+
+
+class _CheckedRule(TypedDict):
+    name: str
+    assertion: str
+
+
+class _IncompleteCheckParams(TypedDict):
+    rules: list[_CheckedRule]
+    #: One rendering of ``cvlr/incomplete_advice.j2`` per kind of generated assertion the run hit.
+    advice: str
+
+
+class _IncompleteAdviceParams(TypedDict):
+    #: ``"loop"`` or ``"overflow"``, from :func:`_incomplete_kind`.
+    kind: str
+
+
+class _ExternalFunctionsParams(TypedDict):
+    warnings: str
+
+
+class _NamesParams(TypedDict):
+    #: Rule names, comma-separated.
+    names: str
+
+
+_IncompleteCheck = TypedTemplate[_IncompleteCheckParams]("cvlr/incomplete_check.j2")
+_IncompleteAdvice = TypedTemplate[_IncompleteAdviceParams]("cvlr/incomplete_advice.j2")
+_ExternalFunctions = TypedTemplate[_ExternalFunctionsParams]("cvlr/external_functions.j2")
+_ExpectedVerified = TypedTemplate[_NamesParams]("cvlr/expected_verified.j2")
+_NoVerdict = TypedTemplate[_NamesParams]("cvlr/no_verdict.j2")
+_Unaccounted = TypedTemplate[_NamesParams]("cvlr/unaccounted.j2")
+_NoPropertyVerdict = TypedTemplate[_NamesParams]("cvlr/no_property_verdict.j2")
 
 
 class BuildPermit:
@@ -287,11 +320,12 @@ def _incomplete_kind(stopped: GeneratedAssertion) -> str:
 def _incomplete_note(incomplete: Mapping[str, GeneratedAssertion]) -> str:
     ordered = sorted(incomplete.items())
     kinds = list(dict.fromkeys(_incomplete_kind(stopped) for _, stopped in ordered))
-    return load_jinja_template(
-        "cvlr/incomplete_check.j2",
-        rules=[{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
-        advice="\n".join(load_jinja_template("cvlr/incomplete_advice.j2", kind=kind) for kind in kinds),
-    )
+    return _IncompleteCheck.bind({
+        "rules": [{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
+        "advice": "\n".join(
+            _IncompleteAdvice.bind({"kind": kind}).render_to(load_jinja_template) for kind in kinds
+        ),
+    }).render_to(load_jinja_template)
 
 
 def _externals_note(externals: Sequence[str]) -> str | None:
@@ -304,7 +338,9 @@ def _externals_note(externals: Sequence[str]) -> str | None:
     if not externals:
         return None
     _log.info("prover treated functions as external:\n%s", "\n".join(externals))
-    return load_jinja_template("cvlr/external_functions.j2", warnings="\n\n".join(externals))
+    return _ExternalFunctions.bind({"warnings": "\n\n".join(externals)}).render_to(
+        load_jinja_template
+    )
 
 
 def _unverdicted(declared: Sequence[str], status: Mapping[str, StatusCodes]) -> list[str]:
@@ -316,10 +352,8 @@ def _unverdicted(declared: Sequence[str], status: Mapping[str, StatusCodes]) -> 
     return sorted(set(declared) - status.keys())
 
 
-def _wrongly_expected(
-    status: Mapping[str, StatusCodes], expected_failures: Mapping[CheckName, str]
-) -> list[str]:
-    return sorted(name for name in expected_failures if status.get(name) == "VERIFIED")
+def _names_note(template: TypedTemplate[_NamesParams], names: Sequence[str]) -> str:
+    return template.bind({"names": ", ".join(names)}).render_to(load_jinja_template)
 
 
 @tool_display("Compiling the harness", "Compile")
@@ -559,48 +593,38 @@ class VerifyRules(
                 status = report.rule_outcomes()
                 incomplete = report.incomplete
                 unexcused = unaccounted(status, expected, incomplete)
+                surprising = [name for name in unexcused if status[name] == "VERIFIED"]
                 property_failures = [
                     name
                     for name in unexcused
                     if status[name] == "VIOLATED" and name not in incomplete
                 ]
                 unfinished = [
-                    name
-                    for name in unexcused
-                    if name not in property_failures and name not in incomplete
+                    name for name in unexcused if status[name] not in ("VERIFIED", "VIOLATED")
                 ]
                 unverdicted = _unverdicted(declared, status)
-                surprising = _wrongly_expected(status, expected)
                 lines = [report.result_str]
                 if (inert := await self._inert_summaries(build)) is not None:
                     lines.append(inert)
                 if surprising:
-                    lines.append(
-                        load_jinja_template("cvlr/expected_verified.j2", names=", ".join(surprising))
-                    )
+                    lines.append(_names_note(_ExpectedVerified, surprising))
                 if incomplete:
                     lines.append(_incomplete_note(incomplete))
                 if unverdicted:
-                    lines.append(load_jinja_template("cvlr/no_verdict.j2", names=", ".join(unverdicted)))
+                    lines.append(_names_note(_NoVerdict, unverdicted))
                 if property_failures:
-                    lines.append(
-                        load_jinja_template("cvlr/unaccounted.j2", names=", ".join(property_failures))
-                    )
+                    lines.append(_names_note(_Unaccounted, property_failures))
                 if unfinished:
-                    lines.append(
-                        load_jinja_template("cvlr/no_property_verdict.j2", names=", ".join(unfinished))
-                    )
+                    lines.append(_names_note(_NoPropertyVerdict, unfinished))
                 match report.external_functions:
                     case UnreadableAlertReport():
                         lines.append(
                             "The alert report could not be read, so the functions this run "
                             "treated as external are unknown."
                         )
-                        recorded_externals = None
                     case ExternalWarnings(messages=messages):
                         if (note := _externals_note(messages)) is not None:
                             lines.append(note)
-                        recorded_externals = messages
                 last = LastVerdicts(
                     status=status,
                     incomplete=sorted(incomplete),
@@ -625,7 +649,7 @@ class VerifyRules(
                     self.tool_call_id,
                     "\n\n".join(lines),
                     prover_link=report.link,
-                    external_functions=recorded_externals,
+                    external_functions=report.external_functions,
                     last_verdicts=last,
                     **validations,
                 )

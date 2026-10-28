@@ -266,7 +266,18 @@ async def test_an_unreadable_alert_report_is_not_reported_as_no_externals(gate: 
     out = await gate.verify()
 
     assert "could not be read" in _text(out)
-    assert out.update["external_functions"] is None
+    assert out.update["external_functions"] == UnreadableAlertReport()
+
+
+async def test_a_marked_rule_that_verified_does_not_stamp(gate: _Gate):
+    """The marking claims a defect this run did not show, so the draft is not ready to publish."""
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert "marked as expected failures but VERIFIED: rule_b" in _text(out)
+    assert "did not reach a property verdict" not in _text(out)
 
 
 async def test_a_submission_without_results_does_not_stamp(gate: _Gate):

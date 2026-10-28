@@ -274,7 +274,17 @@ class ExternalWarnings:
 
 @dataclass(frozen=True)
 class UnreadableAlertReport:
-    """The alert report is present and is not a JSON list of alerts."""
+    """The alert report could not be fetched, or is not a JSON list of alerts."""
+
+
+@dataclass(frozen=True)
+class FetchedResults:
+    """A finished run's results directory, and what its alert report said."""
+
+    root: Path
+    #: The prover's queue-free run time, when it is known.
+    runtime_ms: int | None
+    external_functions: ExternalWarnings | UnreadableAlertReport
 
 
 def external_functions(results_root: Path) -> ExternalWarnings | UnreadableAlertReport:

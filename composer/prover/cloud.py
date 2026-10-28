@@ -24,7 +24,13 @@ from prover_output_utility.exceptions import (
 )
 from prover_output_utility.models import JobStatus, convert_job_status
 
-from composer.prover.results import ALERT_REPORT
+from composer.prover.results import (
+    ALERT_REPORT,
+    ExternalWarnings,
+    FetchedResults,
+    UnreadableAlertReport,
+    external_functions,
+)
 
 logger = logging.getLogger("composer.spec")
 
@@ -208,24 +214,28 @@ async def _fetch_results(job_id: str, dest: Path) -> None:
             await asyncio.sleep(backoff)
 
 
-async def _fetch_alert_report(job_id: str, dest: Path) -> None:
-    """Save the job's alert report at ``Reports/alertReport.json``, where a local run puts it.
+async def _fetch_alert_report(job_id: str, dest: Path) -> ExternalWarnings | UnreadableAlertReport:
+    """Save the job's alert report at ``Reports/alertReport.json``, where a local run puts it, and
+    read the functions the Prover treated as external from it
+    (:func:`composer.prover.results.external_functions`).
 
-    Best-effort. The report has warnings the verdicts do not, including the
-    functions the Prover treated as external
-    (:func:`composer.prover.results.external_functions`). A missing report does
-    not fail the run.
+    A job with no alerts has no report. A fetch that fails otherwise does not fail the run: the
+    verdicts stand without the report.
     """
     try:
         text = await asyncio.to_thread(
             _results_api().fetch_output_file, job_id, ALERT_REPORT.name
         )
+    except JobNotFoundError:
+        logger.info("Cloud job %s has no alert report", job_id)
+        return ExternalWarnings()
     except Exception as exc:  # noqa: BLE001 — a missing report does not fail the run
-        logger.warning("Cloud job %s: no alert report (%s)", job_id, exc)
-        return
+        logger.warning("Cloud job %s: fetching the alert report failed (%s)", job_id, exc)
+        return UnreadableAlertReport()
     target = dest / ALERT_REPORT
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text)
+    return external_functions(dest)
 
 
 @asynccontextmanager
@@ -234,12 +244,11 @@ async def cloud_results(
     *,
     poll_timeout: float,
     poll_callback: Callable[[str, str], Awaitable[None]] | None = None,
-) -> AsyncIterator[tuple[Path, int | None]]:
-    """Async context manager: poll cloud job, download results, yield (path, runtime_ms),
-    clean up.
+) -> AsyncIterator[FetchedResults]:
+    """Async context manager: poll cloud job, download results, yield them, clean up.
 
     Parses the cloud link, polls until completion, downloads and extracts the results
-    archive, then yields ``(results_root, runtime_ms)`` where ``runtime_ms`` is the prover's
+    archive and the alert report, then yields them. ``runtime_ms`` is the prover's
     queue-free execution time from the job's ``startTime``→``finishTime`` (``None`` if
     unavailable). The temporary directory is cleaned up on exit.
     """
@@ -272,5 +281,5 @@ async def cloud_results(
         # jobs measured here these two subtrees are ~3% of the archive. POU writes
         # them in the same layout the archive had, so the parse is unchanged.
         await _fetch_results(cloud_job.job_id, dest)
-        await _fetch_alert_report(cloud_job.job_id, dest)
-        yield (dest, runtime_ms)
+        externals = await _fetch_alert_report(cloud_job.job_id, dest)
+        yield FetchedResults(dest, runtime_ms, externals)

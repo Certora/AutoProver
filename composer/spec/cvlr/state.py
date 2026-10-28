@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from composer.authoring.state import AuthoringExtra, merge_expected_failures
 from composer.prover.ptypes import StatusCodes
+from composer.prover.results import ExternalWarnings, UnreadableAlertReport
 from composer.spec.cvlr.conf import TunableConf, conf_history, merge_settings
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.source.live_explorer import VersionedHistory
@@ -58,9 +59,8 @@ class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     #: applies them, so several calls in one graph step each land.
     prover_settings: Annotated[TunableConf, merge_settings]
     #: The last prover run's warnings about functions it treated as external.
-    #: ``None`` when that run's alert report could not be read, which is not an
-    #: empty tuple. Absent until a run has reported.
-    external_functions: NotRequired[tuple[str, ...] | None]
+    #: Absent until a run has reported.
+    external_functions: NotRequired[ExternalWarnings | UnreadableAlertReport]
     expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: Absent until a prover run has produced verdicts.
     last_verdicts: NotRequired[LastVerdicts]

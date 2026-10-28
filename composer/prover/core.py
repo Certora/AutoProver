@@ -58,6 +58,7 @@ from composer.prover.ptypes import (
 )
 from composer.prover.results import (
     ExternalWarnings,
+    FetchedResults,
     UnreadableAlertReport,
     external_functions,
     read_and_format_run_result,
@@ -487,14 +488,14 @@ DefaultCexHandler = TrivialFanoutCexHandler
 
 
 @asynccontextmanager
-async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[tuple[Path, int | None]]:
-    """Trivial context manager yielding ``(local results path, runtime_ms)``.
+async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[FetchedResults]:
+    """Trivial context manager yielding the local results path and ``runtime_ms``.
 
     Mirrors ``cloud_results``' interface so ``run_prover`` consumes both uniformly. Where
     ``cloud_results`` computes the runtime from the polled job, the local run already
     happened in ``run_prover_inner``, so its wall-clock (queue-free — local isn't queued)
     is measured there and handed in here."""
-    yield (path, runtime_ms)
+    yield FetchedResults(path, runtime_ms, external_functions(path))
 
 
 async def _report_to_todo_list(
@@ -825,12 +826,14 @@ async def run_prover(
     # time, sourced by each context manager (cloud job window / local
     # subprocess wall-clock).
     try:
-        async with results_cm as (emv_path, runtime_ms):
+        async with results_cm as fetched:
+            emv_path = fetched.root
+            runtime_ms = fetched.runtime_ms
             parsed = read_and_format_run_result(emv_path, prover_opts.app)
 
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"
-            externals = external_functions(emv_path)
+            externals = fetched.external_functions
             incomplete = _incomplete_checks(parsed)
 
             # 9. Notify runtime + prover_result callbacks

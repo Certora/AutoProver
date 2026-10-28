@@ -135,3 +135,26 @@ async def test_with_no_run_yet_a_marking_is_refused():
     assert "expected_failures" not in out.update
     assert "validations" not in out.update
     assert "no verdict yet" in str(out.update["messages"][0].content)
+
+
+@pytest.mark.asyncio
+async def test_withdrawing_the_marking_of_a_rule_that_verified_stamps_the_draft():
+    state = _after_run(
+        _state(expected_failures={"rule_b": "real"}), {"rule_a": "VERIFIED", "rule_b": "VERIFIED"}
+    )
+
+    out = await ExpectRulePassage(state=state, tool_call_id="tc", rule_name="rule_b").run()
+
+    assert out.update["validations"] == _stamp(state)
+    assert "stamped without another run" in str(out.update["messages"][0].content)
+
+
+@pytest.mark.asyncio
+async def test_withdrawing_a_marking_that_is_not_there_changes_nothing():
+    state = _after_run(_state(), {"rule_b": "VIOLATED"})
+
+    out = await ExpectRulePassage(state=state, tool_call_id="tc", rule_name="rule_b").run()
+
+    assert "expected_failures" not in out.update
+    assert "validations" not in out.update
+    assert "not marked" in str(out.update["messages"][0].content)
