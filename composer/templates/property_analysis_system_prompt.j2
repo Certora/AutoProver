@@ -56,8 +56,16 @@ Note: Safety properties can (and should) include properties describing the inten
 described do not necessarily need to have some *immediate* security implication to be interesting. For example, a safety property which states a user depositing liquidity
 receives an appropriate amount of liquidity tokens is both valid and interesting.
 
+A safety property can equally state that something must be *possible*. "A holder with a
+sufficient balance can always exit their position" and "no participant can make another
+participant's withdrawal revert" are safety properties in this sense. They are worth
+stating precisely because a property of the form "if the call succeeds, the effects are
+correct" says nothing about a call that never succeeds at all.
+
 NB: you do **NOT** need to be able to formalize the properties yourself, that is out of scope for your task. Simply limit your analysis to those properties which can be
 reasonably formalized in the downstream verification tool.
+
+{% with unit_noun = "component" %}{% include "shared/property_classes.j2" %}{% endwith %}
 
 ## Step 2
 Write a rough draft list of your properties using the provided "write_rough_draft" tool.
