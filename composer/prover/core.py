@@ -152,10 +152,10 @@ class ProverReport:
     #: The job's alert report. Alerts carry what the verdicts do not, e.g. soundness
     #: caveats about how the program was modeled.
     alerts: AlertReport | UnreadableAlertReport = field(default_factory=AlertReport)
-    #: The assertion each violated instance stopped on, in the Prover's words. The
-    #: counterexample is not kept, and this is what tells a rule's own assertion
-    #: from one the Prover generated (:func:`composer.prover.ptypes.classify_assertion`).
-    #: An instance whose output names no assertion is absent.
+    #: The assertion each violated instance stopped on, in the Prover's words, which
+    #: is what tells a rule's own assertion from one the Prover generated
+    #: (:func:`composer.prover.ptypes.classify_assertion`). A violated instance whose
+    #: output carries no assertion message has no entry, and counts as the rule's own.
     violated_assertions: dict[RulePath, str] = field(default_factory=dict)
 
     def rule_outcomes(self) -> dict[str, StatusCodes]:
