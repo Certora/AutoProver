@@ -2,9 +2,10 @@
 
 import asyncio
 import json
+import socket
 from pathlib import Path
 
-from prover_output_utility.exceptions import JobNotFoundError
+from aiohttp import web
 
 import composer.prover.cloud as cloud
 from composer.prover.results import ALERT_REPORT, AlertReport, UnreadableAlertReport, read_alert_report
@@ -42,33 +43,50 @@ def test_a_report_that_is_not_a_json_list_is_not_an_empty_one(tmp_path):
     assert isinstance(read_alert_report(tmp_path), UnreadableAlertReport)
 
 
-class _AlertAPI:
-    def __init__(self, outcome: str | Exception):
-        self.outcome = outcome
-
-    def fetch_output_file(self, job_id: str, rel_path: str) -> str:
-        if isinstance(self.outcome, Exception):
-            raise self.outcome
-        return self.outcome
+_JOB = "deadbeefcafebabe"
+_KEY = "k"
 
 
-def _fetch_alerts(outcome: str | Exception, dest: Path, monkeypatch) -> AlertReport | UnreadableAlertReport:
-    monkeypatch.setattr(cloud, "_results_api", lambda: _AlertAPI(outcome))
-    return asyncio.run(cloud._fetch_alert_report("deadbeefcafebabe", dest))
+def _closed_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
-def test_a_job_with_no_alert_report_has_no_alerts(tmp_path, monkeypatch):
-    assert _fetch_alerts(JobNotFoundError("404"), tmp_path, monkeypatch) == AlertReport()
+async def _fetch_from(status: int, body: str) -> AlertReport | UnreadableAlertReport:
+    app = web.Application()
+
+    async def handler(request: web.Request) -> web.Response:
+        assert request.path == f"/v1/domain/jobs/{_JOB}/f/alertReport.json"
+        assert request.query["anonymousKey"] == _KEY
+        return web.Response(status=status, text=body)
+
+    app.router.add_get("/v1/domain/jobs/{job_id}/f/alertReport.json", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    try:
+        job = cloud.CloudJob(site.name, "1", _JOB, _KEY)
+        return await cloud._fetch_alert_report(job)
+    finally:
+        await runner.cleanup()
 
 
-def test_a_failed_alert_report_fetch_is_not_reported_as_no_alerts(tmp_path, monkeypatch):
-    out = _fetch_alerts(ConnectionResetError("reset"), tmp_path, monkeypatch)
+def test_a_job_with_no_alert_report_has_no_alerts():
+    assert asyncio.run(_fetch_from(404, "")) == AlertReport()
+
+
+def test_a_failed_alert_report_fetch_is_not_reported_as_no_alerts():
+    job = cloud.CloudJob(f"http://127.0.0.1:{_closed_port()}", "1", _JOB, _KEY)
+    out = asyncio.run(cloud._fetch_alert_report(job))
 
     assert isinstance(out, UnreadableAlertReport)
 
 
-def test_a_fetched_alert_report_is_saved_and_read(tmp_path, monkeypatch):
-    out = _fetch_alerts(json.dumps([{"message": "m"}]), tmp_path, monkeypatch)
+def test_a_fetched_alert_report_is_parsed():
+    assert asyncio.run(_fetch_from(200, json.dumps([{"message": "m"}]))) == AlertReport(("m",))
 
-    assert out == AlertReport(("m",))
-    assert (tmp_path / ALERT_REPORT).exists()
+
+def test_a_fetched_report_that_is_not_a_json_list_is_not_an_empty_one():
+    assert isinstance(asyncio.run(_fetch_from(200, "not json")), UnreadableAlertReport)

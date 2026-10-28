@@ -289,19 +289,12 @@ class FetchedResults:
     alerts: AlertReport | UnreadableAlertReport
 
 
-def read_alert_report(results_root: Path) -> AlertReport | UnreadableAlertReport:
-    """The alert report under ``results_root``.
+def parse_alert_report(text: str) -> AlertReport | UnreadableAlertReport:
+    """The alerts named in ``text``.
 
-    An absent report is an empty :class:`AlertReport`. A report that is not a JSON
-    list is :class:`UnreadableAlertReport`: that is not an empty list.
+    ``text`` that is not a JSON list of alerts is :class:`UnreadableAlertReport`: that
+    is not an empty list.
     """
-    path = results_root / ALERT_REPORT
-    try:
-        text = path.read_text()
-    except FileNotFoundError:
-        return AlertReport()
-    except OSError:
-        return UnreadableAlertReport()
     try:
         alerts = json.loads(text)
     except ValueError:
@@ -310,6 +303,22 @@ def read_alert_report(results_root: Path) -> AlertReport | UnreadableAlertReport
         return UnreadableAlertReport()
     messages = (alert.get("message") if isinstance(alert, dict) else None for alert in alerts)
     return AlertReport(tuple(m for m in messages if isinstance(m, str)))
+
+
+def read_alert_report(results_root: Path) -> AlertReport | UnreadableAlertReport:
+    """The alert report under ``results_root`` (:func:`parse_alert_report`).
+
+    An absent report is an empty :class:`AlertReport`. A report that cannot be read
+    is :class:`UnreadableAlertReport`.
+    """
+    path = results_root / ALERT_REPORT
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return AlertReport()
+    except OSError:
+        return UnreadableAlertReport()
+    return parse_alert_report(text)
 
 
 class NoTreeViewResultError(RuntimeError):
