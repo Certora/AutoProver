@@ -1,10 +1,10 @@
 """State ``verify_rules`` reads.
 
 The generic authoring state (:mod:`composer.authoring.state`) supplies the
-buffer, the skip list, and the validation stamps. A verdict also depends on
-the points-to summaries, the prover settings, and edits to the program. Those
-enter the stamp through :func:`tuning_history`. Expected-failure markings do
-not. They are applied to the last run's verdicts when the stamp is decided.
+buffer, the skip list, the expected-failure markings, and the validation
+stamps. A verdict also depends on the points-to summaries, the prover
+settings, and edits to the program. Those enter the stamp through
+:func:`tuning_history`.
 """
 
 from typing import Annotated, NotRequired
@@ -12,14 +12,13 @@ from typing import Annotated, NotRequired
 from langgraph.graph import MessagesState
 from pydantic import BaseModel
 
-from composer.authoring.state import AuthoringExtra, merge_expected_failures
+from composer.authoring.state import CheckingExtra
 from composer.prover.ptypes import StatusCodes
 from composer.prover.results import UnreadableAlertReport
 from composer.spec.cvlr.conf import TunableConf, conf_history, merge_settings
 from composer.spec.cvlr.externals import ExternalWarnings
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.source.live_explorer import VersionedHistory
-from composer.spec.types import CheckName
 
 #: Stamped when every rule the build listed is accounted for. There is no
 #: separate stamp for ``cargo check``. A prover run builds first and reports
@@ -32,8 +31,7 @@ class LastVerdicts(BaseModel):
     """The last prover run that produced verdicts.
 
     Markings are judged against it. A change of marking re-decides the stamp
-    without another run. ``stamp`` is the digest of the draft, the skips, and
-    :func:`tuning_history` at that run. A draft edited since does not match it.
+    without another run, provided nothing ``draft`` covers has changed since.
     """
 
     status: dict[str, StatusCodes]
@@ -42,10 +40,13 @@ class LastVerdicts(BaseModel):
     #: Rules the build listed that the report gave no verdict for. While any is
     #: missing, nothing stamps.
     unverdicted: list[str]
-    stamp: dict[str, str]
+    #: :func:`~composer.authoring.state.draft_digest` with :func:`tuning_history`
+    #: at that run. The markings are not in it, so it still identifies the run
+    #: after they change.
+    draft: str
 
 
-class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
+class CvlrGenerationExtra(CheckingExtra, VersionedHistory):
     #: Points-to summaries, in the order added, deduplicated by pattern. Several
     #: ``summarize_for_prover`` calls can land in one graph step, so the reducer
     #: appends.
@@ -62,7 +63,6 @@ class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     #: The last prover run's warnings about functions it treated as external.
     #: Absent until a run has reported.
     external_functions: NotRequired[ExternalWarnings | UnreadableAlertReport]
-    expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: Absent until a prover run has produced verdicts.
     last_verdicts: NotRequired[LastVerdicts]
     #: The job link from the most recent prover run that produced results,

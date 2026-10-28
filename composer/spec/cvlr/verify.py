@@ -27,7 +27,7 @@ from graphcore.tools.schemas import (
     WithInjectedState,
 )
 
-from composer.authoring.state import ValidationStamper
+from composer.authoring.state import draft_digest
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
@@ -65,7 +65,6 @@ from composer.spec.cvlr.incomplete import GeneratedAssertion, OverflowUnproven, 
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import (
-    PROVER_VALIDATION_KEY,
     CvlrGenerationState,
     LastVerdicts,
     tuning_history,
@@ -284,7 +283,6 @@ class VerifyDeps:
     #: the build script must not live there.
     submission_dir: Path
     prover_opts: ProverOptions
-    stamper: ValidationStamper
 
     @property
     def unit_submission(self) -> Submission:
@@ -573,7 +571,6 @@ class VerifyRules(
         *,
         declared: Sequence[str],
     ) -> Command | str:
-        stamper = deps.stamper
         expected = self.state["expected_failures"]
         match outcome:
             case BuildRejected(build=build):
@@ -634,21 +631,11 @@ class VerifyRules(
                     status=status,
                     incomplete=sorted(incomplete),
                     unverdicted=unverdicted,
-                    stamp=stamper(self.state, tuning_history(self.state)),
+                    draft=draft_digest(self.state, tuning_history(self.state)),
                 )
-                # A marking re-decides with this same predicate, so a withdrawn marking writes
-                # the same withdrawal. A run that is not accounted for withdraws a stamp of this
-                # same draft, and leaves a stamp of a different draft where it is.
-                earned = stamp_under(last, expected)
                 validations = {}
-                if earned == last.stamp:
+                if (earned := stamp_under(last, expected)) is not None:
                     lines.append("Every rule is accounted for. This draft is stamped.")
-                    validations = {"validations": earned}
-                elif (
-                    self.state["validations"].get(PROVER_VALIDATION_KEY)
-                    == last.stamp[PROVER_VALIDATION_KEY]
-                ):
-                    lines.append("This run is not accounted for, so the prover stamp is withdrawn.")
                     validations = {"validations": earned}
                 return tool_state_update(
                     self.tool_call_id,

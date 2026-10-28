@@ -1,7 +1,7 @@
 """``verify_rules``, driven through :func:`gate_tools`.
 
 No cargo and no Prover: the build, the section read, the conf write, and the
-submission are stand-ins. The stamp is the digest of the draft. A submission
+submission are stand-ins. The stamp is the digest of the draft and its markings. A submission
 holds the build permit until the job's link arrives, and not through the cloud
 job.
 """
@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 from langchain_core.messages import ToolMessage
 
-from composer.authoring.state import make_validation_stamper, spec_digest
+from composer.authoring.state import checked_digest
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CompileFailed
 from composer.diagnostics.timing import RunSummary, install_run_summary
@@ -120,7 +120,6 @@ def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
             submission=Submission(manifest_path=Path("p/Cargo.toml"), stem="unit", msg="m"),
             submission_dir=tmp_path / "submissions",
             prover_opts=None,  # type: ignore[arg-type]
-            stamper=make_validation_stamper(PROVER_VALIDATION_KEY),
         )
     )
 
@@ -158,8 +157,10 @@ def _text(out: Any) -> str:
 async def test_every_listed_rule_verified_stamps_the_draft(gate: _Gate):
     out = await gate.verify()
 
-    history = tuning_history({**gate.state, "curr_spec": _DRAFT})  # type: ignore[arg-type]
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: spec_digest(_DRAFT, [], history)}
+    state = {**gate.state, "curr_spec": _DRAFT}
+    assert out.update["validations"] == {
+        PROVER_VALIDATION_KEY: checked_digest(state, tuning_history(state))  # type: ignore[arg-type]
+    }
     assert out.update["prover_link"] == _LINK
     assert "stamped" in _text(out)
 
@@ -214,27 +215,6 @@ async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart(gat
     assert "validations" not in out.update
     assert f"rule_b: {assertion}" in _text(out)
     assert out.update["last_verdicts"].incomplete == ["rule_b"]
-
-
-async def test_a_later_failure_of_the_same_draft_withdraws_the_stamp(gate: _Gate):
-    history = tuning_history({**gate.state, "curr_spec": _DRAFT})  # type: ignore[arg-type]
-    digest = spec_digest(_DRAFT, [], history)
-    gate.state["validations"] = {PROVER_VALIDATION_KEY: digest}
-    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))
-
-    out = await gate.verify()
-
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: None}
-    assert "withdrawn" in _text(out)
-
-
-async def test_a_failure_leaves_a_different_drafts_stamp_untouched(gate: _Gate):
-    gate.state["validations"] = {PROVER_VALIDATION_KEY: "older"}
-    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))
-
-    out = await gate.verify()
-
-    assert "validations" not in out.update
 
 
 async def test_a_timeout_is_not_excused_by_a_marking(gate: _Gate):

@@ -26,8 +26,9 @@ from graphcore.tools.schemas import (
 )
 
 from composer.authoring.state import (
-    ValidationStamper,
-    make_validation_stamper,
+    checked_digest,
+    draft_digest,
+    marked_digest,
     merge_expected_failures,
 )
 from composer.prover.conf import dump_conf
@@ -66,16 +67,12 @@ def unaccounted(
     return sorted(name for name, code in status.items() if not accounted(name, code))
 
 
-def stamp_under(last: LastVerdicts, expected: dict[CheckName, str]) -> Mapping[str, str | None]:
-    """The ``validations`` update ``last`` earns under the markings ``expected``: its own stamp
-    when they account for every verdict it reported, otherwise a withdrawal of that stamp."""
+def stamp_under(last: LastVerdicts, expected: Mapping[CheckName, str]) -> dict[str, str] | None:
+    """The prover stamp ``last`` earns under the markings ``expected``, or None when they leave a
+    verdict it reported unaccounted for."""
     if last.unverdicted or unaccounted(last.status, expected, last.incomplete):
-        return {key: None for key in last.stamp}
-    return last.stamp
-
-
-def prover_stamper() -> ValidationStamper:
-    return make_validation_stamper(PROVER_VALIDATION_KEY)
+        return None
+    return {PROVER_VALIDATION_KEY: marked_digest(last.draft, expected)}
 
 
 @tool_display(lambda p: f"Summarizing `{p['symbol_pattern']}` for the prover", "Summary")
@@ -241,22 +238,24 @@ def _remarked(
 ) -> Command:
     """Apply ``marking`` and re-decide the prover stamp against the last run's verdicts."""
     last = state.get("last_verdicts")
-    if last is None:
+    history = tuning_history(state)
+    if last is None or last.draft != draft_digest(state, history):
         return tool_state_update(tool_call_id, said, expected_failures=marking)
     stamp = stamp_under(last, merge_expected_failures(state["expected_failures"], marking))
-    current = prover_stamper()(state, tuning_history(state))
-    held = state["validations"].get(PROVER_VALIDATION_KEY) == current[PROVER_VALIDATION_KEY]
-    if stamp == current and not held:
+    if stamp is not None:
         said += (
-            " Every verdict the last prover run reported is now accounted for, so this draft is "
+            " Every verdict the last prover run reported is accounted for, so this draft is "
             "stamped without another run."
         )
-    elif stamp != current and held:
-        said += (
-            " The last prover run's verdicts are no longer all accounted for, so this draft's "
-            "prover stamp is withdrawn."
+        return tool_state_update(
+            tool_call_id, said, expected_failures=marking, validations=stamp
         )
-    return tool_state_update(tool_call_id, said, expected_failures=marking, validations=stamp)
+    if state["validations"].get(PROVER_VALIDATION_KEY) == checked_digest(state, history):
+        said += (
+            " The last prover run's verdicts are no longer all accounted for, so this draft is "
+            "no longer stamped."
+        )
+    return tool_state_update(tool_call_id, said, expected_failures=marking)
 
 
 @tool_display(lambda p: f"Expecting rule `{p['rule_name']}` to fail", None)

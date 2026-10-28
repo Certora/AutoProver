@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from typing import NotRequired, Annotated
 from typing_extensions import TypedDict
 from pydantic import BaseModel, Field
@@ -13,14 +12,9 @@ class ResultStateSchema(BaseModel):
     comments: str = Field(description="Any comments or notes on the generated implementation, and a summary of your reasoning, along with any lessons "
               "learned from iterating with the prover.")
 
-def merge_validation(left: dict[str, str], right: Mapping[str, str | None]) -> dict[str, str]:
-    """State reducer for validation stamps. A ``None`` withdraws the stamp under its key."""
+def merge_validation(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
     to_ret = left.copy()
-    for k, v in right.items():
-        if v is None:
-            to_ret.pop(k, None)
-        else:
-            to_ret[k] = v
+    to_ret.update(right)
     return to_ret
 
 def merge_skips(left: set[int], right: set[int]) -> set[int]:

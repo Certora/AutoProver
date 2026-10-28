@@ -69,9 +69,9 @@ from composer.ui.tool_display import (
 )
 
 from composer.foundry.runner import get_forge_test_tool, infer_test_dir
-from composer.authoring.state import make_validation_stamper
 from composer.foundry.state import (
     FEEDBACK,
+    FEEDBACK_STAMPER,
     FORGE_TEST_VALIDATION_KEY,
     FOUNDRY_JUDGE_KEY,
     FoundryGenerationInput,
@@ -663,7 +663,7 @@ async def batch_foundry_test_generation(
     judge_ctx = ctx.child(FOUNDRY_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
         thunk=_build_feedback_thunk(judge_ctx, env, props, component),
-        stamper=make_validation_stamper(FEEDBACK),
+        stamper=FEEDBACK_STAMPER,
     )
 
     builder = (
