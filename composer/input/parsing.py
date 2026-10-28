@@ -18,6 +18,21 @@ def add_extra_context_args(parser: argparse.ArgumentParser) -> None:
              "the order given.",
     )
 
+def add_property_set_args(parser: argparse.ArgumentParser) -> None:
+    """Register ``--predefined-properties`` and ``--stop-after-properties``, shared by every
+    entry point that runs the pipeline driver."""
+    parser.add_argument(
+        "--predefined-properties", type=str, default=None, metavar="PATH",
+        help="Path to a property set (the property_set.json a previous run wrote to its report "
+             "directory). Skips component analysis and property extraction and formalizes "
+             "exactly the file's components and properties.",
+    )
+    parser.add_argument(
+        "--stop-after-properties", action="store_true",
+        help="End the run once the components and properties are final and property_set.json "
+             "is written, without formalizing or reporting.",
+    )
+
 ArgNS = TypeVar("ArgNS", covariant=True)
 
 class TypedArgumentParser(Protocol[ArgNS]):
