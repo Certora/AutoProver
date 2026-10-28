@@ -4747,7 +4747,7 @@ _TAPE_JSON = r"""
             "type": "direct"
           },
           "index": 0,
-          "partial_json": "{\"edit_id\": \"72e3c55cf82e0c5685d046cdda869c9c435e7ba295b05072937dfcb341b4fec3\"}"
+          "partial_json": "{\"edit_id\": \"1675a7e43737213840fed9d7a4fcb6f68bd89973aaf7a624ddb88b26d0cc70d5\"}"
         }
       ],
       "additional_kwargs": {},
@@ -4763,7 +4763,7 @@ _TAPE_JSON = r"""
         {
           "name": "commit_edit",
           "args": {
-            "edit_id": "72e3c55cf82e0c5685d046cdda869c9c435e7ba295b05072937dfcb341b4fec3"
+            "edit_id": "1675a7e43737213840fed9d7a4fcb6f68bd89973aaf7a624ddb88b26d0cc70d5"
           },
           "id": "toolu_01AsdGidtHonnyN6vnTaAKcx",
           "type": "tool_call"
@@ -11063,7 +11063,7 @@ _TAPE_JSON = r"""
             "type": "direct"
           },
           "index": 0,
-          "partial_json": "{\"edit_id\": \"234e4b0d0229ff797a5417832a525d609ae0b4c203bdcb0a24d511bcb92d4e23\"}"
+          "partial_json": "{\"edit_id\": \"fdc46afc3af48350b25feee77bfa85f4ce8ef6b2086f25fbb48bb08d746643d1\"}"
         }
       ],
       "additional_kwargs": {},
@@ -11079,7 +11079,7 @@ _TAPE_JSON = r"""
         {
           "name": "commit_edit",
           "args": {
-            "edit_id": "234e4b0d0229ff797a5417832a525d609ae0b4c203bdcb0a24d511bcb92d4e23"
+            "edit_id": "fdc46afc3af48350b25feee77bfa85f4ce8ef6b2086f25fbb48bb08d746643d1"
           },
           "id": "toolu_01AnB1HKcnPuPbZkq7iRSF3b",
           "type": "tool_call"
@@ -20746,7 +20746,7 @@ _TAPE_JSON = r"""
             "type": "direct"
           },
           "index": 1,
-          "partial_json": "{\"edit_id\": \"110ec0e16d6d98bd13d786297751199ecb0b89f3e9e77c5f641fba635aa08549\"}"
+          "partial_json": "{\"edit_id\": \"c8f186540b1696dfd9236fdbdbdf35ba0b630c042b365b3c3b5c8d7113dd97e2\"}"
         }
       ],
       "additional_kwargs": {},
@@ -20762,7 +20762,7 @@ _TAPE_JSON = r"""
         {
           "name": "commit_edit",
           "args": {
-            "edit_id": "110ec0e16d6d98bd13d786297751199ecb0b89f3e9e77c5f641fba635aa08549"
+            "edit_id": "c8f186540b1696dfd9236fdbdbdf35ba0b630c042b365b3c3b5c8d7113dd97e2"
           },
           "id": "toolu_01WABBJ8hubnyN2VC41zTUU4",
           "type": "tool_call"
