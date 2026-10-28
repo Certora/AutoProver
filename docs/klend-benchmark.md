@@ -258,18 +258,25 @@ what AutoProver does with klend as published.
    shrinks what the Prover translates, and it is a munge the editor can already make. Worth a
    recipe if the heap change alone leaves translation slow.
 8. **Share the dependency cache between runs.** Every confined run downloads about 1.5 GB of
-   klend's dependencies two or three times, roughly 7 minutes each time, into a fresh cargo home.
-   A read-only shared registry and git cache, with the per-run home for writes, would keep the
-   isolation and drop most of that.
+   klend's dependencies up to three times, roughly 7 minutes each time: package selection,
+   preflight and the shared build tree each have their own cargo home. One home per run would
+   remove two of those reads, and a cache shared between runs most of the third. Recorded as U35
+   in [cvlr-todo.md](./cvlr-todo.md).
 
 **Not on this list: the `Fraction` abstraction.** The `[3001]` errors are in exactly the arithmetic
 the published report approximates with `FixedU64<14>`. Telling AutoProver to do that would hand it
 the answer to grading criterion 4, whether it finds the seams the report names. If the next run
 stalls on `[3001]`, that is the measurement, and it gets reported as one.
 
-**Then:** resume run 1 (same cache namespace, so analysis and extraction are not paid again) with a
-larger budget and the answer-key units first, and grade against P-01 to P-10 as below. From what
-the first units cost, each needs $60 to $120, less if the heap crash was most of it.
+**Then: a second run, not a resumption of run 1.** The formalization phase has changed a great
+deal since run 1, and a resume would restore run 1's partial drafts into the new harness layout. The
+cache key does not see code changes, so nothing would refuse it. Instead, run 1's analysis and
+extraction are written out with `--pin-to` (replayed from its cache, at no cost) and run 2 starts
+at formalization from that file with `--properties`, on a fresh copy of the input and a new cache
+namespace. The file keeps only the answer-key components: obligation lifecycle, collateral,
+borrowing, and liquidations. That is item 5 by selection rather than by a new option: it chooses
+where to spend, not what to find. Hoisting runs again over those four, so the protocol-wide unit is
+rebuilt from them.
 
 ## Grading it
 

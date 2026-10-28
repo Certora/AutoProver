@@ -402,6 +402,37 @@ another) needs `verify_rules` to take a rule list, and two things fixed with it:
 agreed it can come in a later PR. Postponed on 2026-10-23 until after P3b2, which is already larger
 than planned.
 
+**U35. A confined run downloads the dependency graph up to three times.** Each step that reads the
+graph has its own cargo home, derived from its working directory (`sandbox_cargo_home`), and every
+one starts cold:
+
+1. Package selection (`select_package` in [entry.py](../composer/spec/cvlr/entry.py)) reads into a
+   `TemporaryDirectory` that is deleted right after.
+2. Preflight's metadata read, warm step and compile gate read into
+   `<project>/.certora_internal/sandbox/cargo`. It survives in the input checkout, so only a rerun
+   on the same checkout reuses it.
+3. The shared build tree (`pipeline.py`, `session.warm()`) reads into
+   `<run work dir>/build/.certora_internal/sandbox/cargo`, deleted with the work directory.
+
+On the lending benchmark that is about 1.5 GB and 7 minutes per read, so a run on a fresh checkout
+pays roughly 20 minutes before any unit is authored, and a resumed one pays reads 1 and 3 again.
+Two fixes, in order:
+
+* **One cargo home per run.** Create it before package selection and pass it to all three, as a
+  `CargoSession` parameter and the metadata reads' `cargo_home`, rather than deriving it from each
+  working directory. The confined build then needs it among its writable paths, since it no longer
+  sits under the build's working directory. The trust argument is unchanged: it is still one run's
+  private cache, written by that run's own builds, which can already write to read 2's home.
+* **A shared cross-run cache**, the optimization `sandbox_cargo_home`'s docstring defers
+  ([command-sandbox.md](./command-sandbox.md) §11 item 5). Seed each run's home with *copies*, not
+  hardlinks, of what cargo verifies: the `.crate` archives in `registry/cache` (checked against
+  `Cargo.lock`'s checksums) and the git object databases in `git/db`. Never share `registry/src` or
+  `git/checkouts`, the unpacked trees cargo trusts as they are, which is where a build script could
+  poison a later run. Fill the shared cache only from an unconfined fetch in a separate home, before
+  any confined build runs. Check first what cargo actually keeps in `git/db`: the benchmark's home
+  held 856 KB there against 665 MB of checkouts, and if that is typical the git sources are not in
+  the shareable part.
+
 ---
 
 ## Leads from the certora-cvlr-kb ledger
