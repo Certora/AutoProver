@@ -200,8 +200,6 @@ class ExpectTestFailure(WithAsyncImplementation[Command], WithInjectedId):
 
     @override
     async def run(self) -> Command:
-        # The merge treats an empty reason as "remove the marking" (see
-        # _merge_expected_failures), so an empty reason must not get through.
         if not self.reason.strip():
             return tool_state_update(
                 self.tool_call_id,
@@ -228,11 +226,10 @@ class ExpectTestPassage(WithAsyncImplementation[Command], WithInjectedId):
 
     @override
     async def run(self) -> Command:
-        # Empty reason = remove the marking (see _merge_expected_failures).
         return tool_state_update(
             tool_call_id=self.tool_call_id,
             content="Success",
-            expected_failures={self.test_name: ""},
+            expected_failures={self.test_name: None},
         )
 
 

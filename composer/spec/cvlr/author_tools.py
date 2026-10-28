@@ -66,11 +66,11 @@ def unaccounted(
     return sorted(name for name, code in status.items() if not accounted(name, code))
 
 
-def stamp_under(last: LastVerdicts, expected: dict[CheckName, str]) -> dict[str, str]:
-    """The prover stamp ``last`` earns under the markings ``expected``: its own stamp when they
-    account for every verdict it reported, otherwise a cleared one."""
+def stamp_under(last: LastVerdicts, expected: dict[CheckName, str]) -> Mapping[str, str | None]:
+    """The ``validations`` update ``last`` earns under the markings ``expected``: its own stamp
+    when they account for every verdict it reported, otherwise a withdrawal of that stamp."""
     if last.unverdicted or unaccounted(last.status, expected, last.incomplete):
-        return {key: "" for key in last.stamp}
+        return {key: None for key in last.stamp}
     return last.stamp
 
 
@@ -237,7 +237,7 @@ def _unmarkable(last: LastVerdicts | None, rule: str) -> str | None:
 
 
 def _remarked(
-    state: CvlrGenerationState, tool_call_id: str, said: str, marking: dict[CheckName, str]
+    state: CvlrGenerationState, tool_call_id: str, said: str, marking: dict[CheckName, str | None]
 ) -> Command:
     """Apply ``marking`` and re-decide the prover stamp against the last run's verdicts."""
     last = state.get("last_verdicts")
@@ -283,9 +283,7 @@ class ExpectRuleFailure(
 
     @override
     async def run(self) -> Command:
-        # An empty reason is the sentinel ``merge_expected_failures`` reads as an
-        # unmarking, so it cannot be a marking's reason. An unexplained expected
-        # failure looks like a broken rule.
+        # An unexplained expected failure looks like a broken rule.
         if not self.reason.strip():
             return tool_state_update(
                 self.tool_call_id,
@@ -325,5 +323,5 @@ class ExpectRulePassage(
             self.state,
             self.tool_call_id,
             f"Withdrawn: {self.rule_name} must verify.",
-            {CheckName(self.rule_name): ""},
+            {CheckName(self.rule_name): None},
         )

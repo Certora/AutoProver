@@ -66,7 +66,7 @@ async def test_a_marking_that_leaves_a_failure_unaccounted_does_not_stamp():
 
     out = await _mark(state, "rule_b")
 
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: ""}
+    assert out.update["validations"] == {PROVER_VALIDATION_KEY: None}
 
 
 @pytest.mark.asyncio
@@ -113,7 +113,7 @@ async def test_a_missing_verdict_still_blocks_the_stamp():
 
     out = await _mark(state, "rule_b")
 
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: ""}
+    assert out.update["validations"] == {PROVER_VALIDATION_KEY: None}
 
 
 @pytest.mark.asyncio
@@ -124,7 +124,7 @@ async def test_withdrawing_a_marking_the_stamp_relied_on_withdraws_the_stamp():
 
     out = await ExpectRulePassage(state=state, tool_call_id="tc", rule_name="rule_b").run()
 
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: ""}
+    assert out.update["validations"] == {PROVER_VALIDATION_KEY: None}
     assert "stamp is withdrawn" in str(out.update["messages"][0].content)
 
 

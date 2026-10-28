@@ -636,9 +636,9 @@ class VerifyRules(
                     unverdicted=unverdicted,
                     stamp=stamper(self.state, tuning_history(self.state)),
                 )
-                # A marking re-decides with this same predicate. The cleared stamp is what a
-                # withdrawn marking writes. A run that is not accounted for clears a stamp of
-                # this same draft, and leaves a stamp of a different draft where it is.
+                # A marking re-decides with this same predicate, so a withdrawn marking writes
+                # the same withdrawal. A run that is not accounted for withdraws a stamp of this
+                # same draft, and leaves a stamp of a different draft where it is.
                 earned = stamp_under(last, expected)
                 validations = {}
                 if earned == last.stamp:

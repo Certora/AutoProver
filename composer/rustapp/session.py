@@ -449,8 +449,6 @@ class ExpectCheckFailure(WithAsyncImplementation[Command | str], WithInjectedId)
 
     @override
     async def run(self) -> Command | str:
-        # An empty reason is the sentinel ``merge_expected_failures`` reads as an unmarking, so it
-        # must not get through here.
         if not self.reason.strip():
             return "A non-empty reason is required when marking it as expected to fail."
         return tool_state_update(
@@ -474,7 +472,7 @@ class ExpectCheckPassage(WithAsyncImplementation[Command], WithInjectedId):
     @override
     async def run(self) -> Command:
         return tool_state_update(
-            self.tool_call_id, "Recorded.", expected_failures={self.check_name: ""},
+            self.tool_call_id, "Recorded.", expected_failures={self.check_name: None},
         )
 
 

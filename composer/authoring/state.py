@@ -12,6 +12,7 @@ here is why" is part of what a judge accepted.
 
 import hashlib
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Annotated, Protocol, Sequence
 from typing_extensions import TypedDict
 
@@ -46,18 +47,16 @@ def merge_skips(
 
 
 def merge_expected_failures(
-    left: dict[CheckName, str], right: dict[CheckName, str]
+    left: dict[CheckName, str], right: Mapping[CheckName, str | None]
 ) -> dict[CheckName, str]:
-    """State reducer for the check-name → reason map of checks expected to fail.
-
-    An empty reason removes the marking — the marking tool rejects an empty reason at the tool
-    boundary, so an empty value can only mean the unmarking tool's delete."""
+    """State reducer for the check-name → reason map of checks expected to fail. A ``None``
+    reason removes the marking."""
     to_ret = left.copy()
     for k, v in right.items():
-        if not v:
+        if v is None:
             to_ret.pop(k, None)
-            continue
-        to_ret[k] = v
+        else:
+            to_ret[k] = v
     return to_ret
 
 

@@ -224,7 +224,7 @@ async def test_a_later_failure_of_the_same_draft_withdraws_the_stamp(gate: _Gate
 
     out = await gate.verify()
 
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: ""}
+    assert out.update["validations"] == {PROVER_VALIDATION_KEY: None}
     assert "withdrawn" in _text(out)
 
 
