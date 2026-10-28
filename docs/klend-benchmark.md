@@ -273,10 +273,11 @@ deal since run 1, and a resume would restore run 1's partial drafts into the new
 cache key does not see code changes, so nothing would refuse it. Instead, run 1's analysis and
 extraction are written out with `--pin-to` (replayed from its cache, at no cost) and run 2 starts
 at formalization from that file with `--properties`, on a fresh copy of the input and a new cache
-namespace. The file keeps only the answer-key components: obligation lifecycle, collateral,
-borrowing, and liquidations. That is item 5 by selection rather than by a new option: it chooses
-where to spend, not what to find. Hoisting runs again over those four, so the protocol-wide unit is
-rebuilt from them.
+namespace. The file keeps only the components the answer key's properties live in: obligation
+lifecycle, collateral, borrowing and liquidations (P-01 to P-03, P-06 to P-10), and reserve
+deposits and withdrawals (P-04, P-05). That is item 5 by selection rather than by a new option: it
+chooses where to spend, not what to find. Hoisting runs again over those five, so the protocol-wide
+unit is rebuilt from them.
 
 ## Grading it
 
