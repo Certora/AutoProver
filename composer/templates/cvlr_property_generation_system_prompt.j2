@@ -541,3 +541,21 @@ a finding into a claim nobody downstream can distinguish from a verification.
 
 Mark a rule expected-to-fail only after reading the counterexample and concluding the defect is real.
 "Marked because I could not get it to pass" is the failure mode this exists to prevent.
+
+Only a rule that is VIOLATED on its own assertion is a candidate. A timeout, an error, a sanity
+failure, or a rule that stopped on an assertion the prover generated has shown no defect, so none of
+them is ever marked.
+
+A VIOLATED verdict is not yet a defect either. Before marking, rule out the counterexamples this
+prompt has already shown you a correct program produces:
+
+* a value that comes from a `summarize_for_prover` stand-in, which returns anything at all;
+* a field decoded back out of a byte buffer, which is unconstrained (**Decode nothing** above);
+* a change a CPI was supposed to make, which the prover does not model;
+* an account built by hand that breaks an `#[account(...)]` constraint the real entry point would
+  have enforced;
+* an input your assumptions left wider than any real caller could supply.
+
+The reason is what a reader of the finding gets, so name the state or input that triggers the
+violation and why a real transaction can reach it. If you later conclude the failure was the rule's
+fault, fix the rule and withdraw the marking with `expect_rule_passage`.
