@@ -62,6 +62,7 @@ def unaccounted(
             return code == "VIOLATED" and name not in incomplete
         return code == "VERIFIED"
 
+    # The names reach the author's notes; sorted, they read the same whatever order the report gave.
     return sorted(name for name, code in status.items() if not accounted(name, code))
 
 
