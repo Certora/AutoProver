@@ -113,6 +113,12 @@
     "template_name": "cvl_research_system_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.cvlr.verify:_InertSummaries": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_InertSummaries",
+    "template_name": "cvlr/inert_summaries.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.feedback:FeedbackTemplate": {
     "module": "composer.spec.feedback",
     "qualname": "FeedbackTemplate",

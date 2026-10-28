@@ -413,7 +413,8 @@ def test_a_conf_change_invalidates_a_stamp_earned_before_it():
     another."""
     default = cvlr_conf.conf_history(cvlr_conf.TunableConf())
     assert default != cvlr_conf.conf_history(cvlr_conf.TunableConf(loop_iter=3))
-    assert default != cvlr_conf.conf_history(cvlr_conf.TunableConf(optimistic_loop=True))
+    optimistic = cvlr_conf.TunableConf(optimistic_loop=True)
+    assert default != cvlr_conf.conf_history(optimistic)
     assert default == cvlr_conf.conf_history(cvlr_conf.TunableConf())
 
 
