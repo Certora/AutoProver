@@ -21,7 +21,7 @@ from composer.cargo.session import CompileFailed
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.prover.conf import SelectRules
 from composer.prover.core import ProverReport
-from composer.prover.ptypes import Counterexample, LoopUnwound, RulePath, RuleResult
+from composer.prover.ptypes import Counterexample, RulePath, RuleResult
 from composer.prover.results import AlertReport, UnreadableAlertReport
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.conf import TunableConf
@@ -51,7 +51,7 @@ _BUILT = SbfRun(duration_ms=1, verdict=Built(manifest=SimpleNamespace(artifact=P
 
 def _checked(
     *pairs: tuple[str, str],
-    incomplete: dict[str, LoopUnwound] | None = None,
+    violated_assertions: dict[str, str] | None = None,
     alerts: AlertReport | UnreadableAlertReport | None = None,
 ) -> Checked:
     report = ProverReport(
@@ -59,7 +59,7 @@ def _checked(
         result_str="rules",
         link=_LINK,
         certora_run_stdout="",
-        incomplete=incomplete or {},
+        violated_assertions={RulePath(name): text for name, text in (violated_assertions or {}).items()},
         **({} if alerts is None else {"alerts": alerts}),
     )
     return Checked(build=_BUILT, report=report)
@@ -206,7 +206,7 @@ async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart(gat
     gate.outcome = _checked(
         ("rule_a", "VERIFIED"),
         ("rule_b", "VIOLATED"),
-        incomplete={"rule_b": LoopUnwound(assertion)},
+        violated_assertions={"rule_b": assertion},
     )
 
     out = await gate.verify()

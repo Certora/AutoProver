@@ -408,7 +408,7 @@ def counterexample(dump: dict[str, object], shape: TraceShape) -> Counterexample
     ``assertMessage`` matters twice over: on a Solana loop-unwinding violation it is the only
     statement of what failed — the trace just shows the loop getting two iterations in and stopping
     — and it is what separates a violation that found a bug from one that ran into an analysis
-    bound (:func:`~composer.prover.ptypes.classify_violation`).
+    bound (:func:`~composer.prover.ptypes.classify_assertion`).
     """
     if "callTrace" not in dump:
         return None

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Literal, Optional, TypeVar
 from dataclasses import dataclass, field
 
@@ -68,7 +69,7 @@ class Counterexample:
 
     ``trace`` arrives already rendered, because how much of a call trace is worth showing is a
     per-chain question the parser answers (:class:`composer.prover.results.TraceShape`). The
-    assertion stays a field of its own because :func:`classify_violation` decides from it whether
+    assertion stays a field of its own because :func:`classify_assertion` decides from it whether
     the violation says anything about the *program* at all.
     """
 
@@ -110,39 +111,24 @@ class LoopUnwound(IncompleteCheck):
     not misbehave. The author can bound what sets the trip count, or raise the bound."""
 
 
-@dataclass(frozen=True)
-class OverflowUnproven(IncompleteCheck):
-    """The sound-signed-math pass could not show that an expression it treats as a pointer stays below ``2^64``.
-
-    With ``-solanaTACSoundSignedMath``, the prover treats pointer arithmetic,
-    byte-map indexes, and inferred pointers as unable to exceed 64 bits, then
-    asserts that. The assertion fails when the expression uses a value read
-    from account data that the rule left free near ``u64::MAX``. Bounding that
-    input gets past it.
-    """
-
-
-type GeneratedAssertion = LoopUnwound | OverflowUnproven
-
-type ViolationKind = PropertyViolation | GeneratedAssertion
-
-#: Assertions the prover generates for itself, matched by prefix. The tail
-#: carries advice that changes between versions.
+#: Assertions the prover generates for itself on every platform, matched by
+#: prefix. The tail carries advice that changes between versions. A platform
+#: that generates more extends this.
 #:
 #: An unrecognized assertion is treated as the rule's own. A stale entry can
 #: report a finding that is not one, and cannot hide a real one.
-_GENERATED_ASSERTIONS: tuple[tuple[str, type[GeneratedAssertion]], ...] = (
+GENERATED_ASSERTIONS: tuple[tuple[str, type[LoopUnwound]], ...] = (
     ("Unwinding condition in a loop", LoopUnwound),
-    ("Cannot overflow", OverflowUnproven),
 )
 
 
-def classify_violation(cex: Counterexample | None) -> ViolationKind:
-    """Whether a violated rule found a bug or ran into the prover's own limits."""
-    if cex is not None and cex.assertion is not None:
-        for prefix, kind in _GENERATED_ASSERTIONS:
-            if cex.assertion.startswith(prefix):
-                return kind(cex.assertion)
+def classify_assertion[K: IncompleteCheck](
+    assertion: str, generated: Sequence[tuple[str, type[K]]]
+) -> K | PropertyViolation:
+    """Whether a violated assertion found a bug or is one of ``generated``, the prover's own limits."""
+    for prefix, kind in generated:
+        if assertion.startswith(prefix):
+            return kind(assertion)
     return PropertyViolation()
 
 

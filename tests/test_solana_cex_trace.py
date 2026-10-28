@@ -15,7 +15,7 @@ import json
 import re
 from pathlib import Path
 
-from composer.prover.ptypes import LoopUnwound, OverflowUnproven, PropertyViolation, classify_violation
+from composer.prover.ptypes import GENERATED_ASSERTIONS, LoopUnwound, PropertyViolation, classify_assertion
 from composer.prover.results import (
     EVM_TRACE,
     GENERIC_TRACE,
@@ -146,39 +146,19 @@ def test_a_loop_bound_the_prover_could_not_discharge_is_not_a_property_violation
     """Both of these are VIOLATED with a counterexample attached, and only one is a bug in the
     program: the other is the prover reporting that it stopped."""
     loop = counterexample(_loop_unwinding_dump(), SOLANA_TRACE)
-    match classify_violation(loop):
+    assert loop is not None and loop.assertion is not None
+    match classify_assertion(loop.assertion, GENERATED_ASSERTIONS):
         case LoopUnwound(assertion=assertion):
             assert assertion.startswith("Unwinding condition in a loop")
         case other:
             raise AssertionError(f"loop bound classified as {other}")
 
     real = counterexample(_assertion_failed_dump(), SOLANA_TRACE)
-    assert classify_violation(real) == PropertyViolation()
-
-
-def test_the_sound_math_pass_reporting_its_own_limit_is_not_a_property_violation():
-    """The sound-signed-math pass asserting its own inference (see ``_GENERATED_ASSERTIONS``).
-    Misclassified as the rule's own it becomes evidence, and the findings synthesizer writes the
-    prover's limitation up as a bug in the code under verification."""
-    cex = counterexample(
-        {
-            "assertMessage": "Cannot overflow: inferred pointer",
-            "callTrace": {"message": {"text": "r()", "arguments": []}, "childrenList": []},
-        },
-        SOLANA_TRACE,
-    )
-    match classify_violation(cex):
-        case OverflowUnproven(assertion=assertion):
-            assert assertion.startswith("Cannot overflow")
-        case other:
-            raise AssertionError(f"sound-math assertion classified as {other}")
+    assert real is not None and real.assertion is not None
+    assert classify_assertion(real.assertion, GENERATED_ASSERTIONS) == PropertyViolation()
 
 
 def test_an_unrecognized_assertion_is_treated_as_the_rule_s_own():
     """The classification fails safe: drift in the list of prover-generated assertions costs a
     spuriously reported finding, never a suppressed real one."""
-    assert classify_violation(None) == PropertyViolation()
-    assert classify_violation(
-        counterexample({"callTrace": {"message": {"text": "r()", "arguments": []},
-                                      "childrenList": []}}, SOLANA_TRACE)
-    ) == PropertyViolation()
+    assert classify_assertion("assertion failed", GENERATED_ASSERTIONS) == PropertyViolation()

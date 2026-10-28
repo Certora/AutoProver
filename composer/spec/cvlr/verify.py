@@ -38,7 +38,7 @@ from composer.prover.core import (
     ProverOptions,
 )
 from composer.prover.accounting import RunAccounting
-from composer.prover.ptypes import GeneratedAssertion, LoopUnwound, OverflowUnproven, RuleResult, StatusCodes
+from composer.prover.ptypes import LoopUnwound, RuleResult, StatusCodes
 from composer.prover.results import AlertReport, UnreadableAlertReport
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
@@ -61,6 +61,7 @@ from composer.spec.cvlr.author_tools import (
 )
 from composer.spec.cvlr.externals import ExternalWarnings, external_warnings
 from composer.spec.cvlr.harness import HarnessModule
+from composer.spec.cvlr.incomplete import GeneratedAssertion, OverflowUnproven, incomplete_checks
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import (
@@ -592,7 +593,7 @@ class VerifyRules(
                 return tool_return(self.tool_call_id, "\n\n".join(said))
             case Checked(build=build, report=report):
                 status = report.rule_outcomes()
-                incomplete = report.incomplete
+                incomplete = incomplete_checks(report.violated_assertions)
                 unexcused = unaccounted(status, expected, incomplete)
                 surprising = [name for name in unexcused if status[name] == "VERIFIED"]
                 property_failures = [

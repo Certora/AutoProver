@@ -49,12 +49,9 @@ from composer.prover.analysis import analyze_cex_raw
 from composer.certora_env import ProverApp
 from composer.prover.cloud import CloudJobError, cloud_results
 from composer.prover.ptypes import (
-    GeneratedAssertion,
-    PropertyViolation,
     RulePath,
     RuleResult,
     StatusCodes,
-    classify_violation,
 )
 from composer.prover.results import (
     AlertReport,
@@ -155,10 +152,11 @@ class ProverReport:
     #: The job's alert report. Alerts carry what the verdicts do not, e.g. soundness
     #: caveats about how the program was modeled.
     alerts: AlertReport | UnreadableAlertReport = field(default_factory=AlertReport)
-    #: Rules that stopped on an assertion the prover generated, keyed by rule
-    #: name. The counterexample is not kept. Empty when every violation is the
-    #: rule's own assertion, or the run reported none.
-    incomplete: dict[str, GeneratedAssertion] = field(default_factory=dict)
+    #: The assertion each violated instance stopped on, in the Prover's words. The
+    #: counterexample is not kept, and this is what tells a rule's own assertion
+    #: from one the Prover generated (:func:`composer.prover.ptypes.classify_assertion`).
+    #: An instance whose output names no assertion is absent.
+    violated_assertions: dict[RulePath, str] = field(default_factory=dict)
 
     def rule_outcomes(self) -> dict[str, StatusCodes]:
         """One status per rule. A non-``VERIFIED`` instance is kept over a later ``VERIFIED`` one."""
@@ -715,22 +713,14 @@ async def declared_rules_list(
     return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
 
-def _incomplete_checks(results: dict[str, RuleResult]) -> dict[str, GeneratedAssertion]:
-    """Which violated rules stopped on an assertion the prover generated.
-
-    Keyed by rule name. The counterexample is not stored on the report, and
-    the gate tells these apart from a rule whose own assertion failed.
-    """
-    found: dict[str, GeneratedAssertion] = {}
-    for result in results.values():
-        if result.status != "VIOLATED":
-            continue
-        match classify_violation(result.counterexample):
-            case PropertyViolation():
-                continue
-            case generated:
-                found[result.path.rule] = generated
-    return found
+def _violated_assertions(results: dict[str, RuleResult]) -> dict[RulePath, str]:
+    return {
+        result.path: result.counterexample.assertion
+        for result in results.values()
+        if result.status == "VIOLATED"
+        and result.counterexample is not None
+        and result.counterexample.assertion is not None
+    }
 
 
 async def run_prover(
@@ -832,7 +822,7 @@ async def run_prover(
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"
             alerts = fetched.alerts
-            incomplete = _incomplete_checks(parsed)
+            violated_assertions = _violated_assertions(parsed)
 
             # 9. Notify runtime + prover_result callbacks
             if runtime_ms is not None:
@@ -875,7 +865,7 @@ async def run_prover(
     return ProverReport(
         raw_rule_status=raw_rule_results,
         alerts=alerts,
-        incomplete=incomplete,
+        violated_assertions=violated_assertions,
         result_str=result_str,
         link=run_result["link"],
         certora_run_stdout=stdout,
