@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from enum import StrEnum
 from typing import Literal, Optional, TypeVar
 from dataclasses import dataclass, field
 
@@ -63,17 +63,65 @@ class SourceSpan:
         return f"{self.file}:{self.line}"
 
 
+class GeneratedKind(StrEnum):
+    """The kinds of assertion the Prover generates for itself, as ``assertOrigin`` names them."""
+
+    LOOP_UNWINDING = "loopUnwinding"
+    CANNOT_OVERFLOW = "cannotOverflow"
+    UNRESOLVED_CPI = "unresolvedCpi"
+    PANIC = "panic"
+    HASHING_BOUND = "hashingBound"
+    RECURSION_LIMIT = "recursionLimit"
+    STACK_SIZE_LIMIT = "stackSizeLimit"
+    UNRESOLVED_JUMP = "unresolvedJump"
+    CONTRACT_CREATION_BOUND = "contractCreationBound"
+    MEMCPY_OVERLAP = "memcpyOverlap"
+    UNSUPPORTED_HOST_FUNCTION = "unsupportedHostFunction"
+
+
+@dataclass(frozen=True)
+class UserAssertion:
+    """An assertion the rule wrote."""
+
+
+@dataclass(frozen=True)
+class UnknownKind:
+    """A kind of generated assertion that a newer Prover names and :class:`GeneratedKind` does not."""
+
+    name: str
+
+
+@dataclass(frozen=True)
+class GeneratedAssertion:
+    """An assertion the Prover inserted."""
+
+    kind: GeneratedKind | UnknownKind
+
+
+@dataclass(frozen=True)
+class UnclassifiedAssertion:
+    """The Prover did not say where the assertion came from.
+
+    The built-in rule checkers' assertions are reported this way, as are generated assertions the
+    Prover has not given a kind.
+    """
+
+
+type AssertOrigin = UserAssertion | GeneratedAssertion | UnclassifiedAssertion
+
+
 @dataclass(frozen=True)
 class Counterexample:
     """One violated rule's counterexample: the failing execution, what it broke, and where.
 
     ``trace`` arrives already rendered, because how much of a call trace is worth showing is a
-    per-chain question the parser answers (:class:`composer.prover.results.TraceShape`). The
-    assertion stays a field of its own because :func:`classify_assertion` decides from it whether
-    the violation says anything about the *program* at all.
+    per-chain question the parser answers (:class:`composer.prover.results.TraceShape`).
+    ``origin`` is what :func:`classify_violation` decides from: whether the violation says anything
+    about the *program* at all.
     """
 
     trace: str
+    origin: AssertOrigin
     assertion: str | None = None
     source: SourceSpan | None = None
 
@@ -90,46 +138,43 @@ class Counterexample:
 
 @dataclass(frozen=True)
 class PropertyViolation:
-    """The rule's own assertion failed, so the counterexample describes the program."""
+    """The counterexample describes the program: the rule's own assertion failed, or the program
+    did something the Prover checks on its behalf, such as panicking."""
 
 
 @dataclass(frozen=True)
 class IncompleteCheck:
-    """An assertion the prover generated for itself.
+    """An assertion the Prover generated for itself, because it reached a limit of its own.
 
-    The check did not finish, so nothing about the program follows from it. Show
-    it to the author. Do not record it as a finding. ``assertion`` is the
-    prover's message. The subclass names which kind it was.
+    The check did not finish, so nothing about the program follows from it. Show it to the author.
+    Do not record it as a finding. ``assertion`` is the Prover's message, which carries its own
+    advice.
     """
 
-    assertion: str
+    kind: GeneratedKind | UnknownKind
+    assertion: str | None
 
 
-@dataclass(frozen=True)
-class LoopUnwound(IncompleteCheck):
-    """A loop needed more iterations than the bound unrolls: the prover stopped, the program did
-    not misbehave. The author can bound what sets the trip count, or raise the bound."""
+#: Generated assertions that check the program itself rather than mark where the Prover gave up.
+_PROGRAM_CHECKS = frozenset({GeneratedKind.PANIC, GeneratedKind.MEMCPY_OVERLAP})
 
 
-#: Assertions the prover generates for itself on every platform, matched by
-#: prefix. The tail carries advice that changes between versions. A platform
-#: that generates more extends this.
-#:
-#: An unrecognized assertion is treated as the rule's own. A stale entry can
-#: report a finding that is not one, and cannot hide a real one.
-GENERATED_ASSERTIONS: tuple[tuple[str, type[LoopUnwound]], ...] = (
-    ("Unwinding condition in a loop", LoopUnwound),
-)
+def classify_violation(cex: Counterexample) -> PropertyViolation | IncompleteCheck:
+    """Whether a violated rule found a bug or ran into the Prover's own limits.
 
+    An unclassified assertion is treated as the rule's own, so a gap in the Prover's tagging can
+    report a finding that is not one, and cannot hide a real one.
 
-def classify_assertion[K: IncompleteCheck](
-    assertion: str, generated: Sequence[tuple[str, type[K]]]
-) -> K | PropertyViolation:
-    """Whether a violated assertion found a bug or is one of ``generated``, the prover's own limits."""
-    for prefix, kind in generated:
-        if assertion.startswith(prefix):
-            return kind(assertion)
-    return PropertyViolation()
+    A kind this version does not know is an incomplete check: the Prover says it generated the
+    assertion, and most kinds are its limits. If the new kind checks the program instead, the rule
+    cannot be accounted for until it is added to :data:`_PROGRAM_CHECKS`, rather than becoming a
+    finding no one looked at.
+    """
+    match cex.origin:
+        case GeneratedAssertion(kind=kind) if kind not in _PROGRAM_CHECKS:
+            return IncompleteCheck(kind=kind, assertion=cex.assertion)
+        case _:
+            return PropertyViolation()
 
 
 @dataclass

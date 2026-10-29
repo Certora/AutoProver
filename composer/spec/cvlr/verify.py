@@ -38,7 +38,7 @@ from composer.prover.core import (
     ProverOptions,
 )
 from composer.prover.accounting import RunAccounting
-from composer.prover.ptypes import LoopUnwound, RuleResult, StatusCodes
+from composer.prover.ptypes import GeneratedKind, IncompleteCheck, RuleResult, StatusCodes
 from composer.prover.results import AlertReport, UnreadableAlertReport
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
@@ -56,7 +56,6 @@ from composer.spec.cvlr.prover import (
 from composer.spec.cvlr.author_tools import AdjustProverConfig, SummarizeForProver
 from composer.spec.cvlr.externals import ExternalWarnings, external_warnings
 from composer.spec.cvlr.harness import HarnessModule
-from composer.spec.cvlr.incomplete import GeneratedAssertion, OverflowUnproven, incomplete_checks
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import (
@@ -93,7 +92,7 @@ _InertSummaries = TypedTemplate[_InertSummariesParams]("cvlr/inert_summaries.j2"
 
 class _CheckedRule(TypedDict):
     name: str
-    assertion: str
+    assertion: str | None
 
 
 class _IncompleteCheckParams(TypedDict):
@@ -103,8 +102,8 @@ class _IncompleteCheckParams(TypedDict):
 
 
 class _IncompleteAdviceParams(TypedDict):
-    #: ``"loop"`` or ``"overflow"``, from :func:`_incomplete_kind`.
-    kind: str
+    #: One of :data:`_ADVISED`.
+    kind: GeneratedKind
 
 
 class _ExternalFunctionsParams(TypedDict):
@@ -308,17 +307,18 @@ class VerifyDeps:
         )
 
 
-def _incomplete_kind(stopped: GeneratedAssertion) -> str:
-    match stopped:
-        case LoopUnwound():
-            return "loop"
-        case OverflowUnproven():
-            return "overflow"
+#: The kinds of generated assertion the author gets advice for. The Prover's message carries its
+#: own advice for the rest.
+_ADVISED = (GeneratedKind.LOOP_UNWINDING, GeneratedKind.CANNOT_OVERFLOW)
 
 
-def _incomplete_note(incomplete: Mapping[str, GeneratedAssertion]) -> str:
+def _incomplete_note(incomplete: Mapping[str, IncompleteCheck]) -> str:
     ordered = sorted(incomplete.items())
-    kinds = list(dict.fromkeys(_incomplete_kind(stopped) for _, stopped in ordered))
+    kinds = [
+        kind
+        for kind in dict.fromkeys(stopped.kind for _, stopped in ordered)
+        if isinstance(kind, GeneratedKind) and kind in _ADVISED
+    ]
     return _IncompleteCheck.bind({
         "rules": [{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
         "advice": "\n".join(
@@ -633,7 +633,7 @@ class VerifyRules(
                 return tool_return(self.tool_call_id, "\n\n".join(said))
             case Checked(build=build, report=report):
                 status = report.rule_outcomes()
-                incomplete = incomplete_checks(report.violated_assertions)
+                incomplete = {path.rule: check for path, check in report.incomplete.items()}
                 unexcused = unaccounted(status, expected, incomplete)
                 surprising = [name for name in unexcused if status[name] == "VERIFIED"]
                 property_failures = [

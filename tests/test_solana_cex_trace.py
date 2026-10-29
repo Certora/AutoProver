@@ -9,13 +9,23 @@ backend fails:
 * ``loop_unwinding`` — not a violation of the property at all, but the prover reporting that it
   could not discharge a loop bound. Worth a fixture precisely because a findings synthesizer handed
   this would write it up as a bug in the program.
+
+``assert_origin`` is a run of the Prover that reports ``assertOrigin``.
 """
 
 import json
 import re
 from pathlib import Path
 
-from composer.prover.ptypes import GENERATED_ASSERTIONS, LoopUnwound, PropertyViolation, classify_assertion
+import pytest
+
+from composer.prover.ptypes import (
+    GeneratedKind,
+    IncompleteCheck,
+    PropertyViolation,
+    UnclassifiedAssertion,
+    classify_violation,
+)
 from composer.prover.results import (
     EVM_TRACE,
     GENERIC_TRACE,
@@ -146,19 +156,40 @@ def test_a_loop_bound_the_prover_could_not_discharge_is_not_a_property_violation
     """Both of these are VIOLATED with a counterexample attached, and only one is a bug in the
     program: the other is the prover reporting that it stopped."""
     loop = counterexample(_loop_unwinding_dump(), SOLANA_TRACE)
-    assert loop is not None and loop.assertion is not None
-    match classify_assertion(loop.assertion, GENERATED_ASSERTIONS):
-        case LoopUnwound(assertion=assertion):
+    assert loop is not None
+    match classify_violation(loop):
+        case IncompleteCheck(kind=GeneratedKind.LOOP_UNWINDING, assertion=str(assertion)):
             assert assertion.startswith("Unwinding condition in a loop")
         case other:
             raise AssertionError(f"loop bound classified as {other}")
 
     real = counterexample(_assertion_failed_dump(), SOLANA_TRACE)
-    assert real is not None and real.assertion is not None
-    assert classify_assertion(real.assertion, GENERATED_ASSERTIONS) == PropertyViolation()
+    assert real is not None
+    assert classify_violation(real) == PropertyViolation()
 
 
-def test_an_unrecognized_assertion_is_treated_as_the_rule_s_own():
-    """The classification fails safe: drift in the list of prover-generated assertions costs a
-    spuriously reported finding, never a suppressed real one."""
-    assert classify_assertion("assertion failed", GENERATED_ASSERTIONS) == PropertyViolation()
+@pytest.mark.parametrize(
+    "fixture, expected",
+    [
+        ("user", PropertyViolation()),
+        ("loop_unwinding", GeneratedKind.LOOP_UNWINDING),
+        ("cannot_overflow", GeneratedKind.CANNOT_OVERFLOW),
+    ],
+)
+def test_the_prover_s_own_origin_decides(fixture: str, expected: object):
+    dump = json.loads((FIXTURES / "assert_origin" / f"{fixture}.json").read_text())
+    cex = counterexample(dump, SOLANA_TRACE)
+    assert cex is not None
+    match classify_violation(cex):
+        case IncompleteCheck(kind=kind):
+            assert kind == expected
+        case verdict:
+            assert verdict == expected
+
+
+def test_output_from_a_prover_that_does_not_report_the_origin_still_parses():
+    """The CVL pipeline runs on a released Prover, which may predate ``assertOrigin``."""
+    dump = {k: v for k, v in _loop_unwinding_dump().items() if k != "assertOrigin"}
+    cex = counterexample(dump, SOLANA_TRACE)
+    assert cex is not None
+    assert cex.origin == UnclassifiedAssertion()

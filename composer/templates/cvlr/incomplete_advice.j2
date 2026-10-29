@@ -1,7 +1,7 @@
-{%- if kind == "loop" -%}
+{%- if kind == "loopUnwinding" -%}
 A loop needed more iterations than the bound unrolls. Constrain what determines the trip count, or raise the bound. A
 summary directive cannot name a loop. If the property is about the loop, skip it and say what bound it needed.
-{%- elif kind == "overflow" -%}
+{%- elif kind == "cannotOverflow" -%}
 `Cannot overflow` is a check the Prover adds on its own, not one your rule asserts: it could not show that an expression
 it treats as a pointer stays below 2^64. That is almost always because a value the rule reads from an account (a
 balance, an amount) is free to sit just below u64::MAX. Bound the account-data values on that rule's path —

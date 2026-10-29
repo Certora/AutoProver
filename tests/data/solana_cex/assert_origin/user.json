@@ -1,0 +1,302 @@
+{
+  "treeViewPath": "rule_faulty_add_performs_addition-Assertions-assertion failed",
+  "graph_link": "Report-rule_faulty_add_performs_addition-Assertions-example1.html",
+  "jumpToDefinition": null,
+  "assertMessage": "assertion failed",
+  "assertOrigin": "user",
+  "valueRepresentations": [
+    {
+      "name": "PRETTY",
+      "example": "MAX_UINT8"
+    },
+    {
+      "name": "DEC",
+      "example": "255"
+    },
+    {
+      "name": "HEX",
+      "example": "0xff"
+    }
+  ],
+  "callResolution": [],
+  "callResolutionWarnings": [],
+  "callTrace": {
+    "message": {
+      "text": "rule_faulty_add_performs_addition()",
+      "arguments": []
+    },
+    "status": "",
+    "childrenList": [
+      {
+        "message": {
+          "text": "Global State",
+          "arguments": []
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": null,
+        "storageId": null
+      },
+      {
+        "message": {
+          "text": "CVT_nondet_u64: '{0}'",
+          "arguments": [
+            {
+              "value": "1",
+              "values": [
+                "1",
+                "1",
+                "0x1"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-nondet-0.4.1/src/scalars.rs",
+          "start": {
+            "line": 59,
+            "col": 22
+          },
+          "end": {
+            "line": 60,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "CVT_nondet_u64: '{0}'",
+          "arguments": [
+            {
+              "value": "2",
+              "values": [
+                "2",
+                "2",
+                "0x2"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-nondet-0.4.1/src/scalars.rs",
+          "start": {
+            "line": 59,
+            "col": 22
+          },
+          "end": {
+            "line": 60,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "x: '{0}'",
+          "arguments": [
+            {
+              "value": "1",
+              "values": [
+                "1",
+                "1",
+                "0x1"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-log-0.4.1/src/core.rs",
+          "start": {
+            "line": 92,
+            "col": 13
+          },
+          "end": {
+            "line": 93,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "y: '{0}'",
+          "arguments": [
+            {
+              "value": "2",
+              "values": [
+                "2",
+                "2",
+                "0x2"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-log-0.4.1/src/core.rs",
+          "start": {
+            "line": 92,
+            "col": 13
+          },
+          "end": {
+            "line": 93,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "faulty_add_result: '{0}'",
+          "arguments": [
+            {
+              "value": "2",
+              "values": [
+                "2",
+                "2",
+                "0x2"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-log-0.4.1/src/core.rs",
+          "start": {
+            "line": 92,
+            "col": 13
+          },
+          "end": {
+            "line": 93,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "assert faulty_add_result == x + y",
+          "arguments": []
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-log-0.4.1/src/core.rs",
+          "start": {
+            "line": 78,
+            "col": 13
+          },
+          "end": {
+            "line": 79,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "faulty_add_result: '{0}'",
+          "arguments": [
+            {
+              "value": "2",
+              "values": [
+                "2",
+                "2",
+                "0x2"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-log-0.4.1/src/core.rs",
+          "start": {
+            "line": 92,
+            "col": 13
+          },
+          "end": {
+            "line": 93,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "x + y: '{0}'",
+          "arguments": [
+            {
+              "value": "3",
+              "values": [
+                "3",
+                "3",
+                "0x3"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-log-0.4.1/src/core.rs",
+          "start": {
+            "line": 92,
+            "col": 13
+          },
+          "end": {
+            "line": 93,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "assert FAIL",
+          "arguments": []
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": "cvlr_by_example/first_example/src/certora/spec/checks.rs",
+          "start": {
+            "line": 16,
+            "col": 1
+          },
+          "end": {
+            "line": 17,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "Global State",
+          "arguments": []
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": null,
+        "storageId": null
+      }
+    ],
+    "jumpToDefinition": null
+  },
+  "variables": []
+}

@@ -12,17 +12,26 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import json
+import logging
 
 from pydantic import Field, BaseModel, ValidationError
 
 from composer.certora_env import ProverApp
 from composer.prover.ptypes import (
+    AssertOrigin,
     Counterexample,
+    GeneratedAssertion,
+    GeneratedKind,
     RulePath,
     RuleResult,
     SourceSpan,
     StatusCodes,
+    UnclassifiedAssertion,
+    UnknownKind,
+    UserAssertion,
 )
+
+_log = logging.getLogger(__name__)
 
 T = TypeVar('T')
 R = TypeVar('R')
@@ -411,13 +420,32 @@ def calltrace_to_xml(node: CallTraceModel, shape: TraceShape) -> str:
     return "".join(xml_parts)
 
 
+def assert_origin(reported: object) -> AssertOrigin:
+    """Where a violated assertion came from, from the ``assertOrigin`` of its rule's output.
+
+    A Prover that predates ``assertOrigin`` does not write the key, and its assertions read as
+    unclassified, the rule's own. Only a run on a Prover that writes it can tell a limit of the
+    Prover from a finding.
+    """
+    match reported:
+        case "user":
+            return UserAssertion()
+        case str(kind) if kind in GeneratedKind:
+            return GeneratedAssertion(GeneratedKind(kind))
+        case str(kind):
+            _log.warning("the Prover reported a kind of generated assertion not in GeneratedKind: %s", kind)
+            return GeneratedAssertion(UnknownKind(kind))
+        case _:
+            return UnclassifiedAssertion()
+
+
 def counterexample(dump: dict[str, object], shape: TraceShape) -> Counterexample | None:
     """One violated rule's counterexample, or None when its output carries no call trace.
 
-    ``assertMessage`` matters twice over: on a Solana loop-unwinding violation it is the only
-    statement of what failed — the trace just shows the loop getting two iterations in and stopping
-    — and it is what separates a violation that found a bug from one that ran into an analysis
-    bound (:func:`~composer.prover.ptypes.classify_assertion`).
+    On a Solana loop-unwinding violation ``assertMessage`` is the only statement of what failed:
+    the trace just shows the loop getting two iterations in and stopping. ``assertOrigin`` is what
+    separates a violation that found a bug from one that ran into an analysis bound
+    (:func:`~composer.prover.ptypes.classify_violation`).
     """
     if "callTrace" not in dump:
         return None
@@ -435,6 +463,7 @@ def counterexample(dump: dict[str, object], shape: TraceShape) -> Counterexample
             pass
     return Counterexample(
         trace=calltrace_to_xml(CallTraceModel.model_validate(dump["callTrace"]), shape),
+        origin=assert_origin(dump.get("assertOrigin")),
         assertion=assertion,
         source=source,
     )

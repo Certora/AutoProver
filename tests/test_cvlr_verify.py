@@ -21,7 +21,15 @@ from composer.cargo.session import CompileFailed
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.prover.conf import SelectRules
 from composer.prover.core import ProverReport
-from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+from composer.prover.ptypes import (
+    Counterexample,
+    GeneratedKind,
+    IncompleteCheck,
+    RulePath,
+    RuleResult,
+    UnknownKind,
+    UserAssertion,
+)
 from composer.prover.results import AlertReport, UnreadableAlertReport
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.conf import TunableConf
@@ -46,12 +54,15 @@ pytestmark = pytest.mark.asyncio
 
 _DRAFT = "#[rule]\nfn rule_a() {}\n#[rule]\nfn rule_b() {}\n"
 _LINK = "https://prover.certora.com/jobStatus/1/abc"
+_LOOP = IncompleteCheck(
+    GeneratedKind.LOOP_UNWINDING, "Unwinding condition in a loop. Try increasing the unwinding bound."
+)
 _BUILT = SbfRun(duration_ms=1, verdict=Built(manifest=SimpleNamespace(artifact=Path("/w/prog.so"))), confined=True)  # type: ignore[arg-type]
 
 
 def _checked(
     *pairs: tuple[str, str],
-    violated_assertions: dict[str, str] | None = None,
+    incomplete: dict[str, IncompleteCheck] | None = None,
     alerts: AlertReport | UnreadableAlertReport | None = None,
 ) -> Checked:
     report = ProverReport(
@@ -59,7 +70,7 @@ def _checked(
         result_str="rules",
         link=_LINK,
         certora_run_stdout="",
-        violated_assertions={RulePath(name): text for name, text in (violated_assertions or {}).items()},
+        incomplete={RulePath(name): check for name, check in (incomplete or {}).items()},
         **({} if alerts is None else {"alerts": alerts}),
     )
     return Checked(build=_BUILT, report=report)
@@ -203,17 +214,35 @@ async def test_a_listed_rule_that_did_not_verify_does_not_stamp(gate: _Gate, out
 
 async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart(gate: _Gate):
     """A loop bound is the prover's limit, not a finding about the program."""
-    assertion = "Unwinding condition in a loop. Try increasing the unwinding bound."
-    gate.outcome = _checked(
-        ("rule_a", "VERIFIED"),
-        ("rule_b", "VIOLATED"),
-        violated_assertions={"rule_b": assertion},
-    )
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"), incomplete={"rule_b": _LOOP})
 
     out = await gate.verify()
 
     assert "validations" not in out.update
-    assert f"rule_b: {assertion}" in _text(out)
+    assert f"rule_b: {_LOOP.assertion}" in _text(out)
+    assert "A loop needed more iterations" in _text(out)
+
+
+async def test_a_kind_this_version_does_not_know_does_not_stamp_when_marked(gate: _Gate):
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+    new = IncompleteCheck(UnknownKind("someKindAddedLater"), "a bound the Prover added later")
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"), incomplete={"rule_b": new})
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert "rule_b: a bound the Prover added later" in _text(out)
+
+
+async def test_a_limit_without_advice_of_its_own_is_reported_by_its_message(gate: _Gate):
+    cpi = IncompleteCheck(GeneratedKind.UNRESOLVED_CPI, "CPI call could not be resolved")
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"), incomplete={"rule_b": cpi})
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert "rule_b: CPI call could not be resolved" in _text(out)
+    assert "A loop needed more iterations" not in _text(out)
 
 
 async def test_a_rule_marked_before_its_first_run_is_stamped_by_that_run(gate: _Gate):
@@ -232,7 +261,7 @@ async def test_a_marked_rule_stopped_by_the_provers_own_assertion_does_not_stamp
     gate.outcome = _checked(
         ("rule_a", "VERIFIED"),
         ("rule_b", "VIOLATED"),
-        violated_assertions={"rule_b": "Unwinding condition in a loop. Try increasing the unwinding bound."},
+        incomplete={"rule_b": _LOOP},
     )
 
     out = await gate.verify()
@@ -396,7 +425,7 @@ async def test_the_status_report_leaves_out_the_counterexample(tmp_path: Path):
     """A dump per violated rule would flood the author's context."""
     violated = RuleResult(
         path=RulePath(rule="rule_b"),
-        counterexample=Counterexample(trace="<the-whole-trace/>"),
+        counterexample=Counterexample(trace="<the-whole-trace/>", origin=UserAssertion()),
         status="VIOLATED",
     )
     text = await RuleStatusReport().analyze([violated], "tc", None, tmp_path)  # type: ignore[arg-type]
@@ -444,7 +473,7 @@ async def test_a_marked_incomplete_check_is_submitted_again(gate: _Gate):
     gate.outcome = _checked(
         ("rule_a", "VERIFIED"),
         ("rule_b", "VIOLATED"),
-        violated_assertions={"rule_b": "Unwinding condition in a loop. Try increasing the unwinding bound."},
+        incomplete={"rule_b": _LOOP},
     )
     first = await gate.verify()
     gate.state["last_verdicts"] = first.update["last_verdicts"]
