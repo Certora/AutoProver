@@ -129,6 +129,7 @@ async def test_withdrawing_a_marking_the_stamp_relied_on_leaves_the_stamp_stale(
 
     out = await ExpectRulePassage(state=state, tool_call_id="tc", rule_name="rule_b").run()
 
+    assert out.update["expected_failures"] == {"rule_b": ""}
     assert "validations" not in out.update
     assert _stamp(_marked(state)) != _stamp(base)
     assert "no longer stamped" in str(out.update["messages"][0].content)
@@ -151,6 +152,7 @@ async def test_withdrawing_the_marking_of_a_rule_that_verified_stamps_the_draft(
 
     out = await ExpectRulePassage(state=state, tool_call_id="tc", rule_name="rule_b").run()
 
+    assert out.update["expected_failures"] == {"rule_b": ""}
     assert out.update["validations"] == _stamp(_marked(state))
     assert "stamped without another run" in str(out.update["messages"][0].content)
 

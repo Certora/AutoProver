@@ -200,6 +200,7 @@ class ExpectTestFailure(WithAsyncImplementation[Command], WithInjectedId):
 
     @override
     async def run(self) -> Command:
+        # An empty reason removes the marking, so it must not be stored as one.
         if not self.reason.strip():
             return tool_state_update(
                 self.tool_call_id,
@@ -226,10 +227,11 @@ class ExpectTestPassage(WithAsyncImplementation[Command], WithInjectedId):
 
     @override
     async def run(self) -> Command:
+        # An empty reason removes the marking.
         return tool_state_update(
             tool_call_id=self.tool_call_id,
             content="Success",
-            expected_failures={self.test_name: None},
+            expected_failures={self.test_name: ""},
         )
 
 

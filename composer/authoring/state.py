@@ -16,7 +16,7 @@ and a build does not depend on them, so their stamps leave them out.
 
 import hashlib
 from dataclasses import dataclass
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from typing import Annotated, Protocol, Sequence
 from typing_extensions import TypedDict
 
@@ -51,13 +51,19 @@ def merge_skips(
 
 
 def merge_expected_failures(
-    left: dict[CheckName, str], right: Mapping[CheckName, str | None]
+    left: dict[CheckName, str], right: dict[CheckName, str]
 ) -> dict[CheckName, str]:
-    """State reducer for the check-name → reason map of checks expected to fail. A ``None``
-    reason removes the marking."""
+    """State reducer for the check-name → reason map of checks expected to fail.
+
+    An empty reason removes the marking. The marking tools reject an empty reason, so an empty
+    value only comes from the tool that withdraws a marking.
+
+    LangGraph types a reducer as ``(Value, Value) -> Value``. This channel stores
+    ``dict[CheckName, str]``, so the update has to be that same map. An empty string is the
+    removal signal that fits in it."""
     to_ret = left.copy()
     for k, v in right.items():
-        if v is None:
+        if not v:
             to_ret.pop(k, None)
         else:
             to_ret[k] = v

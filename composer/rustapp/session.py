@@ -456,6 +456,7 @@ class ExpectCheckFailure(WithAsyncImplementation[Command | str], WithInjectedId)
 
     @override
     async def run(self) -> Command | str:
+        # An empty reason removes the marking, so it must not be stored as one.
         if not self.reason.strip():
             return "A non-empty reason is required when marking it as expected to fail."
         return tool_state_update(
@@ -478,8 +479,9 @@ class ExpectCheckPassage(WithAsyncImplementation[Command], WithInjectedId):
 
     @override
     async def run(self) -> Command:
+        # An empty reason removes the marking.
         return tool_state_update(
-            self.tool_call_id, "Recorded.", expected_failures={self.check_name: None},
+            self.tool_call_id, "Recorded.", expected_failures={self.check_name: ""},
         )
 
 

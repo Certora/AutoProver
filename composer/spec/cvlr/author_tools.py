@@ -234,7 +234,7 @@ def _unmarkable(last: LastVerdicts | None, rule: str) -> str | None:
 
 
 def _remarked(
-    state: CvlrGenerationState, tool_call_id: str, said: str, marking: dict[CheckName, str | None]
+    state: CvlrGenerationState, tool_call_id: str, said: str, marking: dict[CheckName, str]
 ) -> Command:
     """Apply ``marking`` and re-decide the prover stamp against the last run's verdicts."""
     last = state.get("last_verdicts")
@@ -282,7 +282,7 @@ class ExpectRuleFailure(
 
     @override
     async def run(self) -> Command:
-        # An unexplained expected failure looks like a broken rule.
+        # An empty reason removes the marking, so a stored mark has to say why.
         if not self.reason.strip():
             return tool_state_update(
                 self.tool_call_id,
@@ -318,9 +318,10 @@ class ExpectRulePassage(
             return tool_state_update(
                 self.tool_call_id, f"{self.rule_name} is not marked as expected to fail."
             )
+        # An empty reason removes the marking.
         return _remarked(
             self.state,
             self.tool_call_id,
             f"Withdrawn: {self.rule_name} must verify.",
-            {CheckName(self.rule_name): None},
+            {CheckName(self.rule_name): ""},
         )
