@@ -217,6 +217,31 @@ async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart(gat
     assert out.update["last_verdicts"].incomplete == ["rule_b"]
 
 
+async def test_a_rule_marked_before_its_first_run_is_stamped_by_that_run(gate: _Gate):
+    """A defect found by tracing the program needs no run before the marking."""
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))
+
+    out = await gate.verify()
+
+    assert "validations" in out.update
+    assert "Not accounted for" not in _text(out)
+
+
+async def test_a_marked_rule_stopped_by_the_provers_own_assertion_does_not_stamp(gate: _Gate):
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+    gate.outcome = _checked(
+        ("rule_a", "VERIFIED"),
+        ("rule_b", "VIOLATED"),
+        violated_assertions={"rule_b": "Unwinding condition in a loop. Try increasing the unwinding bound."},
+    )
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert "expect_rule_failure does not account for" in _text(out)
+
+
 async def test_a_timeout_is_not_excused_by_a_marking(gate: _Gate):
     gate.state["expected_failures"] = {"rule_b": "the program underflows"}
     gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "TIMEOUT"))

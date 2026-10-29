@@ -213,26 +213,6 @@ class AdjustProverConfig(
         )
 
 
-def _unmarkable(last: LastVerdicts | None, rule: str) -> str | None:
-    """Why ``rule`` cannot be marked, or None when its own assertion failed."""
-    if last is None or rule not in last.status:
-        return (
-            f"{rule} has no verdict yet. Mark it only after a run reports that the rule's own "
-            "assertion failed."
-        )
-    if rule in last.incomplete:
-        return (
-            f"{rule} stopped on an assertion the prover generated, so it never reached its "
-            "property. A marking would claim a defect the run did not show."
-        )
-    if last.status[rule] != "VIOLATED":
-        return (
-            f"{rule} is {last.status[rule]}. Only a rule whose own assertion failed can be "
-            "marked as expected to fail."
-        )
-    return None
-
-
 def _remarked(
     state: CvlrGenerationState, tool_call_id: str, said: str, marking: dict[CheckName, str]
 ) -> Command:
@@ -265,10 +245,12 @@ class ExpectRuleFailure(
     """Record that a rule is meant to fail because the program violates the property.
 
     The rule stays in the harness and the prover keeps reporting the violation.
-    ``verify_rules`` stops treating it as unfinished. Use it only after reading
-    the counterexample and concluding the defect is real. When the marking
-    accounts for every failure of the last run, the draft is stamped from that
-    run, with no new submission.
+    ``verify_rules`` stops treating it as unfinished. Use it only once the
+    defect is shown, by a counterexample or by tracing the program. A rule can
+    be marked before it has run. The marking accounts for the rule only in a
+    run where the rule fails on its own assertion. When the marking accounts
+    for every failure of the last run, the draft is stamped from that run, with
+    no new submission.
 
     Mark one rule per step. Do not make parallel calls to this tool or to
     ``expect_rule_passage``: each decides the stamp as if it were the only
@@ -288,8 +270,6 @@ class ExpectRuleFailure(
                 self.tool_call_id,
                 "A non-empty reason is required when marking a rule as expected to fail.",
             )
-        if (refusal := _unmarkable(self.state.get("last_verdicts"), self.rule_name)) is not None:
-            return tool_state_update(self.tool_call_id, refusal)
         return _remarked(
             self.state,
             self.tool_call_id,

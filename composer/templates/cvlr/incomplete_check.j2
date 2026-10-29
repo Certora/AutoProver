@@ -2,4 +2,4 @@ These rules stopped on an assertion the prover generated rather than one of your
 {% for rule in rules %}  {{ rule.name }}: {{ rule.assertion }}
 {% endfor -%}
 Nothing here is a statement about the program. {{ advice }}
-Do not mark one of these with expect_rule_failure: that claims a real defect, and none has been shown.
+expect_rule_failure does not account for one of these: a marking claims a real defect, and none has been shown.

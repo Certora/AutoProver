@@ -87,29 +87,27 @@ async def test_a_draft_edited_since_the_run_gains_no_stamp():
 
 
 @pytest.mark.asyncio
-async def test_an_incomplete_check_cannot_be_marked():
-    """A stored mark would excuse a later real violation of the same rule."""
+async def test_a_marked_incomplete_check_does_not_stamp():
     base = _state()
     state = {
-        **_after_run(base, {"rule_b": "VIOLATED"}, incomplete=["rule_b"]),
+        **_after_run(base, {"rule_a": "VERIFIED", "rule_b": "VIOLATED"}, incomplete=["rule_b"]),
         "validations": _stamp(base),
     }
 
     out = await _mark(state, "rule_b")
 
-    assert "expected_failures" not in out.update
+    assert out.update["expected_failures"] == {"rule_b": "the program pays the fee unbounded"}
     assert "validations" not in out.update
-    assert "prover generated" in str(out.update["messages"][0].content)
 
 
 @pytest.mark.asyncio
-async def test_a_timeout_cannot_be_marked():
-    state = _after_run(_state(), {"rule_b": "TIMEOUT"})
+async def test_a_marked_timeout_does_not_stamp():
+    state = _after_run(_state(), {"rule_a": "VERIFIED", "rule_b": "TIMEOUT"})
 
     out = await _mark(state, "rule_b")
 
-    assert "expected_failures" not in out.update
-    assert "TIMEOUT" in str(out.update["messages"][0].content)
+    assert out.update["expected_failures"] == {"rule_b": "the program pays the fee unbounded"}
+    assert "validations" not in out.update
 
 
 @pytest.mark.asyncio
@@ -136,12 +134,11 @@ async def test_withdrawing_a_marking_the_stamp_relied_on_leaves_the_stamp_stale(
 
 
 @pytest.mark.asyncio
-async def test_with_no_run_yet_a_marking_is_refused():
+async def test_a_rule_can_be_marked_before_any_run():
     out = await _mark(_state(), "rule_b")
 
-    assert "expected_failures" not in out.update
+    assert out.update["expected_failures"] == {"rule_b": "the program pays the fee unbounded"}
     assert "validations" not in out.update
-    assert "no verdict yet" in str(out.update["messages"][0].content)
 
 
 @pytest.mark.asyncio
