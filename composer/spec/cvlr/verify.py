@@ -90,38 +90,35 @@ class _InertSummariesParams(TypedDict):
 _InertSummaries = TypedTemplate[_InertSummariesParams]("cvlr/inert_summaries.j2")
 
 
-class _CheckedRule(TypedDict):
+class _IncompleteRule(TypedDict):
     name: str
     assertion: str | None
 
 
-class _IncompleteCheckParams(TypedDict):
-    rules: list[_CheckedRule]
-    #: One rendering of ``cvlr/incomplete_advice.j2`` per kind of generated assertion the run hit.
-    advice: str
+class _VerdictsParams(TypedDict):
+    """Each list holds sorted rule names, except where noted. An empty list leaves its note out."""
 
-
-class _IncompleteAdviceParams(TypedDict):
-    #: One of :data:`_ADVISED`.
-    kind: GeneratedKind
+    #: Marked expected-to-fail, and verified.
+    marked_verified: list[str]
+    #: Stopped on an assertion the Prover generated.
+    incomplete: list[_IncompleteRule]
+    #: The kinds among ``incomplete`` the author gets advice for, each once, from :data:`_ADVISED`.
+    advised: list[GeneratedKind]
+    #: Listed by the build, with no verdict in the report.
+    unverdicted: list[str]
+    #: Violated on their own assertion, unmarked.
+    property_failures: list[str]
+    #: Timed out, errored, failed sanity, or were skipped.
+    unfinished: list[str]
+    stamped: bool
 
 
 class _ExternalFunctionsParams(TypedDict):
     warnings: str
 
 
-class _NamesParams(TypedDict):
-    #: Rule names, comma-separated.
-    names: str
-
-
-_IncompleteCheck = TypedTemplate[_IncompleteCheckParams]("cvlr/incomplete_check.j2")
-_IncompleteAdvice = TypedTemplate[_IncompleteAdviceParams]("cvlr/incomplete_advice.j2")
+_Verdicts = TypedTemplate[_VerdictsParams]("cvlr/verdicts.j2")
 _ExternalFunctions = TypedTemplate[_ExternalFunctionsParams]("cvlr/external_functions.j2")
-_ExpectedVerified = TypedTemplate[_NamesParams]("cvlr/expected_verified.j2")
-_NoVerdict = TypedTemplate[_NamesParams]("cvlr/no_verdict.j2")
-_Unaccounted = TypedTemplate[_NamesParams]("cvlr/unaccounted.j2")
-_NoPropertyVerdict = TypedTemplate[_NamesParams]("cvlr/no_property_verdict.j2")
 
 
 class BuildPermit:
@@ -312,19 +309,33 @@ class VerifyDeps:
 _ADVISED = (GeneratedKind.LOOP_UNWINDING, GeneratedKind.CANNOT_OVERFLOW)
 
 
-def _incomplete_note(incomplete: Mapping[str, IncompleteCheck]) -> str:
+def _verdicts_note(
+    status: Mapping[str, StatusCodes],
+    incomplete: Mapping[str, IncompleteCheck],
+    unexcused: Sequence[str],
+    unverdicted: list[str],
+    *,
+    stamped: bool,
+) -> str:
+    """The author's notes on this run's verdicts, or an empty string when there are none."""
     ordered = sorted(incomplete.items())
-    kinds = [
-        kind
-        for kind in dict.fromkeys(stopped.kind for _, stopped in ordered)
-        if isinstance(kind, GeneratedKind) and kind in _ADVISED
-    ]
-    return _IncompleteCheck.bind({
-        "rules": [{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
-        "advice": "\n".join(
-            _IncompleteAdvice.bind({"kind": kind}).render_to(load_jinja_template) for kind in kinds
-        ),
-    }).render_to(load_jinja_template)
+    return _Verdicts.bind({
+        "marked_verified": [name for name in unexcused if status[name] == "VERIFIED"],
+        "incomplete": [{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
+        "advised": [
+            kind
+            for kind in dict.fromkeys(stopped.kind for _, stopped in ordered)
+            if isinstance(kind, GeneratedKind) and kind in _ADVISED
+        ],
+        "unverdicted": unverdicted,
+        "property_failures": [
+            name for name in unexcused if status[name] == "VIOLATED" and name not in incomplete
+        ],
+        "unfinished": [
+            name for name in unexcused if status[name] not in ("VERIFIED", "VIOLATED")
+        ],
+        "stamped": stamped,
+    }).render_to(load_jinja_template).strip()
 
 
 def _externals_note(externals: Sequence[str]) -> str | None:
@@ -378,10 +389,6 @@ def _unverdicted(declared: Sequence[str], status: Mapping[str, StatusCodes]) -> 
     otherwise leave "every rule is accounted for" true.
     """
     return sorted(set(declared) - status.keys())
-
-
-def _names_note(template: TypedTemplate[_NamesParams], names: Sequence[str]) -> str:
-    return template.bind({"names": ", ".join(names)}).render_to(load_jinja_template)
 
 
 @tool_display("Compiling the harness", "Compile")
@@ -634,30 +641,26 @@ class VerifyRules(
             case Checked(build=build, report=report):
                 status = report.rule_outcomes()
                 incomplete = {path.rule: check for path, check in report.incomplete.items()}
-                unexcused = unaccounted(status, expected, incomplete)
-                surprising = [name for name in unexcused if status[name] == "VERIFIED"]
-                property_failures = [
-                    name
-                    for name in unexcused
-                    if status[name] == "VIOLATED" and name not in incomplete
-                ]
-                unfinished = [
-                    name for name in unexcused if status[name] not in ("VERIFIED", "VIOLATED")
-                ]
                 unverdicted = _unverdicted(declared, status)
+                last = LastVerdicts(
+                    status=status,
+                    incomplete=sorted(incomplete),
+                    unverdicted=unverdicted,
+                    draft=draft_digest(self.state, tuning_history(self.state)),
+                )
+                stamped = accounted_for(last, expected)
                 lines = [report.result_str]
                 if (inert := await self._inert_summaries(build)) is not None:
                     lines.append(inert)
-                if surprising:
-                    lines.append(_names_note(_ExpectedVerified, surprising))
-                if incomplete:
-                    lines.append(_incomplete_note(incomplete))
-                if unverdicted:
-                    lines.append(_names_note(_NoVerdict, unverdicted))
-                if property_failures:
-                    lines.append(_names_note(_Unaccounted, property_failures))
-                if unfinished:
-                    lines.append(_names_note(_NoPropertyVerdict, unfinished))
+                note = _verdicts_note(
+                    status,
+                    incomplete,
+                    unaccounted(status, expected, incomplete),
+                    unverdicted,
+                    stamped=stamped,
+                )
+                if note:
+                    lines.append(note)
                 externals: ExternalWarnings | UnreadableAlertReport
                 match report.alerts:
                     case UnreadableAlertReport() as unreadable:
@@ -670,15 +673,8 @@ class VerifyRules(
                         externals = external_warnings(alerts)
                         if (note := _externals_note(externals.messages)) is not None:
                             lines.append(note)
-                last = LastVerdicts(
-                    status=status,
-                    incomplete=sorted(incomplete),
-                    unverdicted=unverdicted,
-                    draft=draft_digest(self.state, tuning_history(self.state)),
-                )
                 validations = {}
-                if accounted_for(last, expected):
-                    lines.append("Every rule is accounted for. This draft is stamped.")
+                if stamped:
                     validations = {
                         "validations": _PROVER_STAMPER(self.state, tuning_history(self.state))
                     }
