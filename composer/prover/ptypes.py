@@ -162,8 +162,10 @@ _PROGRAM_CHECKS = frozenset({GeneratedKind.PANIC, GeneratedKind.MEMCPY_OVERLAP})
 def classify_violation(cex: Counterexample) -> PropertyViolation | IncompleteCheck:
     """Whether a violated rule found a bug or ran into the Prover's own limits.
 
-    An unclassified assertion is treated as the rule's own, so a gap in the Prover's tagging can
-    report a finding that is not one, and cannot hide a real one.
+    An unclassified assertion is treated as the rule's own. If the Prover leaves one of its own
+    assertions untagged, the rule is reported as a finding when it is really an incomplete check.
+    The opposite mistake, setting a real violation aside as an incomplete check, cannot come from
+    a missing tag.
 
     A kind this version does not know is an incomplete check: the Prover says it generated the
     assertion, and most kinds are its limits. If the new kind checks the program instead, the rule
