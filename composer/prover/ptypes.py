@@ -146,9 +146,10 @@ class PropertyViolation:
 class IncompleteCheck:
     """An assertion the Prover generated for itself, because it reached a limit of its own.
 
-    The check did not finish, so nothing about the program follows from it. Show it to the author.
-    Do not record it as a finding. ``assertion`` is the Prover's message, which carries its own
-    advice.
+    The check did not finish, so it says nothing about whether the rule's property holds. Show it to
+    the author. Do not record it as a finding. It can still say something about the program: an
+    unwinding stop means some loop can run past the bound. ``assertion`` is the Prover's message,
+    which carries its own advice.
     """
 
     kind: GeneratedKind | UnknownKind

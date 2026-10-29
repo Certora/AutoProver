@@ -1,5 +1,5 @@
 These rules stopped on an assertion the prover generated rather than one of yours, so they never reached their property:
 {% for rule in rules %}  {{ rule.name }}{% if rule.assertion %}: {{ rule.assertion }}{% endif %}
 {% endfor -%}
-Nothing here is a statement about the program. {{ advice }}
+None of these says whether the rule's property holds. {{ advice }}
 expect_rule_failure does not account for one of these: a marking claims a real defect, and none has been shown.
