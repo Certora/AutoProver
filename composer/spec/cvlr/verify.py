@@ -11,7 +11,7 @@ reports the compiler error and submits nothing
 import asyncio
 from dataclasses import dataclass, replace
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Container, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import AsyncIterator, Mapping, TypedDict, override
@@ -27,7 +27,7 @@ from graphcore.tools.schemas import (
     WithInjectedState,
 )
 
-from composer.authoring.state import draft_digest
+from composer.authoring.state import draft_digest, make_verdict_stamper
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
@@ -53,18 +53,14 @@ from composer.spec.cvlr.prover import (
     run_submission,
     write_submission,
 )
-from composer.spec.cvlr.author_tools import (
-    AdjustProverConfig,
-    SummarizeForProver,
-    stamp_under,
-    unaccounted,
-)
+from composer.spec.cvlr.author_tools import AdjustProverConfig, SummarizeForProver
 from composer.spec.cvlr.externals import ExternalWarnings, external_warnings
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.incomplete import GeneratedAssertion, OverflowUnproven, incomplete_checks
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import (
+    PROVER_VALIDATION_KEY,
     CvlrGenerationState,
     LastVerdicts,
     tuning_history,
@@ -72,10 +68,13 @@ from composer.spec.cvlr.state import (
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.gen_types import TypedTemplate
+from composer.spec.types import CheckName
 from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display
 
 _log = logging.getLogger(__name__)
+
+_PROVER_STAMPER = make_verdict_stamper(PROVER_VALIDATION_KEY)
 
 
 class _InertSummary(TypedDict):
@@ -343,6 +342,35 @@ def _externals_note(externals: Sequence[str]) -> str | None:
     )
 
 
+def unaccounted(
+    status: Mapping[str, StatusCodes],
+    expected_failures: Mapping[CheckName, str],
+    incomplete: Container[str],
+) -> list[str]:
+    """Rules whose verdict does not match what the markings say.
+
+    An unmarked rule is accounted for when it verified. A marked rule is
+    accounted for when it is ``VIOLATED`` on its own assertion. An incomplete
+    check, a timeout, an error, a sanity failure, and a skip stay unaccounted,
+    and so does a marked rule that verified.
+    """
+
+    def accounted(name: str, code: StatusCodes) -> bool:
+        if name in expected_failures:
+            return code == "VIOLATED" and name not in incomplete
+        return code == "VERIFIED"
+
+    # The names reach the author's notes; sorted, they read the same whatever order the report gave.
+    return sorted(name for name, code in status.items() if not accounted(name, code))
+
+
+def accounted_for(last: LastVerdicts, expected_failures: Mapping[CheckName, str]) -> bool:
+    """Whether every rule the build listed has a verdict the markings account for."""
+    return not last.unverdicted and not unaccounted(
+        last.status, expected_failures, last.incomplete
+    )
+
+
 def _unverdicted(declared: Sequence[str], status: Mapping[str, StatusCodes]) -> list[str]:
     """Rules the build listed that the report gave no verdict for.
 
@@ -497,7 +525,9 @@ class VerifyRules(
 
     A failing rule is not always a bad rule. If it exposes a real defect, mark
     it with ``expect_rule_failure`` and say why. Marked rules are excluded from
-    this gate, so a run can finish with a real violation still in it.
+    this gate, so a run can finish with a real violation still in it. When the
+    last run of this same draft is accounted for under the current markings,
+    the draft is stamped and nothing is submitted.
     """
 
     @override
@@ -505,6 +535,19 @@ class VerifyRules(
         draft = self.state["curr_spec"]
         if draft is None:
             return "No harness written yet — put a draft first."
+        history = tuning_history(self.state)
+        last = self.state.get("last_verdicts")
+        if (
+            last is not None
+            and last.draft == draft_digest(self.state, history)
+            and accounted_for(last, self.state["expected_failures"])
+        ):
+            return tool_state_update(
+                self.tool_call_id,
+                "The last prover run of this draft is accounted for under the current markings, "
+                "so nothing was submitted. This draft is stamped.",
+                validations=_PROVER_STAMPER(self.state, history),
+            )
         with self.tool_deps() as deps:
             listed: list[str] = []
 
@@ -634,9 +677,11 @@ class VerifyRules(
                     draft=draft_digest(self.state, tuning_history(self.state)),
                 )
                 validations = {}
-                if (earned := stamp_under(last, expected)) is not None:
+                if accounted_for(last, expected):
                     lines.append("Every rule is accounted for. This draft is stamped.")
-                    validations = {"validations": earned}
+                    validations = {
+                        "validations": _PROVER_STAMPER(self.state, tuning_history(self.state))
+                    }
                 return tool_state_update(
                     self.tool_call_id,
                     "\n\n".join(lines),

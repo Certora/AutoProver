@@ -30,19 +30,19 @@ PROVER_VALIDATION_KEY = "prover"
 class LastVerdicts(BaseModel):
     """The last prover run that produced verdicts.
 
-    Markings are judged against it. A change of marking re-decides the stamp
-    without another run, provided nothing ``draft`` covers has changed since.
+    ``verify_rules`` judges it again under the current markings, and stamps
+    without submitting when the draft has not changed since and every rule is
+    accounted for.
     """
 
     status: dict[str, StatusCodes]
-    #: Rules that stopped on an assertion the prover generated; no marking accounts for one.
+    #: Rules that stopped on an assertion the prover generated.
     incomplete: list[str]
-    #: Rules the build listed that the report gave no verdict for. While any is
-    #: missing, nothing stamps.
+    #: Rules the build listed that the report gave no verdict for.
     unverdicted: list[str]
     #: :func:`~composer.authoring.state.draft_digest` with :func:`tuning_history`
-    #: at that run. The markings are not in it, so it still identifies the run
-    #: after they change.
+    #: at that run. The markings are not in it: they change how a run is judged,
+    #: not which run it was.
     draft: str
 
 

@@ -284,7 +284,7 @@ class TestRuleSkipReducer:
 
 
 class TestMarkingRestamp:
-    async def test_marking_after_the_run_lets_submit_stamp_without_a_run(self, certora_prover: ProverMock):
+    async def test_marking_after_the_run_lets_collect_stamp_without_a_run(self, certora_prover: ProverMock):
         st = await _scenario(
             certora_prover, _buffers(b=_buf("b", "ruleA", "ruleB")),
             b=_raw_report(ruleA=False, ruleB=True),
@@ -293,30 +293,10 @@ class TestMarkingRestamp:
         ).turn(
             _skip("ruleA", "real bug"),
         ).turn(
-            _submit("b"),
+            _collect(wait=False),
         ).run()
         assert _prover_complete(st) is None
         assert len(certora_prover.calls) == 1
-
-    async def test_an_uncollected_run_keeps_submit_from_stamping(self, certora_prover: ProverMock):
-        """The re-run's result is not in the history yet, so the verdict submit would stamp from may
-        not be the last word."""
-        def scenario():
-            return _scenario(
-                certora_prover, _buffers(b=_buf("b", "ruleA", "ruleB")),
-                b=_raw_report(ruleA=False, ruleB=True),
-            ).turns(
-                _submit("b"), _collect(wait=True),
-            ).turn(
-                _submit("b"),
-            ).turn(
-                _skip("ruleA", "real bug"),
-            ).turn(
-                _submit("b"),
-            )
-
-        assert "collect_results" in await scenario().run_last_single_tool("submit_buffer")
-        assert _prover_complete(await scenario().run()) is not None
 
     async def test_unmarking_leaves_the_stamp_stale(self, certora_prover: ProverMock):
         st = await _scenario(

@@ -214,7 +214,6 @@ async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart(gat
 
     assert "validations" not in out.update
     assert f"rule_b: {assertion}" in _text(out)
-    assert out.update["last_verdicts"].incomplete == ["rule_b"]
 
 
 async def test_a_rule_marked_before_its_first_run_is_stamped_by_that_run(gate: _Gate):
@@ -412,3 +411,45 @@ async def test_a_released_permit_does_not_build(tmp_path: Path):
         permit.release()
         with pytest.raises(RuntimeError):
             await staged.check()
+
+
+async def test_a_marking_after_the_run_stamps_without_another_submission(gate: _Gate):
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))
+    first = await gate.verify()
+    gate.state["last_verdicts"] = first.update["last_verdicts"]
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+
+    out = await gate.verify()
+
+    state = {**gate.state, "curr_spec": _DRAFT}
+    assert out.update["validations"] == {
+        PROVER_VALIDATION_KEY: checked_digest(state, tuning_history(state))  # type: ignore[arg-type]
+    }
+    assert "nothing was submitted" in _text(out)
+    assert len(gate.written) == 1
+
+
+async def test_a_draft_edited_since_the_run_is_submitted_again(gate: _Gate):
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))
+    first = await gate.verify()
+    gate.state["last_verdicts"] = first.update["last_verdicts"]
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+
+    await gate.verify(_DRAFT + "// edited\n")
+
+    assert len(gate.written) == 2
+
+
+async def test_a_marked_incomplete_check_is_submitted_again(gate: _Gate):
+    gate.outcome = _checked(
+        ("rule_a", "VERIFIED"),
+        ("rule_b", "VIOLATED"),
+        violated_assertions={"rule_b": "Unwinding condition in a loop. Try increasing the unwinding bound."},
+    )
+    first = await gate.verify()
+    gate.state["last_verdicts"] = first.update["last_verdicts"]
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+
+    await gate.verify()
+
+    assert len(gate.written) == 2

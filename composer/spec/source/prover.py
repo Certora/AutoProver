@@ -945,14 +945,7 @@ def get_prover_tool(
 
             digest = _cur_digest(state, buffers, name)
             if _buffer_complete_at(state, buffers, name, digest):
-                said = f"Buffer {name!r} is already verified at its current content; nothing to submit."
-                # A result not yet collected is missing from the history this verdict was read from, and a
-                # stamp written now would outlive a violation it reports.
-                if any(nm == name for nm, _ in buffer_jobs) or not done_queue.empty():
-                    return f"{said} Call collect_results to record the outstanding results and stamp it."
-                return tool_state_update(
-                    tool_call_id, said, validations=_prover_stamp(state, buffers, name),
-                )
+                return f"Buffer {name!r} is already verified at its current content; nothing to submit."
 
             existing = buffer_jobs.get((name, selection))
             if existing is not None and existing.digest == digest:
