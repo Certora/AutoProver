@@ -4,11 +4,12 @@ Everything here was found by pointing the CVLR backend (`docs/cvlr-backend-plan.
 programs, and every entry is reproducible. This document is the one record of which are routed.
 **Two have Prover tickets:** P7 is CERT-10103, fixed on the Prover's master branch by
 [EVMVerifier#8673](https://github.com/Certora/EVMVerifier/pull/8673), and P8 is CERT-10061, which the
-Prover's own source names. P15 to P19 have no tickets and are fixed on master by
+Prover's own source names. P15 to P20 have no tickets and are fixed on master by
 [EVMVerifier#8762](https://github.com/Certora/EVMVerifier/pull/8762),
 [EVMVerifier#8771](https://github.com/Certora/EVMVerifier/pull/8771),
-[EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773), [EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776) and
-[EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777). Two more Prover bugs,
+[EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773), [EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776),
+[EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777) and
+[EVMVerifier#8792](https://github.com/Certora/EVMVerifier/pull/8792). Two more Prover bugs,
 CERT-10183 (float comparisons) and CERT-10184 (a memory-partitioning crash on `realloc`'s
 zero-fill), were filed from the starting-layer investigation in [cvlr-todo.md](./cvlr-todo.md) L1
 and are recorded there, not here; CERT-10184 is fixed on master by [EVMVerifier#8696](https://github.com/Certora/EVMVerifier/pull/8696).
@@ -47,6 +48,9 @@ over allocation sites, caused most of those failures, and an existing option fix
 to pass it; with P16 fixed, what was left of it was the error message, and that is fixed on master by
 [EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773). P18 and P19 are the allocator on a current toolchain, fixed on master by
 [EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776) and [EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777).
+**P20 came out of the same program's second run**, once those were fixed: the u128 logical right
+shift was not modeled, so its result was never written and the jobs succeeded anyway. It is fixed on
+master by [EVMVerifier#8792](https://github.com/Certora/EVMVerifier/pull/8792).
 
 **Group U — `prover_output_utility`.** The library the report stack reads verdicts through. One
 entry, and unlike the others it was corrupting our own output rather than merely obstructing us;
@@ -90,6 +94,7 @@ the write-up gives the line number rather than the name.
 | [P17](#p17) | Running out of the TAC heap does not say that `-solanaHeapSize` raises it, and the option's help calls the bound the runtime heap | fixed on the Prover's master branch ([EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773)); 8 of those 10 failed jobs were this, and the option fixes it, reproduced |
 | [P18](#p18) | `sol_alloc_free_` crashes the points-to analysis: "TODO(5): support sol_alloc_free" | **major** — 2 of those 10; trigger not pinned; fixed on the Prover's master branch ([EVMVerifier#8776](https://github.com/Certora/EVMVerifier/pull/8776)) |
 | [P19](#p19) | The allocator recognizer misses `__rustc::__rust_realloc` and `__rustc::__rust_alloc_zeroed` | major — the suspected path to P18; fixed on the Prover's master branch ([EVMVerifier#8777](https://github.com/Certora/EVMVerifier/pull/8777)) |
+| [P20](#p20) | `__lshrti3`, the u128 logical right shift, is neither inlined nor summarized, so its result is never written | **major** — silent: the job succeeds on a value the call never wrote; fixed on the Prover's master branch ([EVMVerifier#8792](https://github.com/Certora/EVMVerifier/pull/8792)) |
 | [U1](#u1) | `extract_job_id_from_url` cannot parse a Solana Prover job link | **major**, worked around |
 | [T1](#t1) | Tuning files are spelled for pre-2.2 `solana-program` paths | major |
 | [T2](#t2) | A canonical tuning file names one specific on-chain program | hygiene |
@@ -1280,6 +1285,34 @@ tuning edit, that reaches the shim another way is not. The stale tuning patterns
 **Fix:** recognize `__rustc::__rust_alloc_zeroed` as an allocation, and give realloc a model:
 allocate the new size, as `isAllocFn` already does for a fresh allocation. Matching the `__rustc::`
 prefix generally, rather than name by name, would keep the next rename from breaking it again.
+
+---
+
+## P20
+
+### `__lshrti3`, the u128 logical right shift, is neither inlined nor summarized
+
+**Fixed on the Prover's master branch by [Certora/EVMVerifier#8792](https://github.com/Certora/EVMVerifier/pull/8792).**
+
+The Solana frontend models the compiler-rt u128 routines `__multi3`, `__muloti4`, `__udivti3`,
+`__divti3`, `__ashlti3` and `__ashrti3` (`sbf/callgraph/CompilerRuntimeFunctions.kt`,
+`sbf/tac/TACIntegerU128CompilerRtSummarizer.kt`), but it did not model `__lshrti3`. Any `x >> s` on a
+`u128` whose shift amount is not a compile-time constant lowers to a call to it on SBF. The Prover
+reports the call as neither inlined nor summarized, and treats it as external.
+
+**Effect.** Like the other `*ti3` routines, `__lshrti3` returns its result through memory, as the
+low and high words at `*(r1+0)` and `*(r1+8)`. An external call with no memory summary drops that
+write, so the caller reads whatever the two slots held before: a stale value, or an indeterminate
+stack location. A rule over it can wrongly verify, wrongly fail, or fail with `[3001] access to an
+indeterminate stack location`, and the job still succeeds. The only sign is the external-function
+warning. Every finished job of the lending program's second run carried it, because that program's
+fixed-point arithmetic is unsigned 128-bit. The cause is the same as when `AccountInfo::realloc` was
+left uninlined (see `tests/test_cvlr_dropped_writes.py`). AutoProver's `#[inline(never)] ^__lshrti3$`
+directive was not the cause: it keeps the routine out of inlining, as for the routines the Prover does
+model.
+
+**Fix:** model it as `__ashrti3` is modeled, with a logical shift in place of the arithmetic one: the
+same memory summary of the two result words, and a TAC summary over a 128-bit logical right shift.
 
 ---
 

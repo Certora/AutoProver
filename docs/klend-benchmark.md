@@ -279,6 +279,19 @@ deposits and withdrawals (P-04, P-05). That is item 5 by selection rather than b
 chooses where to spend, not what to find. Hoisting runs again over those five, so the protocol-wide
 unit is rebuilt from them.
 
+## Run 2 (2026-10-28): stopped on a silent Prover gap
+
+Started as planned above, with a $500 budget. Hoisting folded 59 of the five units' properties into
+23 protocol-wide ones for about $1.50. The first four Prover jobs ran without the heap or allocator
+crashes; the first finished in about two minutes. Each of the three that finished reported
+`__lshrti3`, the u128 logical right shift, as neither inlined nor summarized. Its result is written through memory,
+so the program's unsigned fixed-point arithmetic was being checked against values the call never
+wrote, while the jobs succeeded (upstream defect P20). The run was stopped after about $47, before
+any unit finished, because verdicts over that arithmetic would not have been gradable. P20 is fixed
+on the Prover's master branch by
+[EVMVerifier#8792](https://github.com/Certora/EVMVerifier/pull/8792). The next run is run 2 again,
+with a new cache namespace.
+
 ## Grading it
 
 Decided before the run, so the result stays falsifiable:
