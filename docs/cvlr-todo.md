@@ -568,6 +568,23 @@ editor kind. The cheaper wins for U40 are U32 (a halted job keeps the verdicts t
 the halt would have kept 9 or 10 of 14) and smaller jobs, so that one slow rule does not hold the
 ceiling for the rest.
 
+*Prover flags are not the lever either (2026-10-30).* The same binary and rules were rerun under
+two other sets of Prover args:
+
+* Ours without `-unsatCoresForAllAsserts`.
+* A hand-tuned set: CFG-diamond removal, the optimistic join/overlap/memcpy/memcmp/memmove
+  options, aggressive global detection, and 6 slicer iterations.
+
+Neither changed what finishes. Each job still ran to the 25-minute ceiling. Without unsat cores,
+the expensive rules took the same time. The hand-tuned set made them 10 to 20% slower: 1169 s
+against 966 to 987 s, and 999 s against 880 to 888 s. It finished one more rule than the run 2b
+binary did, but the second baseline did too. One rule flips between verifying in about 21 minutes
+and timing out across identical submissions, so a difference of one rule is noise. Several of the
+optimistic options also carry memory-model assumptions that would have to be stated beside the
+verdicts. So the speed of a hand-written spec for this kind of program comes from how it is
+designed: the fixed-point type, stand-ins for whole subcomputations, and jobs of one to three
+rules. It does not come from flags.
+
 **U41. CVL has no reachability check before an expected failure either (deferred).** This is U36 for
 the CVL backend. It is noted here because U36 found it. CVL handles a counterexample from an
 impossible start state well: `property_generation_prompt.j2`'s remedy list, the
