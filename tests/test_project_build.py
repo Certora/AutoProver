@@ -151,6 +151,53 @@ def test_build_only_leaves_the_certora_mocks_untouched(tmp_path, monkeypatch):
     assert built_scenes == [[vault]]
 
 
+def test_build_only_keeps_a_library_target_and_generates_no_harness(tmp_path, monkeypatch):
+    """``--build-only`` compiles the project as written: a library named as the main contract
+    stays the library, and the harness swap that a full AutoSetup run needs never runs."""
+    import certora_autosetup.autosetup.cli as cli_mod
+    from certora_autosetup.autosetup.types import ProjectBuildResult
+
+    lib = ContractHandle(source_file="src/MathLib.sol", contract_name="MathLib")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "MathLib.sol").write_text(
+        "pragma solidity ^0.8.0;\nlibrary MathLib { function id(uint x) internal pure returns (uint) { return x; } }\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_mod, "init_cache_fs", lambda: None)
+    monkeypatch.setattr(cli_mod, "find_build_config_dir", lambda *_a: tmp_path)
+    monkeypatch.setattr(cli_mod, "resolve_contract_handles", lambda handles, *_a, **_kw: handles)
+    monkeypatch.setattr(cli_mod, "auto_detect_contracts", lambda *_a, **_kw: [lib])
+
+    def no_swap(**_kw):
+        raise AssertionError("the library harness swap ran for --build-only")
+
+    monkeypatch.setattr(cli_mod, "swap_library_main_contract", no_swap)
+    monkeypatch.setattr(cli_mod, "with_harnessed_library", lambda *_a, **_kw: no_swap())
+    monkeypatch.setattr(Autosetup, "_load_signature_database_to_scope", lambda self: None)
+    built: list[tuple[ContractHandle, list[ContractHandle]]] = []
+
+    def fake_build(self, main):
+        built.append((main, list(self.contract_handles)))
+        return ProjectBuildResult(
+            compilation_config={"solc": "solc8.28"}, solc_versions=["solc8.28"],
+            import_patcher_applied=False, contracts=["src/MathLib.sol:MathLib"],
+        )
+
+    monkeypatch.setattr(Autosetup, "build", fake_build)
+    out = tmp_path / "build.json"
+    monkeypatch.setattr(sys, "argv", [
+        "certora_autosetup", "--main-contract", "src/MathLib.sol:MathLib", "--build-only", str(out),
+    ])
+
+    with pytest.raises(SystemExit) as exit_info:
+        cli_mod.main()
+
+    assert exit_info.value.code == 0
+    assert built == [(lib, [lib])]
+    # AutoSetup's own logs live under certora/, so the check is on the harness files.
+    assert not list(tmp_path.rglob("*Harness*.sol"))
+
+
 # ---------------------------------------------------------------------------
 # composer: run_autosetup_build
 # ---------------------------------------------------------------------------

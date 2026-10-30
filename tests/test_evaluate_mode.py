@@ -489,3 +489,41 @@ def test_the_failure_headline_fits_the_mode():
 
     formalizing = core.CorePipelineResult(1, 1, [], [], RunMode.COMPREHENSIVE)
     assert formalizing.failure_headline == "RUN FAILED: every component failed to generate or gave up."
+
+
+# ---------------------------------------------------------------------------
+# The verification target: a library stays the library for an external mode
+# ---------------------------------------------------------------------------
+
+
+def test_an_external_mode_keeps_a_library_target(tmp_path, monkeypatch):
+    """Evaluate measures the specs that name the requested contract, so a library target is
+    not swapped for a generated harness, and no harness is generated or validated."""
+    import composer.pipeline.cli as cli_mod
+
+    def no_swap(*_a, **_kw):
+        raise AssertionError("the library harness swap ran for an external mode")
+
+    monkeypatch.setattr(cli_mod, "swap_library_main_contract_paths", no_swap)
+
+    assert cli_mod.verification_target(
+        tmp_path, "src/MathLib.sol", "MathLib", RunMode.EVALUATE
+    ) == ("src/MathLib.sol", "MathLib")
+
+
+@pytest.mark.parametrize("mode", [RunMode.COMPREHENSIVE, RunMode.PRIORITIZED])
+def test_a_built_in_mode_still_swaps_a_library_for_its_harness(tmp_path, monkeypatch, mode):
+    import composer.pipeline.cli as cli_mod
+
+    calls: list[tuple[str, str]] = []
+
+    def fake_swap(_root, path, name):
+        calls.append((path, name))
+        return "certora/harnesses/MathLibHarness.sol", "MathLibHarness"
+
+    monkeypatch.setattr(cli_mod, "swap_library_main_contract_paths", fake_swap)
+
+    assert cli_mod.verification_target(tmp_path, "src/MathLib.sol", "MathLib", mode) == (
+        "certora/harnesses/MathLibHarness.sol", "MathLibHarness",
+    )
+    assert calls == [("src/MathLib.sol", "MathLib")]

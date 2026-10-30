@@ -113,22 +113,25 @@ def main():
     # A library cannot be a verification target — the Prover accepts it and instantiates
     # no parametric methods. Swap in a generated harness before anything downstream keys
     # on the contract name (sanity spec, base conf, verify target, result keys).
-    harnessed_library = main_contract_handle
-    main_contract_handle, contract_handles, _library_harness = swap_library_main_contract(
-        project_root=cwd,
-        main_contract_handle=main_contract_handle,
-        contract_handles=contract_handles,
-        solc=args.solc_default,
-        certora_run_command=args.certora_run_command,
-    )
-    # AutoProver's pipeline swaps before it invokes us, so on that path the target
-    # arrives already harnessed and only the manifest still names the library.
-    args.additional_contracts = with_harnessed_library(
-        cwd,
-        main_contract_handle,
-        args.additional_contracts or [],
-        swapped_from=harnessed_library if _library_harness is not None else None,
-    )
+    # --build-only writes no spec or conf: it compiles the project as the user wrote it,
+    # so a library target stays the library, and no harness is generated or validated.
+    if not args.build_only:
+        harnessed_library = main_contract_handle
+        main_contract_handle, contract_handles, _library_harness = swap_library_main_contract(
+            project_root=cwd,
+            main_contract_handle=main_contract_handle,
+            contract_handles=contract_handles,
+            solc=args.solc_default,
+            certora_run_command=args.certora_run_command,
+        )
+        # AutoProver's pipeline swaps before it invokes us, so on that path the target
+        # arrives already harnessed and only the manifest still names the library.
+        args.additional_contracts = with_harnessed_library(
+            cwd,
+            main_contract_handle,
+            args.additional_contracts or [],
+            swapped_from=harnessed_library if _library_harness is not None else None,
+        )
 
     # TODO: a bare `path.sol` spec drops only the contract whose name matches the file
     # stem. Expand to "drop every concrete contract in the file" for symmetry with

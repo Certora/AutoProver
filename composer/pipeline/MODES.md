@@ -30,6 +30,11 @@ the agent costs LLM calls and writes harness files into the project. `main` is
 the located main contract of the analysis, lifted with no harnesses
 (`lift_unharnessed`).
 
+The CLI keeps the requested main contract for an external mode. A library named
+as the main contract stays the library: the generated library harness that the
+built-in modes verify through is neither created nor validated, and AutoSetup's
+`--build-only` step skips that swap too.
+
 ### Project build
 
 The driver builds the project for every external-mode run, before the
