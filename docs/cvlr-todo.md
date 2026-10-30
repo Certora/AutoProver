@@ -521,12 +521,29 @@ ceiling. All rules were in the solving phase, not translation.
 * **Loops.** Two are loop-heavy, with 28 loops.
 * **Unclear.** One shows no hotspot at all.
 
-The hand-written spec for the same program replaces `Fraction` under its verification feature,
-which is the same finding from the other side. The remedy to try is a sound stand-in for the wide
-division: a quotient and remainder constrained by `q*d + r == n` and `r < d`, through
-`redirect_module` or `mock_fn`. It is offered to the author when a rule's hotspots name it. That
-needs the hotspots surfaced, which today only the archive has. Raising `global_timeout` would buy
-little on rules at 2^170 paths.
+Raising `global_timeout` would buy little on rules at 2^170 paths.
+
+*Tried 2026-10-30: characterizing the division makes it worse.* The test reused the borrowing unit
+of run 2b: its 14 rules and settings, and the job's own sources from its output archive. The unit's
+author had already replaced `uint`'s types with an exact loop-free stand-in. In the variant, that
+stand-in's `div_rem_256by128` became a pair of nondet `u128`s constrained by `r < d` and
+`q*d + r == n`, which is exact under the function's `n_hi < d` precondition. The variant was
+submitted next to two baselines, the job's own binary and a local rebuild of the same sources. The
+two baselines agreed to within noise. In the variant:
+
+* Path counts fell sharply (2^114 to 2^67, 2^159 to 2^88), and division's share of branching fell
+  from 43-65% to 6-16%.
+* But the expensive rules got slower. All 4 that had verified in 15 to 21 minutes timed out. The 6
+  that still finished are the cheap ones, under 4 minutes, and only one of them reaches the
+  division. That one went from about 3.5 to 2.5 minutes.
+
+Path count is not what the solver pays for here. A free quotient multiplied by a symbolic divisor
+is a harder query than the long division's branches. So "make the division cheaper" is the wrong
+lever. The candidate left is a *narrower fixed-point type* under the verification feature: a
+64-bit `Fraction` in place of the 128-bit one, with no 256-bit intermediate at all. It is not
+exact. It changes rounding, so it is a modeling decision that every affected verdict must state,
+and it cannot support a property about rounding or precision. It would be a new editor kind, with
+that caveat in its `why_sound`. Measure it the same way before building it.
 
 **U41. CVL has no reachability check before an expected failure either (deferred).** This is U36 for
 the CVL backend. It is noted here because U36 found it. CVL handles a counterexample from an
