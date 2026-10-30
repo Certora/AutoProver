@@ -88,9 +88,6 @@ def test_parse_cloud_link_accepts_both_indices(index):
     assert job.job_id == _JOB
     assert job.anonymous_key == _KEY
     assert job.job_data_url == f"https://prover.certora.com/v1/domain/jobs/{_JOB}?anonymousKey={_KEY}"
-    assert job.alert_report_url == (
-        f"https://prover.certora.com/v1/domain/jobs/{_JOB}/f/alertReport.json?anonymousKey={_KEY}"
-    )
 
 
 def test_parse_cloud_link_rejects_unknown_index():

@@ -75,13 +75,6 @@ class CloudJob:
     def job_data_url(self) -> str:
         return f"{self.base_url}/v1/domain/jobs/{self.job_id}?anonymousKey={self.anonymous_key}"
 
-    @property
-    def alert_report_url(self) -> str:
-        return (
-            f"{self.base_url}/v1/domain/jobs/{self.job_id}/f/{ALERT_REPORT.name}"
-            f"?anonymousKey={self.anonymous_key}"
-        )
-
 
 def parse_cloud_link(link: str) -> CloudJob:
     """Parse a CertoraRunResult.link URL into a CloudJob.
@@ -221,26 +214,21 @@ async def _fetch_results(job_id: str, dest: Path) -> None:
             await asyncio.sleep(backoff)
 
 
-async def _fetch_alert_report(job: CloudJob) -> AlertReport | UnreadableAlertReport:
+async def _fetch_alert_report(job_id: str) -> AlertReport | UnreadableAlertReport:
     """The job's alert report (:func:`composer.prover.results.parse_alert_report`).
 
-    Read with the link's anonymous key from the job host (:attr:`CloudJob.alert_report_url`), the
-    same way :func:`poll_job` reads the job. A job with no alerts has no report (HTTP 404). A fetch
-    that fails otherwise does not fail the run: the verdicts stand without the report.
+    A job with no alerts has no report. A fetch that fails otherwise does not fail the run: the
+    verdicts stand without the report.
     """
     try:
-        async with aiohttp.ClientSession(headers=_NO_BROTLI_HEADERS) as session:
-            async with session.get(
-                job.alert_report_url, timeout=aiohttp.ClientTimeout(total=30)
-            ) as resp:
-                if resp.status == 404:
-                    logger.info("Cloud job %s has no alert report", job.job_id)
-                    return AlertReport()
-                if resp.status != 200:
-                    raise RuntimeError(f"HTTP {resp.status}")
-                text = await resp.text()
+        text = await asyncio.to_thread(
+            _results_api().fetch_output_file, job_id, ALERT_REPORT.name
+        )
+    except JobNotFoundError:
+        logger.info("Cloud job %s has no alert report", job_id)
+        return AlertReport()
     except Exception as exc:  # noqa: BLE001 — a missing report does not fail the run
-        logger.warning("Cloud job %s: fetching the alert report failed (%s)", job.job_id, exc)
+        logger.warning("Cloud job %s: fetching the alert report failed (%s)", job_id, exc)
         return UnreadableAlertReport()
     return parse_alert_report(text)
 
@@ -288,5 +276,5 @@ async def cloud_results(
         # jobs measured here these two subtrees are ~3% of the archive. POU writes
         # them in the same layout the archive had, so the parse is unchanged.
         await _fetch_results(cloud_job.job_id, dest)
-        alerts = await _fetch_alert_report(cloud_job)
+        alerts = await _fetch_alert_report(cloud_job.job_id)
         yield FetchedResults(dest, runtime_ms, alerts)
