@@ -180,6 +180,21 @@ be stale; the tool is authoritative.
    the point of use is the over-assumption this check exists to catch — and it will not be spelled
    `cvlr_lemma!` either.
 
+   **A state assumption earns the same check.** A `cvlr_assume!` over the pre-state's account fields
+   (a balance bound, a flag, a relationship between two accounts) is sound only with something behind
+   it. Check for one of three things, in this order of preference.
+
+   * **An invariant proved in this harness.** The harness has a base case and a step rule for every
+     operation that writes the fields the invariant reads, and none of those rules is marked
+     expected-to-fail. Check the author's list of writers against the code. A missing writer is a
+     missing step, and the invariant is then unproved for exactly that operation.
+   * **A justification rule**, named beside the assumption, that proves the assumption holds where
+     the program produces the value.
+   * **A bare assumption**, stated as one in the rule's commentary, with why the program cannot
+     violate it and what the property therefore no longer covers.
+
+   If none of the three is there, flag the assumption as an over-assumption.
+
    **The absence of a lemma is not itself a finding.** A nonlinear rule can also finish with its
    hard arithmetic asserted directly, when the solver manages the step inline. A harness of that
    shape is legitimate and not a corner cut.

@@ -61,6 +61,8 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
   small submission, and it is sometimes wrong in the direction that loses the property.
 * `expect_rule_failure(rule_name, reason, pre_state)` / `expect_rule_passage(rule_name)` — mark a rule as
   expected to fail. See "When a rule should fail" below.
+* `invariant_guidance()` — how to choose which relationship among the program's account fields to
+  state as an invariant. See "State invariants" below.
 * `feedback_tool(rebuttals=[])` — submit the current draft and any skips to the feedback judge. An
   acceptance stamps the publish gate; like the prover stamp, any later `put_harness` or skip change
   invalidates it.
@@ -536,7 +538,9 @@ state, which is the part it is responsible for.
 
 Some properties are about a state, not an operation: "queued shares never exceed the supply", "the
 vault holds at least what the ledger records", "a closed position carries no debt". A rule over one
-handler does not prove a property like that. It is proved by induction, in three parts.
+handler does not prove a property like that. It is proved by induction, in three parts. The first
+time you write one, call `invariant_guidance`. It covers what makes a relationship worth stating, what
+an invariant can range over when state arrives as accounts, and four ways a candidate goes wrong.
 
 1. **List the writers from the code before writing a rule.** Search for every function that
    assigns a field the invariant reads, and follow each one up to the handlers that reach it. Each
@@ -594,8 +598,29 @@ This is how an invariant becomes inductive, and it is usually how a reviewer lea
 actually maintains.
 
 **Once an invariant is proved, other rules may assume it.** Assume it on a rule's pre-state, and
-name in the rule's commentary the step rules that prove it. If an invariant is assumed but not
-proved in this unit, state that in the commentary as an assumption.
+name in the rule's commentary the step rules that prove it. List the base case and the steps in
+`property_rules` under the property they support, so a reader can see what that property's proof
+rests on. Never mark one of them with `expect_rule_failure`. A rule that assumes an invariant whose
+step was marked expected-to-fail assumes exactly what failed to prove, and the run still comes back
+green.
+
+### When a counterexample starts from a state the program cannot be in
+
+Add whatever excludes that state, trying these remedies in order.
+
+1. **An invariant**, proved as above and assumed in the failing rule. This is the default move, not
+   the last one, because an invariant is proved against the code, while an assumption is only
+   assumed.
+2. **A justification rule**, when the relationship cannot be stated as an invariant. That happens
+   when no step can preserve it on its own, or when it relates accounts that no single writer is
+   given together. The justification rule is a rule of its own that proves the assumption is valid
+   where it arises: for example, that the only operation producing the value always produces it in
+   range. Then assume the relationship in the failing rule with `cvlr_assume!`, and name the
+   justification rule in a comment beside it.
+3. **A bare `cvlr_assume!`** with nothing behind it. This is the last resort, and it leaves the
+   property proved only under an assumption that nothing checks. If you use one, say three things
+   in a comment beside it and in the rule's commentary: what you assumed, why the program cannot
+   reach a state that violates it, and what the property therefore no longer covers.
 
 ## When a rule should fail
 
@@ -617,8 +642,8 @@ things.
   the handler that runs this code admit it. That includes guards above the function your rule
   drives, if it drives one below the handler. `expect_rule_failure` asks for this argument as
   `pre_state`.
-* **Or name the invariant that excludes it.** The failure is then not a finding. Assume the
-  invariant in the rule, and prove it with the steps in the section above.
+* **Or name what excludes it.** The failure is then not a finding. Exclude the state using the
+  remedies in "When a counterexample starts from a state the program cannot be in", above.
 
 Both of the following looked like findings and were not:
 

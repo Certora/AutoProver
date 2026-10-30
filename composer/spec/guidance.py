@@ -33,3 +33,14 @@ contract could not reach.
     @override
     def run(self) -> str:
         return load_jinja_template("structural_invariant_guidance.j2")
+
+@tool_display("Getting invariant guidance", None)
+class CvlrInvariantGuidance(WithImplementation[str]):
+    """
+Invoke this tool to receive guidance on choosing which relationship among a Solana program's
+account fields to state and prove as an invariant, when a counterexample starts from a state the
+program could not be in.
+    """
+    @override
+    def run(self) -> str:
+        return load_jinja_template("cvlr_invariant_guidance.j2")

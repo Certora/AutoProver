@@ -1,0 +1,111 @@
+<background>
+A counterexample that starts from a state the program could never be in means the harness is missing
+a constraint that the code maintains. The program's account fields stand in some relationship, and
+nothing in the harness says so. A rule starts from every state the types allow unless an assumption
+rules it out. So it can start from a pool whose recorded deposits exceed what its vault holds, or
+from a position with debt and no collateral.
+
+The fix is to state that relationship as an invariant and prove it. This document is about
+*choosing* what to state. The mechanics are in the "State invariants" section of your instructions:
+listing the writers, the base case, one step rule per writer, strengthening, and the ladder to use
+when an invariant cannot be stated.
+
+## What makes a good candidate
+
+The line between this kind of invariant and a safety property is not well defined; it is arguably a
+safety property that a pool's recorded deposits never exceed its vault. There is no definite rule of
+thumb, but these are the key indicators:
+
+1. It is "obvious" to an informed reader of the code.
+2. It is more structural than mathematical. For example, every position slot with a non-zero `mint`
+   has a non-zero `amount`. Or, a pool marked closed has no outstanding shares.
+3. It is, with high probability, fundamental to *other* security properties.
+
+This list is not exhaustive, and a candidate need not satisfy all or even any of them. The
+deposits-and-vault invariant above clearly involves math, so it appears to fail indicator 2. But it
+meets indicator 3, and it is a good invariant.
+
+## Where to look
+
+Look at the account types (`#[account]` structs and zero-copy structs) and the functions that assign
+their fields. Look at the constraints on the accounts structs, such as `has_one`, `seeds`,
+`constraint =` and the owner, which tie one account to another. Look also at the flags and status
+fields the handlers check before doing anything.
+</background>
+
+<guidance>
+## What an invariant can be about here
+
+State lives in accounts the caller passes in, and a rule sees only the accounts it builds. An
+invariant is therefore about one of two things:
+
+* **One account's fields.** For example, a position's slots, or a pool's totals.
+* **Accounts that every writer is given together**, tied by a constraint. For example, a pool and
+  the market it names with `has_one`.
+
+A relationship quantified over every account of a type has no rule, because no handler sees them
+all. "The pool's total is the sum of every user's deposit" is an example. Restate it as what each
+operation does to the accounts it touches: the pool's total moves by exactly what the user's
+position moves. That is a property of each operation, checked once per writer, not an invariant.
+
+**A fixed-size array inside an account** (slots, a ring buffer) is stated per element, at a nondet
+index assumed in bounds. That proves the invariant for every element, and the rule never loops over
+the array. The step assumes the invariant only for that one element. If preserving it depends on
+another element, assume it at a second nondet index as well.
+
+## Four ways a candidate goes wrong
+
+Check your candidate against these before you spend a prover run on it.
+
+1. **Not structural.** What you have is a safety or security property rather than a relationship
+   the code maintains. Consider whether it can be restated as a simpler, structural relationship.
+    Bad example: "no user can withdraw more collateral than they deposited"
+      (a safety property; it is about what an actor may do, not about how the fields stand)
+    Good example: "every position slot with a non-zero `mint` has a non-zero `amount`"
+      (the same concern, restated as a relationship the code maintains)
+2. **Not inductive.** The statement cannot be proven by induction, usually because it names a
+   specific handler or a sequence of them. Reformulate it so it holds whichever handler ran.
+    Bad example: "after `close_pool` runs, the pool has no outstanding shares"
+      (names a handler; this is a postcondition of that handler)
+    Good example: "a pool marked closed has no outstanding shares"
+      (holds in every reachable state, whichever handler ran)
+3. **Unlikely to hold.** This implementation probably does not maintain the relationship. Re-read the
+   source before formalizing it. Look especially for states the program produces on purpose and
+   then fences off. If a program writes a state that breaks the relationship, flags it, and lets
+   the handlers refuse it from then on, the invariant must carry the flag.
+    Bad example: "a position's debt never exceeds its collateral"
+      (proposed without checking; liquidation can leave bad debt, and the program flags it)
+    Good example: "a position's debt never exceeds its collateral unless the position is flagged
+    for loss socialization"
+      (the guard the code actually maintains)
+4. **Not formal.** The statement is too vague to formalize. Make it precise enough to be a boolean
+   function over the accounts' fields.
+    Bad example: "the accounting is consistent"
+    Good example: "a pool's `total_shares` equals `user_shares + queued_shares`"
+
+The bars are not symmetric. Drop a candidate on any real doubt about its inductiveness or its
+formalizability. Do *not* drop one merely because it looks mathematical.
+
+## Naming a handler is the usual mistake
+
+An inductive invariant holds whichever handler ran, in whatever order. If you find yourself naming a
+specific handler in the statement, you are describing a postcondition, not an invariant. That is
+the most common way a candidate fails, and it is what failure mode 2 above looks like in practice.
+
+## Invariants that depend on each other
+
+Invariant i1 depends on i2 when proving i1 preserved requires assuming i2 in the pre-state. Without
+i2, the prover would consider states where i1 is spuriously violated. Say i1 is "every active slot
+has a non-zero `mint`" and i2 is "the active-slot count never exceeds the array length". Then i1
+likely depends on i2, because without i2 the prover can consider slots past the end that vacuously
+violate i1.
+
+There are two ways to handle it.
+
+* **Conjoin them** into one invariant, when i2 exists only to make i1 inductive.
+* **Prove i2 on its own**, with its own base case and steps, and assume it in i1's steps, when i2
+  means something by itself or other rules need it too.
+
+The two routes prove the same thing. Assuming i2 in i1's steps and i1 in i2's is exactly proving
+`i1 && i2` inductive, so invariants that are all proved may assume one another.
+</guidance>

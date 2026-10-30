@@ -457,7 +457,15 @@ only).** The author's system prompt has a section "State invariants: a base case
 writer". It lists the writers from the code, gives the base case, and generates one step rule per
 writer with a local `macro_rules!`, the shape hand-written specs use. It also points to cvlr-spec's
 `cvlr_invariant_rules!`. A step that fails from an unproduced pre-state means the invariant is
-strengthened, not marked. There is no corpus example yet. Every rule the benchmark run wrote
+strengthened, not marked. Since then the section has CVL's full sequence of remedies for a
+counterexample that starts from an impossible state: an invariant first, then a justification rule,
+and a bare `cvlr_assume!` stated as one only as a last resort. The base case and steps are listed in
+`property_rules`, and they are never marked expected-to-fail. The author also has an
+`invariant_guidance` tool (`cvlr_invariant_guidance.j2`). It is the counterpart of CVL's
+`structural_invariant_guidance`, adapted to state that arrives as accounts. It covers per-account and
+together-passed invariants only, per-element statements over fixed arrays, and fenced-off states
+that the invariant must carry as a flag. Judge item 2 now checks that every state assumption has one
+of the three remedies behind it. There is no corpus example yet. Every rule the benchmark run wrote
 was about one operation. A state invariant ("queued shares never exceed supply", "the vault holds at
 least what the reserve records") needs a base case over the initializer and one step rule per
 operation that writes the state: assume the invariant before, run the operation, assert it after.
@@ -488,6 +496,18 @@ of their wall clock waiting. Find out what the long jobs are before moving `glob
 rules, and whether they are the wide-integer arithmetic, the loops, or the translation. A halted job's
 finished verdicts are not returned (U32), so each halt also discards the rules that did finish. That
 makes U32 worth doing for the Solana backend on its own.
+
+**U41. CVL has no reachability check before an expected failure either (deferred).** This is U36 for
+the CVL backend. It is noted here because U36 found it. CVL handles a counterexample from an
+impossible start state well: `property_generation_prompt.j2`'s remedy list, the
+`structural_invariant_guidance` tool, and the invariants guide §1. But its `expect_rule_failure`
+(`composer/spec/source/author.py`) takes only a `reason`. The prompt says to mark a rule when a
+counterexample "appears to point to a potential issue", and no judge item asks whether the program
+can be in the counterexample's starting state. The port has three parts: a required `pre_state` on
+that tool, the reachability question in the CVL judge's checklist (`property_judge_prompt.j2`), and
+a sentence in the remedy list. One cost: the recorded Counter tape
+(`composer/testing/ui_harness_autoprove_Counter.py`) calls `expect_rule_failure` with today's
+arguments, and it must be updated or re-recorded.
 
 ---
 
