@@ -1,0 +1,62 @@
+name: notify-downstream
+
+# After each push to master, sends the `autoprover-merged` event, with the new
+# commit, to each repository that pins AutoProver by commit. Each of them runs
+# its own workflow on that event to move its pin.
+#
+# Repository settings name the targets and the credential, and the job does
+# nothing until all of them are set:
+#   secrets.DOWNSTREAM_REPOS      the repository names, one per line
+#   vars.BUMP_APP_CLIENT_ID       a GitHub App installed on those repositories
+#   secrets.BUMP_APP_PRIVATE_KEY  its private key
+# The targets are a secret because the logs of this repository are public:
+# GitHub masks each line of a secret wherever it appears in a log, so a name on
+# a line of its own never shows. A pull request from a fork never runs this
+# workflow: it runs on push only.
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    if: vars.BUMP_APP_CLIENT_ID != ''
+    steps:
+      - name: Look for the targets
+        id: targets
+        env:
+          REPOS: ${{ secrets.DOWNSTREAM_REPOS }}
+        run: |
+          if [ -n "$REPOS" ]; then
+            echo "set=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "DOWNSTREAM_REPOS is not set; nothing to notify"
+          fi
+
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        if: steps.targets.outputs.set
+        id: app-token
+        with:
+          client-id: ${{ vars.BUMP_APP_CLIENT_ID }}
+          private-key: ${{ secrets.BUMP_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ secrets.DOWNSTREAM_REPOS }}
+
+      - name: Send autoprover-merged
+        if: steps.targets.outputs.set
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOS: ${{ secrets.DOWNSTREAM_REPOS }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          count=0
+          for repo in $REPOS; do
+            gh api "repos/$OWNER/$repo/dispatches" \
+              -f event_type=autoprover-merged \
+              -f "client_payload[sha]=$GITHUB_SHA" > /dev/null
+            count=$((count + 1))
+          done
+          echo "Sent autoprover-merged to $count repositories"
