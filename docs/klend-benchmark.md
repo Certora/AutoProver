@@ -244,19 +244,19 @@ what AutoProver does with klend as published.
    allocator by itself now, so the directives are a second line.
 3. **Find out what the long jobs are.** Read the timed-out jobs' outputs for which rules hit the
    ceiling and why. Then decide whether the ceiling should move, whether those rules should be
-   split, or whether the author should be told to restate them, before raising any limit.
+   split, or whether the author should be told to restate them, before raising any limit. Now U40.
 4. **Consider `-solanaStackSize 16384` as the default**, after checking it does not slow the vault
    and stake fixtures, since raising it changes the stack model for every target.
 5. **Let a run order, or budget, its authoring units.** Formalization is first-in first-out, four at
    a time, and the pool is shared, so whatever comes first takes the budget. Either a per-unit share
    of the pool or an order the run can be given would put the money where the measurement is. For
    this benchmark the answer-key units would go first. That is a choice about where to spend, not a
-   hint about what to find, so it does not touch what is measured.
+   hint about what to find, so it does not touch what is measured. Now U39.
 6. **Make logging free for the Prover where the author asks.** A verification-only edit that makes
    the program's logging macros expand to nothing removes every formatting allocation along with
    the strings it builds. With the heap raised it is no longer needed to avoid the crash, but it
    shrinks what the Prover translates, and it is a munge the editor can already make. Worth a
-   recipe if the heap change alone leaves translation slow.
+   recipe if the heap change alone leaves translation slow. Run 2b showed it is: now U38.
 8. **Share the dependency cache between runs.** Every confined run downloads about 1.5 GB of
    klend's dependencies up to three times, roughly 7 minutes each time: package selection,
    preflight and the shared build tree each have their own cargo home. One home per run would
@@ -291,6 +291,33 @@ any unit finished, because verdicts over that arithmetic would not have been gra
 on the Prover's master branch by
 [EVMVerifier#8792](https://github.com/Certora/EVMVerifier/pull/8792). The next run is run 2 again,
 with a new cache namespace.
+
+## Run 2b (2026-10-29): stable, but not yet a measurement
+
+The same plan, restarted after P20's fix. It ran 11h 50m and used the full $500.
+
+- **The Prover held.** Of 87 jobs, 75 succeeded, 6 halted at the 30-minute ceiling, and 1 failed
+  with no reason in its output. None crashed, against 10 of 56 crashes in run 1.
+- **One unit of six was delivered**, reserve deposits and withdrawals: 16 rules, 13 verified, over a
+  domain the author bounded (amounts below 2^32) because the full-width conversions timed out. Four
+  units were cut by the budget as unverified partials. The liquidation unit started with $0.91, as the
+  answer-key units did in run 1.
+- **The delivered unit's three findings did not survive triage.** Each was a violated rule over a
+  function below the handler, from a pre-state the program does not produce. None is a defect, and
+  none matches a published one.
+- **Prover time set the pace.** It came to 24 hours across 75 calls, and units spent most of their
+  wall clock waiting.
+
+The run was not resumed. More budget would buy more rules of the same shape. The next run waits on
+what it showed to be missing, recorded in [cvlr-todo.md](./cvlr-todo.md):
+
+- U36: checking a finding's pre-state for reachability;
+- U37: a recipe for inductive invariants;
+- U38: a switch that makes logging and error formatting inert;
+- U39: per-unit budgets or a run order;
+- U40: what the long Prover jobs are, with U32.
+
+Nothing is graded against P-01 to P-10 yet.
 
 ## Grading it
 

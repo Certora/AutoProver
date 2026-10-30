@@ -433,6 +433,53 @@ Two fixes, in order:
   held 856 KB there against 665 MB of checkouts, and if that is typical the git sources are not in
   the shareable part.
 
+U36 to U40 come from the second lending-benchmark run ([klend-benchmark.md](./klend-benchmark.md),
+run 2b). Each is general; none tells the author anything about that program.
+
+**U36. A finding's pre-state is not checked for reachability.** An author that drives a function
+below the instruction handler states a rule over a havoced pre-state, and a VIOLATED verdict is then
+reported as a finding when the pre-state is one the program never produces. All three findings of
+the benchmark's one delivered unit were of this kind. One started from a state that the only
+operation able to produce it also marks unusable, which the handler's checks then refuse. One assumed
+a holder for shares the program keeps in its own vault. One pinned a counter that other operations
+move. Before a VIOLATED rule may be marked a finding, the author should do one of two things. Either
+show the pre-state is reachable, by naming the operations that produce it and checking that the
+handler's guards admit it, or state the invariant that excludes it and treat the rule as needing that
+invariant as an assumption. The judge should ask the same question. U37 is what makes the second
+option provable rather than asserted.
+
+**U37. The author has no recipe for an inductive invariant.** Every rule the benchmark run wrote
+was about one operation. A state invariant ("queued shares never exceed supply", "the vault holds at
+least what the reserve records") needs a base case over the initializer and one step rule per
+operation that writes the state: assume the invariant before, run the operation, assert it after.
+The step rules are where a pre-state is shown unreachable (U36), and they are the standard shape for
+solvency properties. A guidance section and an example in the corpus would do, with the author
+listing the writers of a field from the code before writing the steps. A macro that stamps out one
+rule per operation keeps the harness readable, and the per-rule verdicts say which operation breaks
+it.
+
+**U38. Logging and error formatting cost authors rounds and say nothing about properties.**
+Formatted `msg!` calls and error types whose `Display` goes through `format!` give the Prover
+allocations, external `fmt` calls, and pointer errors (`[3003]` unknown provenance, `[3308]` absolute
+address) on paths no property is about. On the benchmark one unit spent hours on a single rule this
+way. Offer the editor a recipe for a verification-only switch that makes the program's logging macros
+expand to nothing under the `certora` feature, and that routes error-message construction to a
+constant. It changes no state the program writes, so the soundness argument is short. It also shrinks
+what the Prover translates.
+
+**U39. The run spends its budget first in, first out.** Formalization authors four units at a time
+in component order, from one shared pool. On both benchmark runs the first units took the whole pool
+and the units that mattered most started with about a dollar. Give each unit a share of the pool, or
+let a run say which units go first, or both. A share that a unit does not use can return to the pool
+when the unit finishes.
+
+**U40. Long Prover jobs set the pace of a run.** On the benchmark run, Prover time was 24 hours
+across 75 calls. Jobs of 20 to 30 minutes were common, 6 halted at the ceiling, and units spent most
+of their wall clock waiting. Find out what the long jobs are before moving `global_timeout`: which
+rules, and whether they are the wide-integer arithmetic, the loops, or the translation. A halted job's
+finished verdicts are not returned (U32), so each halt also discards the rules that did finish. That
+makes U32 worth doing for the Solana backend on its own.
+
 ---
 
 ## Leads from the certora-cvlr-kb ledger
