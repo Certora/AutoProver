@@ -23,11 +23,14 @@ from composer.prover.conf import SelectRules
 from composer.prover.core import ProverReport
 from composer.prover.ptypes import Counterexample, RulePath, RuleResult
 from composer.spec.cvlr import verify as verify_mod
+from composer.spec.cvlr.conf import TunableConf
+from composer.spec.cvlr.env_paths import PathDialect
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing
 from composer.spec.cvlr.prover import Checked, Submission, SubmissionFailed
-from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
+from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
 from composer.spec.cvlr.tree import ProjectSource, SharedTree
+from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.cvlr.verify import (
     BuildPermit,
     HarnessTarget,
@@ -64,14 +67,19 @@ class _Gate:
     outcome: Any = dataclasses.field(default_factory=lambda: _checked(("rule_a", "VERIFIED"), ("rule_b", "VERIFIED")))
     written: list[Submission] = dataclasses.field(default_factory=list)
 
+    state: dict[str, Any] = dataclasses.field(default_factory=lambda: {
+        "messages": [],
+        "skipped": [],
+        "summaries": [],
+        "vfs": {},
+        "version_history": [],
+        "prover_settings": TunableConf(),
+        "validations": {},
+        "required_validations": [PROVER_VALIDATION_KEY],
+    })
+
     async def verify(self, draft: str | None = _DRAFT) -> Any:
-        state = {
-            "messages": [],
-            "curr_spec": draft,
-            "skipped": [],
-            "validations": {},
-            "required_validations": [PROVER_VALIDATION_KEY],
-        }
+        state = {**self.state, "curr_spec": draft}
         tool = gate_tools(self.deps)[1]
         return await tool.ainvoke(
             {"name": tool.name, "args": {"state": state}, "id": "tc", "type": "tool_call"}
@@ -87,6 +95,7 @@ def _target(tmp_path: Path) -> HarnessTarget:
         session=SimpleNamespace(workdir=tmp_path),  # type: ignore[arg-type]
         package="p",
         package_root=tmp_path,
+        tuning=TuningFiles(envs_dir=tmp_path / "envs", dialect=PathDialect(), unit="deposits"),
         unit=HarnessModule("deposits"),
         tree=SharedTree(pristine=tmp_path / "project", root=tmp_path / "build", source=ProjectSource(roots=())),
         build_sem=asyncio.Semaphore(1),
@@ -106,7 +115,7 @@ def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
         )
     )
 
-    async def stage(self, _draft):
+    async def stage(self, _draft, _summaries, _overlay):
         assert g.sem.locked(), "staged outside the build permit"
         return StagedUnit(self, g.deps.target)
 
@@ -140,14 +149,16 @@ def _text(out: Any) -> str:
 async def test_every_listed_rule_verified_stamps_the_draft(gate: _Gate):
     out = await gate.verify()
 
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: spec_digest(_DRAFT, [])}
+    history = tuning_history({**gate.state, "curr_spec": _DRAFT})  # type: ignore[arg-type]
+    assert out.update["validations"] == {PROVER_VALIDATION_KEY: spec_digest(_DRAFT, [], history)}
     assert out.update["prover_link"] == _LINK
     assert "stamped" in _text(out)
 
 
-async def test_the_conf_names_the_section_and_selects_the_units_feature(gate: _Gate):
+async def test_the_conf_names_the_section_and_selects_the_units_feature_and_settings(gate: _Gate):
     """The section, not the draft, names the rules. The submission default is only `certora`,
-    which compiles the unit's module out."""
+    which compiles the unit's module out. The settings are the unit's current ones."""
+    gate.state["prover_settings"] = TunableConf(loop_iter=4)
     gate.names = {"rule_balance_conserved", "rule_only_authority_withdraws"}
     gate.outcome = _checked()
 
@@ -156,6 +167,7 @@ async def test_the_conf_names_the_section_and_selects_the_units_feature(gate: _G
     [submission] = gate.written
     assert submission.rules == SelectRules(("rule_balance_conserved", "rule_only_authority_withdraws"))
     assert submission.features == ("certora", "certora_unit_deposits")
+    assert submission.settings == TunableConf(loop_iter=4)
 
 
 @pytest.mark.parametrize(
@@ -173,6 +185,15 @@ async def test_a_listed_rule_that_did_not_verify_does_not_stamp(gate: _Gate, out
     assert "validations" not in out.update
     assert out.update["prover_link"] == _LINK
     assert "Not verified: rule_b." in _text(out)
+
+
+async def test_unreadable_symbols_are_said_rather_than_left_as_a_match(gate: _Gate):
+    gate.state["summaries"] = [SummaryDirective(pattern="^foo$", why="formatting")]
+
+    out = await gate.verify()
+
+    assert "could not be read" in _text(out)
+    assert "stamped" in _text(out)
 
 
 async def test_a_submission_without_results_does_not_stamp(gate: _Gate):
@@ -264,7 +285,7 @@ async def test_a_released_permit_does_not_stage(tmp_path: Path):
     async with _target(tmp_path).build_slot() as permit:
         permit.release()
         with pytest.raises(RuntimeError):
-            await permit.stage("// draft\n")
+            await permit.stage("// draft\n", (), {})
 
 
 async def test_the_status_report_leaves_out_the_counterexample(tmp_path: Path):

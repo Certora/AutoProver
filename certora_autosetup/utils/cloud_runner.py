@@ -1086,6 +1086,10 @@ class CloudProverRunner(ProverRunner):
 
         start_time = time.time()
         poll_interval = 10  # Poll every 10 seconds for faster completion detection
+        # Authentication errors in a row before the wait stops polling; any status read resets it.
+        max_consecutive_auth_errors = 3
+        auth_retry_interval = 5
+        consecutive_auth_errors = 0
 
         # Conditions that can end the wait before the job reaches a terminal status
         # (preprocessing stall, first violation, ...). Empty ⇒ no early stop.
@@ -1113,6 +1117,7 @@ class CloudProverRunner(ProverRunner):
                     )
                     continue  # Skip this iteration and try again
 
+                consecutive_auth_errors = 0
                 if job_info and hasattr(job_info, "status"):
                     self.log(f"📊 Job status for {job_url}: {job_info.status}", "DEBUG")
                     # Log additional job info if available
@@ -1161,10 +1166,14 @@ class CloudProverRunner(ProverRunner):
                 self.log(f"Error checking job status for {job_url}: {e}", "WARNING")
                 # If there are persistent authentication issues, assume job completed
                 if "authentication" in str(e).lower() or "keyring" in str(e).lower():
-                    self.log(
-                        f"Authentication issue detected, assuming job completed: {job_url}"
-                    )
-                    return True, None
+                    consecutive_auth_errors += 1
+                    if consecutive_auth_errors >= max_consecutive_auth_errors:
+                        self.log(
+                            f"Authentication issue detected, assuming job completed: {job_url}"
+                        )
+                        return True, None
+                    await asyncio.sleep(auth_retry_interval)
+                    continue
                 await asyncio.sleep(poll_interval)
 
         # Timeout reached

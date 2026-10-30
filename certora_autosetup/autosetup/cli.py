@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from certora_autosetup.autosetup.autosetup import Autosetup
-from certora_autosetup.autosetup.cli_args import create_parser
+from certora_autosetup.autosetup.cli_args import create_parser, parse_proxy_mappings
 from certora_autosetup.autosetup.types import AutosetupConfig
 from certora_autosetup.cache.cache_fs import get_fs, init_cache_fs
 from certora_autosetup.harnesser.swap import swap_library_main_contract, with_harnessed_library
@@ -153,6 +153,7 @@ def main():
 
     # Parse extra args
     extra_args = shlex.split(args.extra_args) if args.extra_args else []
+    proxy_mappings = parse_proxy_mappings(args.proxy_mapping)
 
     project_root = Path.cwd()
     certora_dir = Path("certora")
@@ -191,6 +192,7 @@ def main():
         additional_contracts=args.additional_contracts or [],
         extra_args=extra_args,
         skip_llm=args.skip_llm,
+        skip_llm_summaries=args.skip_llm_summaries,
         force_llm_regenerate=args.force_llm_regenerate,
         stop_after_summaries=args.stop_after_summaries,
         stop_after_compilation_analysis=args.stop_after_compilation_analysis,
@@ -239,7 +241,9 @@ def main():
             requested_profile=args.profile,
             skip_sanity_setup=args.skip_sanity_setup,
             skip_call_resolution=args.skip_call_resolution,
-            skip_proxy_detection=args.skip_proxy_detection,
+            # Proxy detection is an LLM agent with no static fallback.
+            skip_proxy_detection=args.skip_proxy_detection or args.skip_llm,
+            proxy_mappings=proxy_mappings,
             skip_harnessing=args.skip_harnessing,
             skip_test_run=args.skip_test_run,
             composer_output=getattr(args, 'composer_setup', None),
