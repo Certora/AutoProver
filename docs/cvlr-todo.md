@@ -545,6 +545,29 @@ exact. It changes rounding, so it is a modeling decision that every affected ver
 and it cannot support a property about rounding or precision. It would be a new editor kind, with
 that caveat in its `why_sound`. Measure it the same way before building it.
 
+*Tried 2026-10-30: the narrow type is fast where it holds, but it is not a drop-in edit.* The test
+swapped in a 64-bit `Fraction` (14 fractional bits, in place of 60) under the unit's feature. To
+compile against this version of the program, it needed eight small coordinated edits: interest
+accrual and one ceiling conversion redone in `u128`, a missing method, two literals. Then:
+
+* **Unchanged harness.** The whole job took 10 minutes instead of 25, but 8 of the 14 rules came
+  back sanity-failed, which is vacuous. The harness encodes the 60-bit scale (`ONE_SF = 1 << 60`,
+  and a deposit near 2^80), the narrow type assumes every encoding fits in 64 bits, and the two
+  contradict each other. Stored `_sf` fields carry the program's encoding, so narrowing re-reads
+  every stored value.
+* **Harness constants rescaled to 14 bits.** Three more rules came back, each passing its vacuity
+  check. One went from 17 minutes to 3.5, and two that had timed out took 8 seconds each (on path
+  counts small enough to deserve a look before believing them). One cheap rule went from 3.5
+  minutes to 16 seconds. The 5 rules over the borrow path stayed vacuous, so the program still
+  encodes the 60-bit scale somewhere on that path.
+
+So the narrow type is a real lever, but only as a decision made at the start of a unit. The
+program's fixed-point encoding, the harness's constants and every stored field have to agree on
+it. It is not something an author can apply to rules already written, and it is not a cheap
+editor kind. The cheaper wins for U40 are U32 (a halted job keeps the verdicts that finished; here
+the halt would have kept 9 or 10 of 14) and smaller jobs, so that one slow rule does not hold the
+ceiling for the rest.
+
 **U41. CVL has no reachability check before an expected failure either (deferred).** This is U36 for
 the CVL backend. It is noted here because U36 found it. CVL handles a counterexample from an
 impossible start state well: `property_generation_prompt.j2`'s remedy list, the
