@@ -196,7 +196,7 @@ async def test_the_conf_names_the_section_and_selects_the_units_feature_and_sett
     [
         pytest.param(
             _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED")),
-            "Not accounted for: rule_b.",
+            "are not marked as expected failures: rule_b.",
             id="a rule failed",
         ),
         pytest.param(_checked(("rule_a", "VERIFIED")), "No verdict came back for: rule_b.", id="a rule has no verdict"),
@@ -253,7 +253,7 @@ async def test_a_rule_marked_before_its_first_run_is_stamped_by_that_run(gate: _
     out = await gate.verify()
 
     assert "validations" in out.update
-    assert "Not accounted for" not in _text(out)
+    assert "not marked as expected failures" not in _text(out)
 
 
 async def test_a_marked_rule_stopped_by_the_provers_own_assertion_does_not_stamp(gate: _Gate):
@@ -278,7 +278,7 @@ async def test_a_timeout_is_not_excused_by_a_marking(gate: _Gate):
 
     assert "validations" not in out.update
     assert "rule_b" in _text(out)
-    assert "Not accounted for" not in _text(out)
+    assert "not marked as expected failures" not in _text(out)
 
 
 async def test_unreadable_symbols_are_said_rather_than_left_as_a_match(gate: _Gate):

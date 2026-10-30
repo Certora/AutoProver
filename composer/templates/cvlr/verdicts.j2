@@ -24,12 +24,12 @@ expect_rule_failure does not account for one of these: a marking claims a real d
 {% endif %}
 {%- if unverdicted %}
 No verdict came back for: {{ unverdicted | join(", ") }}. The prover's report does not name them, so they have not been
-checked, and this draft cannot be stamped until they are. Run verify_rules again; if they are still missing, the run's
-link is where to look.
+checked, and this draft cannot be stamped until they are. Run verify_rules again. If they are still missing, the cause is
+in the prover run, not in your draft: stop resubmitting, and say which rules were never checked.
 {% endif %}
 {%- if property_failures %}
-Not accounted for: {{ property_failures | join(", ") }}. Fix the rule, or mark it with expect_rule_failure and say why
-the failure is real.
+These rules failed their property and are not marked as expected failures: {{ property_failures | join(", ") }}. Fix
+the rule, or mark it with expect_rule_failure and say why the failure is real.
 {% endif %}
 {%- if unfinished %}
 {{ unfinished | join(", ") }} did not reach a property verdict. A timeout, an error, a sanity failure, or a skip is not a
