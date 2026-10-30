@@ -395,7 +395,7 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
     <tbody>
       {%- for row in g.rows %}
       <tr>
-        <td class="col-name">{{ row.name }}{% if row.line is not none %}<span class="muted">:{{ row.line }}</span>{% endif %}</td>
+        <td class="col-name">{{ row.name }}{% if row.line is not none %}<span class="muted">:{{ row.line }}</span>{% endif %}{% if row.spec_file %} <span class="muted">in {{ row.spec_file }}</span>{% endif %}</td>
         <td class="col-status"><span class="badge badge-{{ row.kind }}">{{ row.label }}</span></td>
         <td>
           {%- if row.descriptions | length > 1 %}

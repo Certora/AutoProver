@@ -61,7 +61,8 @@ def validate(
             if p is not None:
                 for ref in p.rule_refs:
                     groups_of_rule[ref].add(g.slug)
-    spanning = sorted({ref[1] for ref, slugs in groups_of_rule.items() if len(slugs) > 1})
+    # One entry per spanning rule: two specs' same-named rules both count.
+    spanning = sorted(ref[1] for ref, slugs in groups_of_rule.items() if len(slugs) > 1)
 
     warnings: list[str] = []
     if curtailed:
@@ -74,7 +75,8 @@ def validate(
     # genuinely returned UNKNOWN for, which carries the link of the run that said so. Named
     # rather than left to render as a bare UNKNOWN row, which reads like a checker failure.
     no_verdict = sorted(
-        r.name for r in rules if r.outcome is Outcome.UNKNOWN and r.prover_link is None
+        f"{r.name} ({r.spec_file})" for r in rules
+        if r.outcome is Outcome.UNKNOWN and r.prover_link is None
     )
     if no_verdict:
         warnings.append(

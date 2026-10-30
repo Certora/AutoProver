@@ -166,12 +166,20 @@ class RuleEvidence:
     label: str = ""
     analysis: str | None = None
     counterexample: str | None = None
+    #: The spec file the evidence was recorded against, or ``None`` when it was recorded without one.
+    #: Name-only evidence fits any rule of that name, so the report uses it only when no other rule
+    #: in the report shares the name.
+    spec_file: str | None = None
 
 
 class EvidenceFetcher(Protocol):
-    """Backend hook: every captured failing instance of a violated rule, or ``[]`` when the backend has
-    none for it. Prover reads the run-scoped CEX-analysis capture."""
-    async def __call__(self, rule_name: str, /) -> list[RuleEvidence]:
+    """Backend hook: every captured failing instance of the violated rule ``rule_name`` declared in
+    ``spec_file`` (the rule's `RuleRef`), or ``[]`` when the backend has none for it. A rule name is
+    only unique within a spec, so evidence of a same-named rule in another spec must never be
+    returned. Evidence recorded without a spec file may be returned, marked ``spec_file=None``, when
+    nothing was recorded for the rule under its spec. Prover reads the run-scoped CEX-analysis
+    capture."""
+    async def __call__(self, spec_file: str, rule_name: RuleName, /) -> list[RuleEvidence]:
         ...
 
 

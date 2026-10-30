@@ -194,7 +194,8 @@ class CoverageReport(BaseModel):
     whether every property the run *inferred* was pursued — a prioritized run drops most of
     them before this point, and reports that in ``deprioritized_count``."""
     properties_in_no_group: list[PropertyKey] = Field(default_factory=list)
-    #: rules whose properties span >1 group — expected (rules repeat), reported as a stat not an error
+    #: rules whose properties span >1 group — expected (rules repeat), reported as a stat not an error.
+    #: One entry per rule, so a name repeats when rules of that name in several specs each span.
     rules_spanning_multiple_groups: list[RuleName] = Field(default_factory=list)
     skipped_count: int = 0
     gave_up_component_count: int = 0

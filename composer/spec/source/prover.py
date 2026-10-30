@@ -55,9 +55,9 @@ from composer.spec.cvl_generation import CVLGenerationState
 from composer.diagnostics.budget import budget_pressure, exhausted_constraint, raise_budget_exceeded
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
-from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR, buffer_spec_path, component_specs_dir
+from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR, buffer_spec_ref, component_specs_dir
 from composer.spec.util import string_hash
-from composer.spec.source.cex_capture import CexAnalysisStore
+from composer.spec.source.cex_capture import CexAnalysisStore, SpecCexCapture
 from composer.spec.source.spec_buffers import (
     NamedBuffer, SpecBuffersExtra, buffer_state_digest, run_targets,
 )
@@ -424,8 +424,7 @@ def completing_run_specs(
             link = elem.get("link")
             if link and link not in seen:
                 seen.add(link)
-                spec = buffer_spec_path(slug, b.name).relative_to(SPECS_DIR).as_posix()
-                runs.append((link, spec))
+                runs.append((link, buffer_spec_ref(slug, b.name)))
     return runs
 
 
@@ -468,10 +467,11 @@ class _SpecCallbacks(RunAccounting, ProverEventCallbacks):
         writer: Callable[[ProverEvents], None],
         tool_call_id: str,
         config: dict,
-        analysis_store: CexAnalysisStore | None = None,
+        cex_capture: SpecCexCapture | None = None,
     ) -> None:
         super().__init__(writer, tool_call_id, config)
-        self._analysis_store = analysis_store
+        # Bound to the spec this run verifies: a rule name is unique only within a spec.
+        self._cex_capture = cex_capture
 
     @override
     async def on_cloud_poll(self, status: str, message: str) -> None:
@@ -523,10 +523,10 @@ class _SpecCallbacks(RunAccounting, ProverEventCallbacks):
         # before the handler records fresh ones: an instantiation that failed in an earlier iteration
         # and passes now must not survive into the report as a current failure. Fires before the CEX
         # handler runs, so the analyses recorded below are always the current run's.
-        if self._analysis_store is not None:
+        if self._cex_capture is not None:
             for rule_name in {r.path.rule for r in results.values()}:
                 try:
-                    await self._analysis_store.forget_rule(rule_name)
+                    await self._cex_capture.forget_rule(rule_name)
                 except Exception:
                     _logger.exception("failed to clear stale cex analyses for %s", rule_name)
         await super().on_prover_result(
@@ -536,12 +536,13 @@ class _SpecCallbacks(RunAccounting, ProverEventCallbacks):
     @override
     async def on_analysis_complete(self, rule: RuleResult, explanation: str) -> None:
         # Capture this violated instantiation's counterexample analysis so the report phase can
-        # reshape it into a finding without re-running the analysis. Keyed per instantiation, so a
-        # parametric rule keeps every binding's analysis instead of only the last one written.
+        # reshape it into a finding without re-running the analysis. Keyed per instantiation within the
+        # run's spec, so a parametric rule keeps every binding's analysis instead of only the last one
+        # written, and a same-named rule in another spec keeps its own.
         # Never let a capture error disturb the run.
-        if self._analysis_store is not None:
+        if self._cex_capture is not None:
             try:
-                await self._analysis_store.record(rule.path, explanation, rule.cex_dump)
+                await self._cex_capture.record(rule.path, explanation, rule.cex_dump)
             except Exception:
                 _logger.exception("failed to capture cex analysis for %s", rule.name)
         await super().on_analysis_complete(rule, explanation)
@@ -882,7 +883,15 @@ def get_prover_tool(
                         ) as (cpath, cfg):
                             res = await run_prover(
                                 Path(run_root), [cpath], tool_call_id, prover_opts,
-                                _SpecCallbacks(writer, tool_call_id, cfg, analysis_store=analysis_store),
+                                _SpecCallbacks(
+                                    writer, tool_call_id, cfg,
+                                    cex_capture=(
+                                        analysis_store.for_spec(
+                                            buffer_spec_ref(component_of(cex_state), name)
+                                        )
+                                        if analysis_store is not None else None
+                                    ),
+                                ),
                                 DefaultCexHandler(
                                     llm, cex_state, summarization_threshold=10,
                                     cache_marker=cex_cache_marker,

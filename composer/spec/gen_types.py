@@ -96,6 +96,13 @@ def buffer_spec_path(slug: str, name: str) -> Path:
     return component_specs_dir(slug) / f"{name}.spec"
 
 
+def buffer_spec_ref(slug: str, name: str) -> str:
+    """A buffer's spec file as the report identifies it: ``<slug>/<name>.spec``, relative to
+    :data:`SPECS_DIR`. The report's rule identity, a run's verdict stamp and the counterexample capture
+    all derive the spec file from this one function, so they agree on it for the same buffer."""
+    return buffer_spec_path(slug, name).relative_to(SPECS_DIR).as_posix()
+
+
 def import_statement_for(resource_path: Path, importer_dir: Path) -> str:
     """CVL import path to *resource_path* as seen from a spec located in
     *importer_dir* (both project-root-relative).
