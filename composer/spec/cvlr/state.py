@@ -1,10 +1,9 @@
 """State types and the publish gate for the CVLR harness author.
 
 The generic authoring state (:mod:`composer.authoring.state`) supplies the
-buffer, the skip list, the validation stamps, and the digest gate. CVLR adds:
+buffer, the skip list, the expected-failure markings, the validation stamps,
+and the digest gate. CVLR adds:
 
-* ``expected_failures`` — rule name to why the author says it should fail.
-  The prover gate treats these as accounted for.
 * ``prover_link`` — the job link from the latest run that produced results.
   The report links to it, and ``fetch_verdicts`` re-reads verdicts from it.
 * ``property_rules`` — the mapping the publish gate validates.
@@ -42,27 +41,34 @@ from pydantic import BaseModel, Field
 from graphcore.graph import FlowInput
 
 from composer.authoring.state import (
-    AuthoringExtra,
+    CheckingExtra,
     MappingVocab,
     SkippedProperty,
     check_completion,
-    merge_expected_failures,
+    make_validation_stamper,
+    make_verdict_stamper,
     validate_check_mapping,
 )
+from composer.prover.ptypes import StatusCodes
+from composer.prover.results import UnreadableAlertReport
 from composer.spec.context import CacheKey, CvlrGeneration, CvlrJudge
 from composer.spec.cvlr.conf import TunableConf, conf_history, merge_settings
+from composer.spec.cvlr.externals import ExternalWarnings
 from composer.spec.cvlr.tuning import SummaryDirective, merge_summaries, summary_history
 from composer.spec.source.live_explorer import VersionedHistory
 from composer.spec.source.munge.edit_store import AppliedEdit
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 
-#: Stamped when every rule is accounted for. There is no separate stamp for
-#: ``cargo check``. A prover run builds first and reports the compiler's
-#: message without submitting when that fails
+#: Stamped when every rule the build listed is accounted for. There is no
+#: separate stamp for ``cargo check``. A prover run builds first and reports
+#: the compiler's message without submitting when that fails
 #: (:class:`composer.spec.cvlr.prover.BuildRejected`).
 PROVER_VALIDATION_KEY = "prover"
 
 FEEDBACK = "feedback"
+
+PROVER_STAMPER = make_verdict_stamper(PROVER_VALIDATION_KEY)
+FEEDBACK_STAMPER = make_validation_stamper(FEEDBACK)
 
 #: WorkflowContext child key for the feedback judge (derives its memory namespace and thread ids).
 CVLR_JUDGE_KEY = CacheKey[CvlrGeneration, CvlrJudge]("judge")
@@ -157,24 +163,27 @@ def validate_rule_subjects(subjects: list[RuleSubject], declared: Collection[str
 class LastVerdicts(BaseModel):
     """The last prover run that produced verdicts.
 
-    Markings are judged against it. A change of marking re-decides the stamp
-    without another run. ``stamp`` is the digest of the draft at that run, so a
-    draft edited since gets nothing from it.
+    ``verify_rules`` judges it again under the current markings, and stamps
+    without submitting when the draft has not changed since and every rule is
+    accounted for.
     """
 
-    status: dict[str, bool]
-    #: Rules that stopped on an assertion the prover generated; no marking accounts for one.
+    status: dict[str, StatusCodes]
+    #: Rules that stopped on an assertion the prover generated.
     incomplete: list[str]
-    #: Declared rules the report gave no verdict for; while any is missing, nothing stamps.
+    #: Rules the build listed that the report gave no verdict for.
     unverdicted: list[str]
-    stamp: dict[str, str]
+    #: :func:`~composer.authoring.state.draft_digest` with :func:`tuning_history`
+    #: at that run. The markings are not in it: they change how a run is judged,
+    #: not which run it was.
+    draft: str
     #: The names the build listed, sorted. ``None`` means no build has listed
     #: them, which is also what a checkpoint from before this field loads as.
     #: An empty tuple means the section was present and named no rules.
     rules: tuple[str, ...] | None = None
 
 
-class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
+class CvlrGenerationExtra(CheckingExtra, VersionedHistory):
     property_rules: list[PropertyRuleMapping]
     #: One entry per declared rule: the program function it calls, or the one a
     #: stand-in replaces. See :class:`RuleSubject`.
@@ -194,11 +203,9 @@ class CvlrGenerationExtra(AuthoringExtra, VersionedHistory):
     #: ``adjust_prover_config`` writes only the fields it set, and the reducer
     #: applies them, so several calls in one graph step each land.
     prover_settings: Annotated[TunableConf, merge_settings]
-    #: The last prover run's own warnings about functions it treated as external:
-    #: neither analyzed nor summarized, so their writes were dropped. Absent until
-    #: a run has reported.
-    external_functions: NotRequired[tuple[str, ...]]
-    expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
+    #: The last prover run's warnings about functions it treated as external.
+    #: Absent until a run has reported.
+    external_functions: NotRequired[ExternalWarnings | UnreadableAlertReport]
     #: Absent until a prover run has produced verdicts.
     last_verdicts: NotRequired[LastVerdicts]
     #: The job link from the most recent prover run that produced results,
@@ -259,7 +266,7 @@ class HarnessAssumptions:
     settings: TunableConf = TunableConf()
     #: The last prover run's own warnings about functions it treated as external.
     #: A verdict that depends on one of them depends on writes the model dropped.
-    external_functions: tuple[str, ...] = ()
+    external_functions: ExternalWarnings | UnreadableAlertReport = ExternalWarnings()
     #: Rule name to the author's reason it should fail. The marking is state, not
     #: source. The judge weighs each one as a claim that the program is defective.
     expected_failures: tuple[tuple[CheckName, str], ...] = ()
@@ -282,7 +289,7 @@ class HarnessAssumptions:
             not self.summaries
             and not self.edits
             and optimistic is None
-            and not self.external_functions
+            and self.external_functions == ExternalWarnings()
         ):
             return [
                 "No points-to summaries, no edits to the program's source, and `optimistic_loop` off."
@@ -308,9 +315,17 @@ class HarnessAssumptions:
             ]
             if self.diff:
                 parts.append(self.diff)
-        if self.external_functions:
-            parts.append("Functions the last prover run treated as external:")
-            parts.extend(self.external_functions)
+        match self.external_functions:
+            case UnreadableAlertReport():
+                parts.append(
+                    "The last prover run's alert report could not be read, so which functions it "
+                    "treated as external is unknown."
+                )
+            case ExternalWarnings(messages=messages) if messages:
+                parts.append("Functions the last prover run treated as external:")
+                parts.extend(messages)
+            case ExternalWarnings():
+                pass
         return parts
 
 
@@ -330,14 +345,17 @@ def harness_assumptions(
         edits=edits,
         diff=diff,
         settings=state["prover_settings"],
-        external_functions=state.get("external_functions", ()),
+        external_functions=state.get("external_functions", ExternalWarnings()),
         expected_failures=tuple(state["expected_failures"].items()),
     )
 
 
 def check_cvlr_completion(state: CvlrGenerationExtra) -> str | None:
     return check_completion(
-        state, tuning_history(state), nothing_written="no harness written yet."
+        state,
+        (PROVER_STAMPER, FEEDBACK_STAMPER),
+        tuning_history(state),
+        nothing_written="no harness written yet.",
     )
 
 

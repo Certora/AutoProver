@@ -51,6 +51,7 @@ from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import CloudJobError, CloudResultsUnavailable, cloud_results
 from composer.prover.ptypes import (
     IncompleteCheck,
+    PropertyViolation,
     RulePath,
     RuleResult,
     StatusCodes,
@@ -59,8 +60,11 @@ from composer.prover.ptypes import (
 from composer.prover.results import (
     OUT_OF_RESOURCES,
     SOLANA_ENCODING,
+    AlertReport,
     ErrorAlert,
-    external_functions,
+    FetchedResults,
+    UnreadableAlertReport,
+    read_alert_report,
     read_and_format_run_result,
 )
 from composer.templates.loader import load_jinja_template
@@ -154,24 +158,26 @@ class ProverReport:
     result_str: str
     link: str
     certora_run_stdout: str
-    #: The Prover's own warnings about functions it treated as external, from the
-    #: job's alert report (:func:`composer.prover.results.external_functions`).
-    #: Empty when there were none or the report was missing. The verdicts do not
-    #: name them.
-    external_functions: tuple[str, ...] = ()
-    #: Rules that stopped on an assertion the prover generated, keyed by rule
-    #: name. The counterexample is not kept. Empty when every violation is the
-    #: rule's own assertion, or the run reported none.
-    incomplete: dict[str, IncompleteCheck] = field(default_factory=dict)
+    #: The job's alert report. Alerts carry what the verdicts do not, e.g. soundness
+    #: caveats about how the program was modeled.
+    alerts: AlertReport | UnreadableAlertReport = field(default_factory=AlertReport)
+    #: The violated instances that stopped on an assertion the Prover generated because it reached
+    #: a limit of its own (:func:`composer.prover.ptypes.classify_violation`). Every other violated
+    #: instance found something about the program.
+    incomplete: dict[RulePath, IncompleteCheck] = field(default_factory=dict)
+
+    def rule_outcomes(self) -> dict[str, StatusCodes]:
+        """One status per rule. A non-``VERIFIED`` instance is kept over a later ``VERIFIED`` one."""
+        found: dict[str, StatusCodes] = {}
+        for path, code in self.raw_rule_status.items():
+            if path.rule in found and found[path.rule] != "VERIFIED":
+                continue
+            found[path.rule] = code
+        return found
 
     @property
     def rule_status(self) -> dict[str, bool]:
-        to_ret = {}
-        for (k, v) in self.raw_rule_status.items():
-            if k.rule in to_ret and not to_ret[k.rule]:
-                continue
-            to_ret[k.rule] = v == "VERIFIED"
-        return to_ret
+        return {name: code == "VERIFIED" for name, code in self.rule_outcomes().items()}
 
     @property
     def all_verified(self) -> bool:
@@ -497,22 +503,6 @@ def _report_without_analysis(results: list[RuleResult]) -> str:
     return "\n".join(lines)
 
 
-def _incomplete_checks(results: dict[str, RuleResult]) -> dict[str, IncompleteCheck]:
-    """Which violated rules stopped on an assertion the prover generated.
-
-    Keyed by rule name. The counterexample is not stored on the report, and
-    the gate tells these apart from a rule whose own assertion failed.
-    """
-    found: dict[str, IncompleteCheck] = {}
-    for result in results.values():
-        if result.status != "VIOLATED":
-            continue
-        kind = classify_violation(result.counterexample)
-        if isinstance(kind, IncompleteCheck):
-            found[result.path.rule] = kind
-    return found
-
-
 # Compatibility alias for the legacy name. New code should reach for
 # TrivialFanoutCexHandler directly; the agentic codegen handler lives
 # elsewhere.
@@ -520,14 +510,14 @@ DefaultCexHandler = TrivialFanoutCexHandler
 
 
 @asynccontextmanager
-async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[tuple[Path, int | None]]:
-    """Trivial context manager yielding ``(local results path, runtime_ms)``.
+async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[FetchedResults]:
+    """Trivial context manager yielding the local results path and ``runtime_ms``.
 
     Mirrors ``cloud_results``' interface so ``run_prover`` consumes both uniformly. Where
     ``cloud_results`` computes the runtime from the polled job, the local run already
     happened in ``run_prover_inner``, so its wall-clock (queue-free — local isn't queued)
     is measured there and handed in here."""
-    yield (path, runtime_ms)
+    yield FetchedResults(path, runtime_ms, read_alert_report(path))
 
 
 async def _report_to_todo_list(
@@ -789,6 +779,17 @@ def cloud_job_failure_message(exc: CloudJobError) -> str:
             + "\n".join(alert.text for alert in exc.alerts)
         )
     return "\n\n".join(lines)
+def _incomplete(results: dict[str, RuleResult]) -> dict[RulePath, IncompleteCheck]:
+    found: dict[RulePath, IncompleteCheck] = {}
+    for result in results.values():
+        if result.status != "VIOLATED" or result.counterexample is None:
+            continue
+        match classify_violation(result.counterexample):
+            case IncompleteCheck() as check:
+                found[result.path] = check
+            case PropertyViolation():
+                pass
+    return found
 
 
 async def run_prover(
@@ -885,13 +886,15 @@ async def run_prover(
     # time, sourced by each context manager (cloud job window / local
     # subprocess wall-clock).
     try:
-        async with results_cm as (emv_path, runtime_ms):
+        async with results_cm as fetched:
+            emv_path = fetched.root
+            runtime_ms = fetched.runtime_ms
             parsed = read_and_format_run_result(emv_path, prover_opts.app)
 
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"
-            externals = external_functions(emv_path)
-            incomplete = _incomplete_checks(parsed)
+            alerts = fetched.alerts
+            incomplete = _incomplete(parsed)
 
             # 9. Notify runtime + prover_result callbacks
             if runtime_ms is not None:
@@ -943,7 +946,7 @@ async def run_prover(
 
     return ProverReport(
         raw_rule_status=raw_rule_results,
-        external_functions=externals,
+        alerts=alerts,
         incomplete=incomplete,
         result_str=result_str,
         link=run_result["link"],

@@ -32,6 +32,7 @@ from composer.cargo.sbf import Built, platform_tools_installed
 from composer.cargo.session import CargoSession, Warmed
 from composer.prover.conf import SelectRules, dump_conf
 from composer.prover.core import make_prover_options
+from composer.prover.results import AlertReport
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
@@ -43,6 +44,7 @@ from composer.spec.cvlr.prover import (
     prepare_submission,
     run_submission,
 )
+from composer.spec.cvlr.externals import external_warnings
 from composer.spec.cvlr.manifest import rule_names_in_elf
 from composer.spec.cvlr.scaffold import SPECS_DIR, apply, plan_scaffold
 from composer.spec.cvlr.reference import SOLANA_V2
@@ -185,12 +187,12 @@ async def test_which_writes_the_model_drops(project, capsys):
     }
     # The job always has some external function, so an empty list means the alert report was not
     # fetched with the results.
-    assert report.external_functions, f"no external functions reported. Report: {report.link}"
+    assert isinstance(report.alerts, AlertReport), f"alert report unreadable. Report: {report.link}"
+    externals = external_warnings(report.alerts).messages
+    assert externals, f"no external functions reported. Report: {report.link}"
     inlined = ("solana_account_info::AccountInfo::realloc", "solana_account_info::AccountInfo::resize")
-    assert not any(
-        name in warning for name in inlined for warning in report.external_functions
-    ), (
-        f"external functions reported: {report.external_functions}. Report: {report.link}"
+    assert not any(name in warning for name in inlined for warning in externals), (
+        f"external functions reported: {externals}. Report: {report.link}"
     )
 
     changed = {rule: observed[rule] for rule in RULES if observed[rule] != expected[rule]}

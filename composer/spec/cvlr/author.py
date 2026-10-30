@@ -57,7 +57,6 @@ from composer.authoring.judge import (
 from composer.authoring.state import (
     SkippedProperty,
     ValidationStamper,
-    make_validation_stamper,
 )
 from composer.authoring.tools import give_up_tool, skip_tools
 from composer.diagnostics.budget import (
@@ -77,6 +76,7 @@ from composer.spec.cvlr.harness import GeneratedHarness
 from composer.spec.cvlr.state import (
     CVLR_JUDGE_KEY,
     FEEDBACK,
+    FEEDBACK_STAMPER,
     PROVER_VALIDATION_KEY,
     CvlrGenerationInput,
     CvlrGenerationState,
@@ -715,7 +715,7 @@ async def batch_cvlr_generation(
         thunk=build_feedback_thunk(
             judge_ctx, env, props, component, program, cvlr_versions, caveats, editing
         ),
-        stamper=make_validation_stamper(FEEDBACK),
+        stamper=FEEDBACK_STAMPER,
         editing=editing,
         project=target.tree.pristine,
     )

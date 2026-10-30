@@ -21,14 +21,13 @@ from types import SimpleNamespace
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-from composer.prover.core import _incomplete_checks
-from composer.prover.ptypes import LoopUnwound, OverflowUnproven, RulePath, RuleResult
+from composer.prover.core import _incomplete
+from composer.prover.ptypes import GeneratedKind, IncompleteCheck, RulePath, RuleResult, StatusCodes
 from composer.prover.results import SOLANA_TRACE, counterexample
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.pipeline import CvlrFormalizer
 from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
-from composer.spec.cvlr.author_tools import unaccounted
-from composer.spec.cvlr.verify import BuildPermit, _CaptureCallbacks, _incomplete_note
+from composer.spec.cvlr.verify import BuildPermit, _CaptureCallbacks, _verdicts_note, unaccounted
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 FIXTURES = Path(__file__).parent / "data" / "solana_cex"
@@ -179,14 +178,14 @@ def test_the_gate_learns_which_rules_never_reached_their_property():
         "loop": _violated("loop", _LOOP_BOUND),
         "real": _violated("real", _REAL_VIOLATION),
     }
-    incomplete = _incomplete_checks(results)
+    incomplete = _incomplete(results)
 
-    assert set(incomplete) == {"loop"}
-    assert incomplete["loop"].assertion.startswith("Unwinding condition in a loop")
+    assert set(incomplete) == {RulePath(rule="loop")}
+    assert incomplete[RulePath(rule="loop")].kind == GeneratedKind.LOOP_UNWINDING
 
 
 def test_a_run_where_nothing_stalled_reports_nothing_stalled():
-    incomplete = _incomplete_checks({"real": _violated("real", _REAL_VIOLATION)})
+    incomplete = _incomplete({"real": _violated("real", _REAL_VIOLATION)})
     assert incomplete == {}
 
 
@@ -194,25 +193,33 @@ def test_an_incomplete_check_cannot_be_declared_an_expected_failure():
     """``expect_rule_failure`` says "this failure is a real defect". A rule that stopped on the
     prover's own assertion has shown no defect, so the marking must not excuse it from the gate —
     otherwise the run publishes a claim of a finding for which nothing was captured."""
-    status = {"loop": False, "real": False}
+    status: dict[str, StatusCodes] = {"loop": "VIOLATED", "real": "VIOLATED"}
     expected = {"loop": "I think this is a bug", "real": "the fee collector aliases the vault"}
 
-    assert unaccounted(status, expected) == []
-    assert unaccounted(status, expected, incomplete={"loop": "Unwinding condition in a loop"}) == [
-        "loop"
-    ]
+    assert unaccounted(status, expected, ()) == []
+    assert unaccounted(status, expected, {"loop"}) == ["loop"]
 
 
 def test_a_genuine_expected_failure_still_satisfies_the_gate():
     """The other direction, which is the whole reason the marking exists: a run can be complete with
     a real violation in it."""
-    status = {"real": False}
+    status: dict[str, StatusCodes] = {"real": "VIOLATED"}
     expected = {"real": "the fee collector aliases the vault"}
-    assert unaccounted(status, expected, incomplete={}) == []
+    assert unaccounted(status, expected, ()) == []
+
+
+def _note(**incomplete: IncompleteCheck) -> str:
+    return _verdicts_note(
+        {name: "VIOLATED" for name in incomplete}, incomplete, [], [], stamped=False
+    )
+
+
+def _overflow(assertion: str) -> IncompleteCheck:
+    return IncompleteCheck(GeneratedKind.CANNOT_OVERFLOW, assertion)
 
 
 def test_the_gate_tells_an_overflow_stop_how_to_get_past_it_and_not_a_loop_remedy():
-    note = _incomplete_note({"r": OverflowUnproven("Cannot overflow: inferred pointer")})
+    note = _note(r=_overflow("Cannot overflow: inferred pointer"))
     assert "Cannot overflow: inferred pointer" in note
     assert "cvlr_assume!(x < 1 << 63)" in note
     assert "trip count" not in note
@@ -221,7 +228,7 @@ def test_the_gate_tells_an_overflow_stop_how_to_get_past_it_and_not_a_loop_remed
 def test_the_gate_bounds_an_overflow_stop_once_and_then_moves_on():
     """The bound is not always the lever: the stop follows the code's layout, so a rule that still
     stops with it in place is restated below the handler or skipped, not reworded again."""
-    note = _incomplete_note({"r": OverflowUnproven("Cannot overflow: inferred pointer")})
+    note = _note(r=_overflow("Cannot overflow: inferred pointer"))
     assert "once" in note
     assert "again with the bound in place" in note
     assert "takes no AccountInfo" in note
@@ -229,11 +236,11 @@ def test_the_gate_bounds_an_overflow_stop_once_and_then_moves_on():
 
 
 def test_the_gate_gives_each_kind_its_remedy_once():
-    note = _incomplete_note({
-        "a": LoopUnwound("Unwinding condition in a loop"),
-        "b": OverflowUnproven("Cannot overflow: computing TAC map index"),
-        "c": OverflowUnproven("Cannot overflow: inferred pointer"),
-    })
+    note = _note(
+        a=IncompleteCheck(GeneratedKind.LOOP_UNWINDING, "Unwinding condition in a loop"),
+        b=_overflow("Cannot overflow: computing TAC map index"),
+        c=_overflow("Cannot overflow: inferred pointer"),
+    )
     assert note.count("trip count") == 1
     assert note.count("1 << 63") == 1
     assert "expect_rule_failure" in note

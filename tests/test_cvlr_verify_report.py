@@ -1,7 +1,7 @@
-"""A draft stamps when every rule it declares verified.
+"""A draft stamps when every rule it declares is accounted for.
 
 No cargo and no Prover. The report is a stand-in, and the stamp is the digest
-of the draft.
+of the draft and its markings.
 """
 
 from pathlib import Path
@@ -9,11 +9,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from composer.authoring.state import make_validation_stamper, spec_digest
+from composer.authoring.state import checked_digest
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CompileFailed
 from composer.prover.core import ProverReport, _report_without_analysis
-from composer.prover.ptypes import Counterexample, LoopUnwound, RulePath, RuleResult
+from composer.prover.ptypes import (
+    Counterexample,
+    GeneratedKind,
+    IncompleteCheck,
+    RulePath,
+    RuleResult,
+    UserAssertion,
+)
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.prover import BuildRejected, Checked, SubmissionFailed
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
@@ -48,18 +55,18 @@ def _tool(draft: str | None = _DRAFT) -> VerifyRules:
 
 
 def _deps():
-    return SimpleNamespace(stamper=make_validation_stamper(PROVER_VALIDATION_KEY))
+    return SimpleNamespace()
 
 
 def _report(
-    *pairs: tuple[str, str], incomplete: dict[str, LoopUnwound] | None = None
+    *pairs: tuple[str, str], incomplete: dict[str, IncompleteCheck] | None = None
 ) -> ProverReport:
     return ProverReport(
         raw_rule_status={RulePath(name): status for name, status in pairs},  # type: ignore[misc]
         result_str="rules",
         link=_LINK,
         certora_run_stdout="",
-        incomplete=incomplete or {},
+        incomplete={RulePath(name): check for name, check in (incomplete or {}).items()},
     )
 
 
@@ -73,7 +80,9 @@ async def test_every_declared_rule_verified_stamps_the_draft():
     )
 
     history = tuning_history(tool.state)  # type: ignore[arg-type]
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: spec_digest(_DRAFT, [], history)}
+    assert out.update["validations"] == {
+        PROVER_VALIDATION_KEY: checked_digest(tool.state, history)  # type: ignore[arg-type]
+    }
     assert out.update["prover_link"] == _LINK
     assert "stamped" in out.update["messages"][0].content
     assert out.update["last_verdicts"].rules == ("rule_a", "rule_b")
@@ -126,7 +135,7 @@ async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart():
             report=_report(
                 ("rule_a", "VERIFIED"),
                 ("rule_b", "VIOLATED"),
-                incomplete={"rule_b": LoopUnwound(assertion)},
+                incomplete={"rule_b": IncompleteCheck(GeneratedKind.LOOP_UNWINDING, assertion)},
             ),
         ),
         _deps(),  # type: ignore[arg-type]
@@ -182,7 +191,7 @@ def test_a_report_without_analysis_leaves_out_the_counterexample():
     """A dump per violated rule would flood the context of whoever reads the report."""
     violated = RuleResult(
         path=RulePath(rule="rule_b"),
-        counterexample=Counterexample(trace="<the-whole-trace/>"),
+        counterexample=Counterexample(trace="<the-whole-trace/>", origin=UserAssertion()),
         status="VIOLATED",
     )
     assert _report_without_analysis([violated]) == "rule_b: VIOLATED"

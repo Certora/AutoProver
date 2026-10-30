@@ -82,8 +82,9 @@ Read the outcome:
   - your rule is wrong (over-strong assertion, missing assumption, wrong state read) — fix it;
   - the property does not hold and you have found a defect — mark the rule with
     `expect_rule_failure(rule_name, reason)`, saying why you believe the violation is real. Marked
-    rules are excluded from the gate, so a run can be complete with a genuine violation in it, and
-    marking the last unaccounted failure of an unchanged draft stamps it without another run.
+    rules are excluded from the gate, so a run can be complete with a genuine violation in it. A
+    marking invalidates the prover stamp. Call `verify_rules` again: when the draft is unchanged and
+    the last run is accounted for under the new markings, it stamps without submitting.
     **Do not invert the rule so that it passes.**
 * **A rule reported vacuous / sanity-failing** → no execution reaches the end of the rule, so it
   proves nothing. The vacuity check assumes every assertion on the way holds, and that includes

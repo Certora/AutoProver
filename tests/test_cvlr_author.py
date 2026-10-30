@@ -25,7 +25,8 @@ from types import SimpleNamespace
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-from composer.authoring.state import SkippedProperty, make_validation_stamper, spec_digest
+from composer.prover.ptypes import StatusCodes
+from composer.authoring.state import SkippedProperty, checked_digest, draft_digest
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import TunableConf, RunOverlay, solana_conf
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
@@ -35,6 +36,7 @@ from composer.spec.cvlr.harness import (
     HarnessModule,
 )
 from composer.spec.cvlr.state import (
+    PROVER_STAMPER,
     PROVER_VALIDATION_KEY,
     LastVerdicts,
     PropertyRuleMapping,
@@ -45,8 +47,7 @@ from composer.spec.cvlr.state import (
 )
 from composer.spec.cvlr import author
 from composer.spec.cvlr import verify as verify_mod
-from composer.spec.cvlr.author_tools import unaccounted
-from composer.spec.cvlr.verify import CexAnalysis, _externals_note, _unverdicted, _wrongly_expected
+from composer.spec.cvlr.verify import CexAnalysis, _externals_note, _unverdicted, _verdicts_note, unaccounted
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 _DRAFT_NO_RULES = "//! Every property blocked; see the skips.\n"
@@ -178,16 +179,11 @@ def test_an_all_skipped_unit_can_satisfy_the_prover_gate():
     failure. Measured: two of three units in an end-to-end run ended exactly this way."""
     state = _verify_state(_DRAFT_NO_RULES)
     state["skipped"] = [SkippedProperty(property_title="p", reason="[3308] on the handler")]
-    deps = SimpleNamespace(stamper=make_validation_stamper(PROVER_VALIDATION_KEY))
-    token = verify_mod.VerifyRules._dep_ctx.set(deps)
-    try:
-        tool = verify_mod.VerifyRules(state=state, tool_call_id="tc")
-        stamped = tool._nothing_to_submit()
-    finally:
-        verify_mod.VerifyRules._dep_ctx.reset(token)
+    tool = verify_mod.VerifyRules(state=state, tool_call_id="tc")
+    stamped = tool._nothing_to_submit()
     assert not isinstance(stamped, str), stamped
-    assert stamped.update["validations"][PROVER_VALIDATION_KEY] == spec_digest(
-        _DRAFT_NO_RULES, state["skipped"], tuning_history(state)
+    assert stamped.update["validations"][PROVER_VALIDATION_KEY] == checked_digest(
+        state, tuning_history(state)
     )
     assert stamped.update["last_verdicts"].rules == ()
 
@@ -249,18 +245,18 @@ def test_declaring_modules_never_clobbers_an_authored_harness(tmp_path):
 
 
 def test_a_marked_rule_does_not_block_the_gate_but_an_unmarked_failure_does():
-    status = {"rule_a": True, "rule_b": False, "rule_c": False}
+    status: dict[str, StatusCodes] = {"rule_a": "VERIFIED", "rule_b": "VIOLATED", "rule_c": "VIOLATED"}
     expected = {"rule_b": "the program really does underflow here"}
     # rule_b is a finding the author took responsibility for; rule_c is unfinished work.
-    assert unaccounted(status, expected) == ["rule_c"]
+    assert unaccounted(status, expected, ()) == ["rule_c"]
 
 
 def test_a_declared_rule_the_report_gives_no_verdict_for_blocks_the_gate():
     """The roll-up sees only the rules the report names. A declared rule missing from it would
     otherwise leave the draft stamped as if every rule had been checked."""
-    status = {"rule_a": True}
+    status: dict[str, StatusCodes] = {"rule_a": "VERIFIED"}
     assert _unverdicted(["rule_a", "rule_b"], status) == ["rule_b"]
-    assert unaccounted(status, {}) == []
+    assert unaccounted(status, {}, ()) == []
 
 
 def test_the_author_is_told_which_functions_were_external_and_what_that_means():
@@ -285,8 +281,10 @@ def test_the_author_is_shown_how_to_bound_an_external_value_with_edits_it_can_as
 def test_a_rule_marked_expected_to_fail_that_verifies_is_reported():
     # The more interesting direction: either the defect is not there or the rule does not test for
     # it, and both want the author's attention before the run is called finished.
-    status = {"rule_b": True}
-    assert _wrongly_expected(status, {"rule_b": "should underflow"}) == ["rule_b"]
+    status: dict[str, StatusCodes] = {"rule_b": "VERIFIED"}
+    marked = {"rule_b": "should underflow"}
+    note = _verdicts_note(status, {}, unaccounted(status, marked, ()), [], stamped=False)
+    assert "marked as expected failures but VERIFIED: rule_b" in note
 
 
 def test_the_published_result_carries_the_harness_and_the_property_map():
@@ -418,7 +416,6 @@ async def test_the_submission_names_the_rules_the_build_listed(tmp_path, monkeyp
         submission_dir=Path("/w/submissions"),
         prover_opts=None,  # type: ignore[arg-type]
         analysis=_unbound_analysis(),
-        stamper=None,  # type: ignore[arg-type]
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
     try:
@@ -466,7 +463,6 @@ async def test_a_missing_rule_section_writes_no_conf(tmp_path, monkeypatch):
         submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),
-        stamper=None,
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
     try:
@@ -504,7 +500,6 @@ async def test_a_corrupt_rule_section_writes_no_conf(tmp_path, monkeypatch, capl
         submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),
-        stamper=None,
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
     try:
@@ -538,7 +533,6 @@ async def test_an_empty_rule_section_submits_nothing(tmp_path, monkeypatch):
         submission_dir=Path("/w/submissions"),
         prover_opts=None,
         analysis=_unbound_analysis(),
-        stamper=None,
     )
     token = verify_mod.VerifyRules._dep_ctx.set(deps)
     try:
@@ -554,11 +548,11 @@ def _stamped(draft: str, *, rules: tuple[str, ...] | None, store: bool) -> dict:
     """A draft whose prover stamp matches, with or without a stored rule list."""
     state = _verify_state(draft)
     state["required_validations"] = [PROVER_VALIDATION_KEY]
-    stamp = make_validation_stamper(PROVER_VALIDATION_KEY)(state, tuning_history(state))
-    state["validations"] = stamp
+    history = tuning_history(state)
+    state["validations"] = PROVER_STAMPER(state, history)
     if store:
         state["last_verdicts"] = LastVerdicts(
-            status={}, incomplete=[], unverdicted=[], stamp=stamp, rules=rules
+            status={}, incomplete=[], unverdicted=[], draft=draft_digest(state, history), rules=rules
         )
     return state
 

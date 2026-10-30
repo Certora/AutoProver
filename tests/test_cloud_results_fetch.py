@@ -82,8 +82,8 @@ def _clock_report() -> str:
 async def test_a_transient_read_failure_is_retried(api) -> None:
     fake = api(failures=2)
 
-    async with cloud_results(_LINK, poll_timeout=1) as (dest, _):
-        assert dest.is_dir()
+    async with cloud_results(_LINK, poll_timeout=1) as fetched:
+        assert fetched.root.is_dir()
 
     assert fake.calls == 3
 

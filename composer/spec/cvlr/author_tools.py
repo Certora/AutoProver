@@ -1,16 +1,15 @@
-"""The author's tools that change what the prover gate checks, and how a marking re-decides the stamp.
+"""The author's tools that change what the Prover checks.
 
 * ``summarize_for_prover`` replaces a function with an unconstrained stand-in.
 * ``adjust_prover_config`` changes the unit's prover settings.
 * ``expect_rule_failure`` and ``expect_rule_passage`` mark a rule as a finding
   or put it back under the gate.
 
-Each one changes the unit's state, and each invalidates or re-decides the
-prover stamp. ``verify_rules`` (:mod:`composer.spec.cvlr.verify`) is what
+Each one changes the unit's state, and each invalidates the prover stamp. ``verify_rules`` (:mod:`composer.spec.cvlr.verify`) is what
 builds with that state and earns the stamp.
 """
 
-from typing import Container, override
+from typing import override
 
 from pydantic import Field
 
@@ -18,58 +17,17 @@ from graphcore.graph import tool_state_update
 from graphcore.tools.schemas import (
     Command,
     WithAsyncDependencies,
-    WithAsyncImplementation,
     WithImplementation,
     WithInjectedId,
     WithInjectedState,
 )
 
-from composer.authoring.state import (
-    ValidationStamper,
-    make_validation_stamper,
-    merge_expected_failures,
-)
 from composer.prover.conf import dump_conf
 from composer.spec.cvlr.conf import OptimisticLoop, OptimisticLoopOff, SettingsEdit, tunable_conf
-from composer.spec.cvlr.state import (
-    PROVER_VALIDATION_KEY,
-    CvlrGenerationState,
-    LastVerdicts,
-    tuning_history,
-)
+from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.types import CheckName
 from composer.ui.tool_display import tool_display
-
-
-def unaccounted(
-    status: dict[str, bool],
-    expected_failures: dict[CheckName, str],
-    incomplete: Container[str] = (),
-) -> list[str]:
-    """Rules that failed and are not excused by an expected-failure marking.
-
-    An incomplete check is not excused. ``expect_rule_failure`` claims a real
-    defect, and a rule that stopped on the prover's assertion never reached
-    its property.
-    """
-    return sorted(
-        name
-        for name, ok in status.items()
-        if not ok and (name not in expected_failures or name in incomplete)
-    )
-
-
-def stamp_under(last: LastVerdicts, expected: dict[CheckName, str]) -> dict[str, str]:
-    """The prover stamp ``last`` earns under the markings ``expected``: its own stamp when they
-    account for every failure it reported, otherwise a cleared one."""
-    if last.unverdicted or unaccounted(last.status, expected, last.incomplete):
-        return {key: "" for key in last.stamp}
-    return last.stamp
-
-
-def prover_stamper() -> ValidationStamper:
-    return make_validation_stamper(PROVER_VALIDATION_KEY)
 
 
 @tool_display(lambda p: f"Summarizing `{p['symbol_pattern']}` for the prover", "Summary")
@@ -217,40 +175,18 @@ class AdjustProverConfig(
         )
 
 
-def _remarked(
-    state: CvlrGenerationState, tool_call_id: str, said: str, marking: dict[CheckName, str]
-) -> Command:
-    """Apply ``marking`` and re-decide the prover stamp against the last run's verdicts."""
-    last = state.get("last_verdicts")
-    if last is None:
-        return tool_state_update(tool_call_id, said, expected_failures=marking)
-    stamp = stamp_under(last, merge_expected_failures(state["expected_failures"], marking))
-    current = prover_stamper()(state, tuning_history(state))
-    held = state["validations"].get(PROVER_VALIDATION_KEY) == current[PROVER_VALIDATION_KEY]
-    if stamp == current and not held:
-        said += (
-            " Every failure the last prover run reported is now accounted for, so this draft is "
-            "stamped without another run."
-        )
-    elif stamp != current and held:
-        said += (
-            " The last prover run's failures are no longer all accounted for, so this draft's "
-            "prover stamp is withdrawn."
-        )
-    return tool_state_update(tool_call_id, said, expected_failures=marking, validations=stamp)
-
-
 @tool_display(lambda p: f"Expecting rule `{p['rule_name']}` to fail", None)
 class ExpectRuleFailure(
-    WithInjectedState[CvlrGenerationState], WithAsyncImplementation[Command], WithInjectedId
+    WithInjectedState[CvlrGenerationState], WithInjectedId, WithImplementation[Command]
 ):
     """Record that a rule is meant to fail because the program violates the property.
 
     The rule stays in the harness and the prover keeps reporting the violation.
-    ``verify_rules`` stops treating it as unfinished. Use it only after reading
-    the counterexample and concluding the defect is real. When the marking
-    accounts for every failure of the last run, the draft is stamped from that
-    run, with no new submission.
+    ``verify_rules`` stops treating it as unfinished. Use it only once the
+    defect is shown, by a counterexample or by tracing the program. A rule can
+    be marked before it has run. The marking accounts for the rule only in a
+    run where the rule fails on its own assertion. A marking invalidates the
+    prover stamp. Re-run ``verify_rules``.
     """
 
     rule_name: str = Field(description="The name of the rule expected to fail")
@@ -259,36 +195,42 @@ class ExpectRuleFailure(
     )
 
     @override
-    async def run(self) -> Command:
-        # An empty reason removes the marking. Do not record one. An unexplained
-        # expected failure looks like a broken rule.
+    def run(self) -> Command:
+        # An empty reason removes the marking, so a stored mark has to say why.
         if not self.reason.strip():
             return tool_state_update(
                 self.tool_call_id,
                 "A non-empty reason is required when marking a rule as expected to fail.",
             )
-        return _remarked(
-            self.state,
+        return tool_state_update(
             self.tool_call_id,
-            f"Recorded: {self.rule_name} is expected to fail.",
-            {CheckName(self.rule_name): self.reason},
+            f"Recorded: {self.rule_name} is expected to fail. The prover stamp is invalidated, so "
+            "re-run `verify_rules`.",
+            expected_failures={CheckName(self.rule_name): self.reason},
         )
 
 
 @tool_display(lambda p: f"Expecting rule `{p['rule_name']}` to pass", None)
 class ExpectRulePassage(
-    WithInjectedState[CvlrGenerationState], WithAsyncImplementation[Command], WithInjectedId
+    WithInjectedState[CvlrGenerationState], WithInjectedId, WithImplementation[Command]
 ):
-    """Withdraw an ``expect_rule_failure`` marking, putting the rule back under the gate. If the
-    last run reported the rule failing, the draft's prover stamp goes with it."""
+    """Withdraw an ``expect_rule_failure`` marking, putting the rule back under the gate.
+
+    A withdrawal invalidates the prover stamp. Re-run ``verify_rules``.
+    """
 
     rule_name: str = Field(description="The name of the rule that should verify after all")
 
     @override
-    async def run(self) -> Command:
-        return _remarked(
-            self.state,
+    def run(self) -> Command:
+        if self.rule_name not in self.state["expected_failures"]:
+            return tool_state_update(
+                self.tool_call_id, f"{self.rule_name} is not marked as expected to fail."
+            )
+        # An empty reason removes the marking.
+        return tool_state_update(
             self.tool_call_id,
-            f"Withdrawn: {self.rule_name} must verify.",
-            {CheckName(self.rule_name): ""},
+            f"Withdrawn: {self.rule_name} must verify. The prover stamp is invalidated, so re-run "
+            "`verify_rules`.",
+            expected_failures={CheckName(self.rule_name): ""},
         )

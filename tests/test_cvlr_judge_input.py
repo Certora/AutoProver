@@ -18,6 +18,8 @@ No cargo, no network, no prover, no model.
 
 from composer.authoring.judge import JudgeInput
 from composer.spec.cvlr.author import JudgeContext, with_assumptions
+from composer.prover.results import UnreadableAlertReport
+from composer.spec.cvlr.externals import ExternalWarnings
 from composer.spec.cvlr.conf import OptimisticLoop, TunableConf
 from composer.spec.cvlr.state import HarnessAssumptions, harness_assumptions
 from composer.spec.source.munge.edit_store import AppliedEdit
@@ -118,13 +120,22 @@ def test_a_raised_loop_bound_alone_is_nothing_to_weigh():
 def test_the_last_runs_external_functions_reach_the_judge():
     """A verdict over an external call is conditional on writes the model dropped, and nothing in
     the draft, the summaries or the edits shows it."""
-    external = "anchor_lang::system_program::transfer"
-    briefing = _text(HarnessAssumptions(summaries=(), edits=(), external_functions=(external,)))
-    assert external in briefing and "treated as external" in briefing
+    external = ExternalWarnings(("anchor_lang::system_program::transfer",))
+    briefing = _text(HarnessAssumptions(summaries=(), edits=(), external_functions=external))
+    assert external.messages[0] in briefing and "treated as external" in briefing
     assert "no points-to summaries" not in briefing
     state = {"summaries": [], "expected_failures": {}, "prover_settings": TunableConf(),
-             "external_functions": (external,)}
-    assert harness_assumptions(state).external_functions == (external,)  # type: ignore[arg-type]
+             "external_functions": external}
+    assert harness_assumptions(state).external_functions == external  # type: ignore[arg-type]
+
+
+def test_an_unreadable_alert_report_reaches_the_judge_as_unknown():
+    """Silence would read as a run that treated nothing as external."""
+    briefing = _text(
+        HarnessAssumptions(summaries=(), edits=(), external_functions=UnreadableAlertReport())
+    )
+    assert "could not be read" in briefing
+    assert "no points-to summaries" not in briefing
 
 
 def test_an_expected_failure_reaches_the_judge_with_its_reason():

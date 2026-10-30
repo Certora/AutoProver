@@ -81,7 +81,6 @@ from composer.spec.cvlr.scaffold import ENVS_DIR, declare_unit_features
 from composer.spec.cvlr.tree import SharedTree
 from composer.spec.cvlr.tuning import SUMMARIES, TuningFiles
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
-from composer.spec.cvlr.author_tools import prover_stamper
 from composer.spec.cvlr.verify import CexAnalysis, HarnessTarget, VerifyDeps
 from composer.spec.cvlr.reference import ChainReference
 from composer.spec.solana.model import (
@@ -290,7 +289,6 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             ),
             submission_dir=self.build.submission_dir,
             prover_opts=self.deps.prover_opts,
-            stamper=prover_stamper(),
             analysis=CexAnalysis(store=self.deps.cex_analysis),
         )
         return await batch_cvlr_generation(
