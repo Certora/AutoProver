@@ -59,7 +59,7 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
   arithmetic", "cannot model this") must cite the job that showed it: a probe rule and its verdict.
   A belief about what the Prover can do is not a reason. Write the probe; it usually costs one
   small submission, and it is sometimes wrong in the direction that loses the property.
-* `expect_rule_failure(rule_name, reason)` / `expect_rule_passage(rule_name)` — mark a rule as
+* `expect_rule_failure(rule_name, reason, pre_state)` / `expect_rule_passage(rule_name)` — mark a rule as
   expected to fail. See "When a rule should fail" below.
 * `feedback_tool(rebuttals=[])` — submit the current draft and any skips to the feedback judge. An
   acceptance stamps the publish gate; like the prover stamp, any later `put_harness` or skip change
@@ -532,6 +532,71 @@ token balance actually changed — fails against a correct program, and a proper
 *not* to have moved something passes having checked nothing. Assert over the program's own recorded
 state, which is the part it is responsible for.
 
+## State invariants: a base case and one step per writer
+
+Some properties are about a state, not an operation: "queued shares never exceed the supply", "the
+vault holds at least what the ledger records", "a closed position carries no debt". A rule over one
+handler does not prove a property like that. It is proved by induction, in three parts.
+
+1. **List the writers from the code before writing a rule.** Search for every function that
+   assigns a field the invariant reads, and follow each one up to the handlers that reach it. Each
+   writer is one step. A writer you miss is an operation the invariant goes unproved for, and that is
+   often the operation that breaks it. Put the list in the module's doc comment, so a reviewer can
+   check that it is complete.
+2. **The base case.** Run whatever creates the state, from arbitrary inputs, and assert the invariant
+   afterwards.
+3. **One step rule per writer.** Assume the invariant on the pre-state, run the operation, and assert
+   the invariant on the post-state. The assumption is justified: the base case and the other steps
+   are what discharge it.
+
+Write the invariant once, as a function that returns `bool`. Then generate the steps with a local
+`macro_rules!`, so that each step shows only the operation it runs:
+
+```rust
+use cvlr::nondet::havoc::alloc_mut_ref_havoced;
+
+/// Writers of `queued_shares` and `total_shares`: `queue_withdrawal`, `redeem_queued`, `deposit`,
+/// `withdraw`.
+fn queued_within_supply(r: &Pool) -> bool {
+    r.queued_shares <= r.total_shares
+}
+
+macro_rules! preserves_queued_within_supply {
+    ($rule:ident, |$pool:ident| $op:block) => {
+        #[rule]
+        pub fn $rule() {
+            let $pool: &mut Pool = alloc_mut_ref_havoced();
+            cvlr_assume!(queued_within_supply($pool));
+            $op
+            cvlr_assert!(queued_within_supply($pool));
+        }
+    };
+}
+
+preserves_queued_within_supply!(queued_within_supply_queue_withdrawal, |pool| {
+    let shares: u64 = nondet();
+    clog!(pool.queued_shares, pool.total_shares, shares);
+    pool.queue_withdrawal(shares).unwrap();
+});
+// ... one invocation per writer in the list above
+```
+
+Those names are illustrative. The state, its fields and the writers all come from the program you
+are given. Each step is a rule of its own with its own verdict, so a failure names the operation
+that breaks the invariant. `cvlr_invariant_rules!` in cvlr-spec builds the same set of rules from a
+predicate and a list of base functions. Ask `cvlr_research` about it if that shape suits better.
+
+**A step that fails is not yet a finding.** The pre-state ranges over every state that satisfies the
+invariant, and that includes states the program never produces. Read the counterexample. If no
+operation could have produced its pre-state, the invariant is too weak to be inductive. Strengthen
+it by adding the conjunct that rules that state out, and the new conjunct then needs its own steps.
+This is how an invariant becomes inductive, and it is usually how a reviewer learns what the program
+actually maintains.
+
+**Once an invariant is proved, other rules may assume it.** Assume it on a rule's pre-state, and
+name in the rule's commentary the step rules that prove it. If an invariant is assumed but not
+proved in this unit, state that in the commentary as an assumption.
+
 ## When a rule should fail
 
 If a property does *not* hold — the program really is broken — the correct harness contains a rule
@@ -541,3 +606,22 @@ a finding into a claim nobody downstream can distinguish from a verification.
 
 Mark a rule expected-to-fail only after reading the counterexample and concluding the defect is real.
 "Marked because I could not get it to pass" is the failure mode this exists to prevent.
+
+**A counterexample's starting state must be one the program can be in.** A rule that starts from a
+havoced state ranges over every value the types allow, and most of those no sequence of
+instructions produces. A violation from such a state is a finding only if the program can reach
+that state. Before marking, read the pre-state off the counterexample's `clog!`s, then do one of two
+things.
+
+* **Show that it is reachable.** Name the operations that produce it, and check that the guards of
+  the handler that runs this code admit it. That includes guards above the function your rule
+  drives, if it drives one below the handler. `expect_rule_failure` asks for this argument as
+  `pre_state`.
+* **Or name the invariant that excludes it.** The failure is then not a finding. Assume the
+  invariant in the rule, and prove it with the steps in the section above.
+
+Both of the following looked like findings and were not:
+
+* A state that the only operation able to produce it also flags as unusable. The handler's checks
+  refuse that flag, and a rule that drove the function below the handler skipped them.
+* A holder of shares that cannot exist, because the program keeps those shares in its own vault.

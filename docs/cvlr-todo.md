@@ -436,7 +436,11 @@ Two fixes, in order:
 U36 to U40 come from the second lending-benchmark run ([klend-benchmark.md](./klend-benchmark.md),
 run 2b). Each is general; none tells the author anything about that program.
 
-**U36. A finding's pre-state is not checked for reachability.** An author that drives a function
+**~~U36. A finding's pre-state is not checked for reachability.~~** — **built (2026-10-30, not yet
+exercised by a run).** `expect_rule_failure` now requires a `pre_state` argument: how the program
+reaches the counterexample's starting state. The tool refuses a blank one, and the judge's briefing
+carries it with the reason. The author's "When a rule should fail" section and the judge's item 8
+both ask the reachability question. An author that drives a function
 below the instruction handler states a rule over a havoced pre-state, and a VIOLATED verdict is then
 reported as a finding when the pre-state is one the program never produces. All three findings of
 the benchmark's one delivered unit were of this kind. One started from a state that the only
@@ -448,7 +452,12 @@ handler's guards admit it, or state the invariant that excludes it and treat the
 invariant as an assumption. The judge should ask the same question. U37 is what makes the second
 option provable rather than asserted.
 
-**U37. The author has no recipe for an inductive invariant.** Every rule the benchmark run wrote
+**~~U37. The author has no recipe for an inductive invariant.~~** — **built (2026-10-30, guidance
+only).** The author's system prompt has a section "State invariants: a base case and one step per
+writer". It lists the writers from the code, gives the base case, and generates one step rule per
+writer with a local `macro_rules!`, the shape hand-written specs use. It also points to cvlr-spec's
+`cvlr_invariant_rules!`. A step that fails from an unproduced pre-state means the invariant is
+strengthened, not marked. There is no corpus example yet. Every rule the benchmark run wrote
 was about one operation. A state invariant ("queued shares never exceed supply", "the vault holds at
 least what the reserve records") needs a base case over the initializer and one step rule per
 operation that writes the state: assume the invariant before, run the operation, assert it after.

@@ -48,9 +48,13 @@ def _after_run(state: dict, status: dict[str, bool], **verdicts) -> dict:
     return {**state, "last_verdicts": last}
 
 
-async def _mark(state: dict, rule: str):
+async def _mark(state: dict, rule: str, pre_state: str = "any deposit followed by a fee change"):
     return await ExpectRuleFailure(
-        state=state, tool_call_id="tc", rule_name=rule, reason="the program pays the fee unbounded"
+        state=state,
+        tool_call_id="tc",
+        rule_name=rule,
+        reason="the program pays the fee unbounded",
+        pre_state=pre_state,
     ).run()
 
 
@@ -121,3 +125,23 @@ async def test_with_no_run_yet_a_marking_touches_no_stamp():
     out = await _mark(_state(), "rule_b")
 
     assert "validations" not in out.update
+
+
+@pytest.mark.asyncio
+async def test_a_marking_records_how_the_pre_state_is_reached():
+    """The judge weighs a marking as a claim of a defect, and a violation is one only from a state
+    the program can be in. The account of how it gets there travels with the reason."""
+    out = await _mark(_state(), "rule_b")
+
+    reason = out.update["expected_failures"]["rule_b"]
+    assert "the program pays the fee unbounded" in reason
+    assert "any deposit followed by a fee change" in reason
+
+
+@pytest.mark.asyncio
+async def test_a_marking_without_a_reachable_pre_state_is_refused():
+    out = await _mark(_after_run(_state(), {"rule_a": True, "rule_b": False}), "rule_b", "  ")
+
+    assert "expected_failures" not in out.update
+    assert "validations" not in out.update
+    assert "invariant" in str(out.update["messages"][0].content)

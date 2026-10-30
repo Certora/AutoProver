@@ -250,6 +250,15 @@ be stale; the tool is authoritative.
    than a rule that could not be made to pass. Also check the opposite: a property that plainly does
    not hold, formulated so the rule passes, is a finding turned into a false verification.
 
+   Then ask whether the program can be in the counterexample's starting state. A rule over a
+   havoced pre-state reaches states that no sequence of instructions produces, and a violation from
+   one is not a defect. Each marking carries the author's account of how the pre-state is reached.
+   Check it against the code: the operations it names must produce that state, and the guards of
+   the handler that runs the code must admit it. That includes guards above the function the rule
+   drives. If an invariant excludes the state instead, the marking is wrong. The rule should assume
+   that invariant, and the harness should prove it with a base case and one step per operation that
+   writes the state.
+
 9. **Rule granularity.** A `cvlr_rules!` invocation across handlers is usually better than the same
    rule restated per handler. Conversely, one rule asserting five unrelated things gives one verdict
    and one counterexample for five properties, which makes every failure ambiguous.
