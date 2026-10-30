@@ -484,6 +484,15 @@ expand to nothing under the `certora` feature, and that routes error-message con
 constant. It changes no state the program writes, so the soundness argument is short. It also shrinks
 what the Prover translates.
 
+*Measured 2026-10-30, and it does not make jobs faster.* We read the output archives of 7 of run 2b's
+jobs: 108 rules, 18 of them unfinished. Every rule had reached the solver, so translation was not
+the bottleneck. No rule's path-count hotspots included a formatting or logging function. The
+`[3003]` and `[3308]` errors did not occur in those jobs either. What formatting does cause is a
+warning on nearly every rule that `<LendingError as Display>::fmt` (and sometimes `alloc::fmt::format`)
+is "treated as external". That is a soundness caveat a reader has to discount by hand, not a cost.
+So U38 is still worth doing, as cleanup of verdict caveats and of the author rounds spent on
+pointer errors, but it is not the cause of U40.
+
 **U39. The run spends its budget first in, first out.** Formalization authors four units at a time
 in component order, from one shared pool. On both benchmark runs the first units took the whole pool
 and the units that mattered most started with about a dollar. Give each unit a share of the pool, or
@@ -496,6 +505,28 @@ of their wall clock waiting. Find out what the long jobs are before moving `glob
 rules, and whether they are the wide-integer arithmetic, the loops, or the translation. A halted job's
 finished verdicts are not returned (U32), so each halt also discards the rules that did finish. That
 makes U32 worth doing for the Solana backend on its own.
+
+*Measured 2026-10-30: it is wide-integer division.* The data comes from 7 of run 2b's job output
+archives (`Reports/treeView`: the per-rule `rule_live_statistics_*.json` and the final
+`treeViewStatus_*.json`). The median job ran 26 minutes, and every job carried some rules to the
+ceiling. All rules were in the solving phase, not translation.
+
+* **Wide division.** Of the 18 rules that did not finish (timed out, still running at the halt, or
+  the solver not answering at the hard stop), 10 have `div_rem_u256_u128` / `div_rem_256by128` as
+  45 to 67% of their branching, at path counts of 2^109 to 2^221. That is the 256-by-128-bit
+  division under the program's `Fraction` fixed-point type. The six slowest rules that did finish,
+  at 12 to 22 minutes each, have the same profile.
+* **Nonlinear arithmetic.** Five of the other eight have nonlinear arithmetic, up to 40 operations
+  of degree 8.
+* **Loops.** Two are loop-heavy, with 28 loops.
+* **Unclear.** One shows no hotspot at all.
+
+The hand-written spec for the same program replaces `Fraction` under its verification feature,
+which is the same finding from the other side. The remedy to try is a sound stand-in for the wide
+division: a quotient and remainder constrained by `q*d + r == n` and `r < d`, through
+`redirect_module` or `mock_fn`. It is offered to the author when a rule's hotspots name it. That
+needs the hotspots surfaced, which today only the archive has. Raising `global_timeout` would buy
+little on rules at 2^170 paths.
 
 **U41. CVL has no reachability check before an expected failure either (deferred).** This is U36 for
 the CVL backend. It is noted here because U36 found it. CVL handles a counterexample from an
