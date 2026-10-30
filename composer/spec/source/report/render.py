@@ -31,7 +31,7 @@ from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
     AutoProverReport, ComponentName, CoverageReport, CurtailedComponent, Finding,
     FormalizedProperty, GaveUpComponent, GroupStatus, Outcome, PropertyGroup, PropertyKey,
-    ReportBackend, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
+    ReportBackend, RuleName, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
 )
 
 
@@ -145,6 +145,9 @@ class ChipView(TypedDict):
 
 class RowView(TypedDict):
     name: str
+    #: The rule's spec file, set only when another rule in the report has the same name, so rows of
+    #: same-named rules from different specs can be told apart. ``None`` otherwise.
+    spec_file: str | None
     label: str
     kind: str
     line: int | None
@@ -294,6 +297,7 @@ def _group_view(
     unit_labels: dict[Outcome, str],
     group_labels: dict[GroupStatus, str],
     edited_components: set[ComponentName],
+    shared_names: set[RuleName],
 ) -> GroupView:
     """Invert the group's members into rule rows: each rule the group's properties formalize, labelled
     with the descriptions of the in-group properties that pull it in (the edge labels). The same rule
@@ -317,6 +321,7 @@ def _group_view(
         outcome = rule.outcome if rule else Outcome.UNKNOWN
         rows.append({
             "name": ref[1],
+            "spec_file": ref[0] if ref[1] in shared_names else None,
             "label": unit_labels[outcome],
             "kind": _OUTCOME_KIND[outcome],
             "line": rule.line if rule else None,
@@ -407,6 +412,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
     unit_labels = _OUTCOME_LABELS[report.backend]
     group_labels = _GROUP_LABELS[report.backend]
     edited_components = {e.component for e in report.source_edits}
+    shared_names = {n for n, c in Counter(r.name for r in report.rules).items() if c > 1}
     return {
         "contract_name": report.contract_name,
         "run_timestamp_utc": report.run_timestamp_utc,
@@ -422,7 +428,10 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         "group_counts": _group_counts([g.status for g in report.groups], group_labels),
         "findings": [_finding_view(f) for f in report.findings],
         "groups": [
-            _group_view(g, props_by_key, rules_by_ref, unit_labels, group_labels, edited_components)
+            _group_view(
+                g, props_by_key, rules_by_ref, unit_labels, group_labels, edited_components,
+                shared_names,
+            )
             for g in report.groups
         ],
         "skipped": report.skipped,

@@ -54,7 +54,7 @@ from langgraph.graph import MessagesState
 from pathlib import Path
 from composer.spec.gen_types import (
     CERTORA_DIR,
-    CVLResource, SPECS_DIR, TypedTemplate, buffer_spec_path, import_statement_for,
+    CVLResource, TypedTemplate, buffer_spec_ref, import_statement_for,
 )
 from composer.spec.service_host import ServiceHost, Sort
 from composer.llm.provider import CacheLevel
@@ -1224,7 +1224,7 @@ async def batch_cvl_generation(
             PropertyRuleMapping(
                 property_title=PropertyTitle(p),
                 rules=[RuleName(rn) for rn in rs],
-                spec_file=buffer_spec_path(component.slugified_name, b.name).relative_to(SPECS_DIR).as_posix(),
+                spec_file=buffer_spec_ref(component.slugified_name, b.name),
             )
             for b in run_targets(_buffers) for p, rs in b.property_rules.items()
         ],

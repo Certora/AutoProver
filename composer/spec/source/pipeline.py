@@ -156,12 +156,15 @@ class ProverRunner(Formalizer[GeneratedCVL, ContractComponentInstance]):
         # Prover runs capture per-rule counterexample analysis, so this backend opts into findings.
         return self._fetch_evidence
 
-    async def _fetch_evidence(self, rule_name: str) -> list[RuleEvidence]:
+    async def _fetch_evidence(self, spec_file: str, rule_name: RuleName) -> list[RuleEvidence]:
         # Every instantiation the run analyzed, not just one: a parametric rule can fail differently
         # per binding while the report shows a single row for the whole rule.
         return [
-            RuleEvidence(label=r.label, analysis=r.analysis, counterexample=r.counterexample)
-            for r in await self._deps.analysis_store.for_rule(rule_name)
+            RuleEvidence(
+                label=r.label, analysis=r.analysis, counterexample=r.counterexample,
+                spec_file=r.spec_file,
+            )
+            for r in await self._deps.analysis_store.for_rule(spec_file, rule_name)
         ]
 
     @override

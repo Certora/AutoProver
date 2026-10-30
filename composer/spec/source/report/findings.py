@@ -9,6 +9,7 @@ finding is best-effort, so a synthesis failure drops that one finding rather tha
 """
 import asyncio
 import logging
+from collections import Counter
 from typing import TypedDict
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -115,13 +116,23 @@ async def build_findings(
         for ref in p.rule_refs:
             props_by_ref.setdefault(ref, []).append(p)
     group_by_key: dict[PropertyKey, PropertyGroup] = {k: g for g in groups for k in g.members}
+    # Rules are identified by (spec_file, name); a name counted more than once is declared in
+    # several specs, so evidence recorded under the name alone cannot be attributed to one of them.
+    name_counts = Counter(r.name for r in rules)
 
     system = _FINDINGS_SYSTEM.bind({}).render_to(load_jinja_template)
     bound = with_structured_output(llm, FindingDraft)
 
     async def _one(rule: RuleVerdict) -> Finding | None:
         try:
-            instances = await fetch_evidence(rule.name)
+            instances = await fetch_evidence(rule.spec_file, rule.name)
+            if name_counts[rule.name] > 1 and any(i.spec_file is None for i in instances):
+                _log.warning(
+                    "report: evidence for rule %r was recorded without a spec file and %d specs "
+                    "declare that name; using no evidence for it in %s",
+                    rule.name, name_counts[rule.name], rule.spec_file,
+                )
+                instances = []
             # Every rule in the report is referenced by >=1 property (collect drops orphans), so pass
             # ALL of them: the rule may jointly formalize several, and only the counterexample says
             # which one actually broke — that is the LLM's job, not ours to pre-guess.
@@ -139,7 +150,10 @@ async def build_findings(
             assert isinstance(draft, FindingDraft)
             return _compose(rule, draft, instances, rule_groups)
         except Exception:  # noqa: BLE001 — one finding failing must never fail the report
-            _log.warning("report: finding synthesis failed for rule %r; skipping", rule.name, exc_info=True)
+            _log.warning(
+                "report: finding synthesis failed for rule %r in %s; skipping",
+                rule.name, rule.spec_file, exc_info=True,
+            )
             return None
 
     sem = asyncio.Semaphore(_MAX_CONCURRENT_FINDING_CALLS)

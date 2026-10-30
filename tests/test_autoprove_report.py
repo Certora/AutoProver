@@ -1036,9 +1036,9 @@ def _draft(*, impact_level: ImpactLevel = "high", likelihood_level: LikelihoodLe
     )
 
 
-def _evidence(by_rule: dict[str, list[RuleEvidence]]):
-    async def fetch(rule_name):
-        return by_rule.get(rule_name, [])
+def _evidence(by_ref: dict[tuple[str, str], list[RuleEvidence]]):
+    async def fetch(spec_file, rule_name):
+        return by_ref.get((spec_file, rule_name), [])
     return fetch
 
 
@@ -1081,7 +1081,8 @@ async def test_build_report_synthesizes_one_finding_per_violation():
     ]})
     grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
         slug="g", title="G", description="gd", members=[("C", "p_good"), ("C", "p_bad")])]))
-    evidence = _evidence({"r_bad": [RuleEvidence(analysis="root cause X", counterexample="<cex/>")]})
+    evidence = _evidence({("autospec_C.spec", "r_bad"): [
+        RuleEvidence(analysis="root cause X", counterexample="<cex/>")]})
 
     report = await build.build_report(
         contract_name="Vault", backend="prover",
@@ -1201,14 +1202,18 @@ def test_report_round_trips_with_findings(tmp_path):
     assert not hasattr(rf, "locations")
 
 
+_SPEC = "c/main.spec"
+
+
 @pytest.mark.asyncio
-def _capture(events: list | None = None):
-    """(store, callbacks) over an in-memory store, as the prover tool wires them."""
+def _capture(events: list | None = None, store: CexAnalysisStore | None = None, spec: str = _SPEC):
+    """(store, callbacks) over an in-memory store, as the prover tool wires them for one run of
+    ``spec``. Pass ``store`` to wire a second run's callbacks onto the same store."""
     from langgraph.store.memory import InMemoryStore
     from composer.spec.source.prover import _SpecCallbacks
-    store = CexAnalysisStore(store=InMemoryStore(), namespace=("cex_analyses", "t"))
+    store = store or CexAnalysisStore(store=InMemoryStore(), namespace=("cex_analyses", "t"))
     cb = _SpecCallbacks((events if events is not None else []).append, "tc1", {},
-                        analysis_store=store)
+                        cex_capture=store.for_spec(spec))
     return store, cb
 
 
@@ -1229,10 +1234,10 @@ async def test_spec_callbacks_captures_cex_analysis():
     store, cb = _capture(events)
     await cb.on_analysis_complete(_violated("no_reentrancy", "withdraw"), "root cause: CEI")
 
-    recs = await store.for_rule("no_reentrancy")
+    recs = await store.for_rule(_SPEC, "no_reentrancy")
     assert [(r.label, r.analysis, r.counterexample) for r in recs] == [
         ("withdraw", "root cause: CEI", "<counterexample><cex/></counterexample>")]
-    assert await store.for_rule("no_reentrancy for withdraw") == []   # not the pretty-printed form
+    assert await store.for_rule(_SPEC, "no_reentrancy for withdraw") == []   # not the pretty-printed form
     assert any(e.get("type") == "rule_analysis" for e in events)
 
 
@@ -1268,13 +1273,131 @@ async def test_parametric_instantiations_are_all_kept_and_purged_when_stale():
     store, cb = _capture()
     await cb.on_analysis_complete(_violated("r", "foo", "<cex-foo/>"), "foo breaks")
     await cb.on_analysis_complete(_violated("r", "bar", "<cex-bar/>"), "bar breaks")
-    assert [(r.label, r.analysis) for r in await store.for_rule("r")] == [
+    assert [(r.label, r.analysis) for r in await store.for_rule(_SPEC, "r")] == [
         ("bar", "bar breaks"), ("foo", "foo breaks")]      # both kept, stable order
 
     await cb.on_analysis_complete(_violated("r", "foo"), "foo breaks differently")
-    assert [r.analysis for r in await store.for_rule("r")] == ["bar breaks", "foo breaks differently"]
+    assert [r.analysis for r in await store.for_rule(_SPEC, "r")] == ["bar breaks", "foo breaks differently"]
 
     # A later run covers "r" again and only foo fails now -> bar's stale analysis must not linger.
     await cb.on_prover_result({"r": _violated("r", "foo")})
     await cb.on_analysis_complete(_violated("r", "foo"), "foo still breaks")
-    assert [(r.label, r.analysis) for r in await store.for_rule("r")] == [("foo", "foo still breaks")]
+    assert [(r.label, r.analysis) for r in await store.for_rule(_SPEC, "r")] == [("foo", "foo still breaks")]
+
+
+def _prover_evidence(store: CexAnalysisStore):
+    """The prover backend's real `EvidenceFetcher`, reading ``store``."""
+    from composer.spec.source import pipeline
+    runner = pipeline.ProverRunner(
+        GeneratedCVL, "prover", cast(Any, None), {}, [], _fetcher({}),
+        pipeline._ProverPipelineDeps(
+            prover_options=cast(Any, None), store=cast(Any, None), analysis_store=store,
+            editing=cast(Any, None),
+        ),
+    )
+    fetch = runner.findings_evidence()
+    assert fetch is not None
+    return fetch
+
+
+@pytest.mark.asyncio
+async def test_same_named_rules_in_two_specs_get_their_own_evidence_and_findings():
+    """Two components each declare rule ``r`` in their own spec, and both are violated with different
+    counterexamples. The capture, the report's rule table and each finding keep the two apart: each
+    finding carries its own spec's counterexample, and the second spec's run does not purge the
+    first spec's capture."""
+    store, cb1 = _capture(spec="c1/main.spec")
+    _, cb2 = _capture(store=store, spec="c2/main.spec")
+    await cb1.on_prover_result({"r": _violated("r")})
+    await cb1.on_analysis_complete(_violated("r", cex="<cex-one/>"), "spec one breaks")
+    await cb2.on_prover_result({"r": _violated("r")})
+    await cb2.on_analysis_complete(_violated("r", cex="<cex-two/>"), "spec two breaks")
+
+    fetch = _fetcher({
+        "L1": [_fake_check("r", NodeStatus.VIOLATED, line=3)],
+        "L2": [_fake_check("r", NodeStatus.VIOLATED, line=9)],
+    })
+    grouping = _StructuredStubModel(output=GroupingResult(groups=[PropertyGroupDraft(
+        slug="g", title="G", description="gd", members=[("C1", "p1"), ("C2", "p2")])]))
+    report = await build.build_report(
+        contract_name="Vault", backend="prover",
+        components=[
+            _input("C1", "autospec_C1.spec", [_prop("p1", "d1")],
+                   _gen({"p1": ["r"]}, link="L1", run_link_specs=[("L1", "c1/main.spec")])),
+            _input("C2", "autospec_C2.spec", [_prop("p2", "d2")],
+                   _gen({"p2": ["r"]}, link="L2", run_link_specs=[("L2", "c2/main.spec")])),
+        ],
+        llm=grouping, fetch_verdicts=fetch,
+        findings_llm=_StructuredStubModel(output=_draft()), fetch_evidence=_prover_evidence(store),
+    )
+
+    assert [(r.spec_file, r.name, r.outcome, r.line) for r in report.rules] == [
+        ("c1/main.spec", "r", Outcome.BAD, 3), ("c2/main.spec", "r", Outcome.BAD, 9)]
+    assert {p.title: p.rule_refs for p in report.properties} == {
+        "p1": [("c1/main.spec", "r")], "p2": [("c2/main.spec", "r")]}
+    poc_by_spec = {
+        f.provenance.spec_file: f.content.proof_of_concept
+        for f in report.findings if f.provenance is not None
+    }
+    assert poc_by_spec == {
+        "c1/main.spec": "<counterexample><cex-one/></counterexample>",
+        "c2/main.spec": "<counterexample><cex-two/></counterexample>",
+    }
+    h = render_html(report)
+    assert "in c1/main.spec" in h and "in c2/main.spec" in h   # the two rows are told apart
+
+
+@pytest.mark.asyncio
+async def test_evidence_recorded_without_a_spec_is_used_only_when_unambiguous(caplog):
+    """A record written before captures were keyed by spec has no spec file. A lookup returns it for
+    a rule with no spec-scoped record; the report uses it when only one rule has that name, and uses
+    none for the rule (with a warning) when two specs declare the name. A spec-scoped record always
+    wins over a name-only one."""
+    from composer.spec.source.cex_capture import CexAnalysis
+    store, _ = _capture()
+    legacy = CexAnalysis(rule="r", analysis="old", counterexample="<cex-old/>").model_dump(mode="json")
+    del legacy["spec_file"]  # stored exactly as a record from before the field existed
+    await store.store.aput(store.namespace, "r|", legacy)
+
+    recs = await store.for_rule("c1/main.spec", "r")
+    assert [(r.spec_file, r.analysis) for r in recs] == [(None, "old")]
+
+    evidence = _prover_evidence(store)
+    props = [_fp("C1", "p1", [("c1/main.spec", "r")]), _fp("C2", "p2", [("c2/main.spec", "r")])]
+
+    one = await build_findings(
+        contract_name="V", rules=[_rv("c1/main.spec", "r", Outcome.BAD)], properties=props[:1],
+        groups=[], fetch_evidence=evidence, llm=_StructuredStubModel(output=_draft()),
+    )
+    assert [f.content.proof_of_concept for f in one] == ["<cex-old/>"]
+
+    with caplog.at_level("WARNING"):
+        two = await build_findings(
+            contract_name="V",
+            rules=[_rv("c1/main.spec", "r", Outcome.BAD), _rv("c2/main.spec", "r", Outcome.BAD)],
+            properties=props, groups=[], fetch_evidence=evidence,
+            llm=_StructuredStubModel(output=_draft()),
+        )
+    assert [f.content.proof_of_concept for f in two] == [None, None]
+    assert "recorded without a spec file" in caplog.text
+
+    _, cb = _capture(store=store, spec="c1/main.spec")
+    await cb.on_analysis_complete(_violated("r", cex="<cex-new/>"), "new")
+    assert [(r.spec_file, r.analysis) for r in await store.for_rule("c1/main.spec", "r")] == [
+        ("c1/main.spec", "new")]
+    assert [(r.spec_file, r.analysis) for r in await store.for_rule("c2/main.spec", "r")] == [
+        (None, "old")]
+
+
+def test_validate_counts_same_named_spanning_rules_in_each_spec():
+    """Two specs' rules named ``shared`` that each span two groups are two spanning rules, and a rule
+    no run reported is named with its spec."""
+    props = [
+        _fp("C", "p1", [("a.spec", "shared")]), _fp("C", "p2", [("a.spec", "shared")]),
+        _fp("D", "p3", [("b.spec", "shared")]), _fp("D", "p4", [("b.spec", "shared")]),
+    ]
+    groups = [_pg("g1", [("C", "p1"), ("D", "p3")]), _pg("g2", [("C", "p2"), ("D", "p4")])]
+    cov = validate(properties=props, rules=[_rv("a.spec", "shared"), RuleVerdict(name="shared", spec_file="b.spec")],
+                   groups=groups, skipped=[], gave_up=[], curtailed=[], dropped_orphan_rules=0)
+    assert cov.rules_spanning_multiple_groups == ["shared", "shared"]
+    assert any("shared (b.spec)" in w for w in cov.warnings)
