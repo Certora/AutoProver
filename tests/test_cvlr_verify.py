@@ -1,7 +1,7 @@
 """``verify_rules``, driven through :func:`gate_tools`.
 
 No cargo and no Prover: the build, the section read, the conf write, and the
-submission are stand-ins. The stamp is the digest of the draft. A submission
+submission are stand-ins. The stamp is the digest of the draft and its markings. A submission
 holds the build permit until the job's link arrives, and not through the cloud
 job.
 """
@@ -15,16 +15,26 @@ from typing import Any
 import pytest
 from langchain_core.messages import ToolMessage
 
-from composer.authoring.state import make_validation_stamper, spec_digest
+from composer.authoring.state import checked_digest
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CompileFailed
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.prover.conf import SelectRules
 from composer.prover.core import ProverReport
-from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+from composer.prover.ptypes import (
+    Counterexample,
+    GeneratedKind,
+    IncompleteCheck,
+    RulePath,
+    RuleResult,
+    UnknownKind,
+    UserAssertion,
+)
+from composer.prover.results import AlertReport, UnreadableAlertReport
 from composer.spec.cvlr import verify as verify_mod
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.env_paths import PathDialect
+from composer.spec.cvlr.externals import ExternalWarnings
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing
 from composer.spec.cvlr.prover import Checked, Submission, SubmissionFailed
@@ -44,15 +54,24 @@ pytestmark = pytest.mark.asyncio
 
 _DRAFT = "#[rule]\nfn rule_a() {}\n#[rule]\nfn rule_b() {}\n"
 _LINK = "https://prover.certora.com/jobStatus/1/abc"
+_LOOP = IncompleteCheck(
+    GeneratedKind.LOOP_UNWINDING, "Unwinding condition in a loop. Try increasing the unwinding bound."
+)
 _BUILT = SbfRun(duration_ms=1, verdict=Built(manifest=SimpleNamespace(artifact=Path("/w/prog.so"))), confined=True)  # type: ignore[arg-type]
 
 
-def _checked(*pairs: tuple[str, str]) -> Checked:
+def _checked(
+    *pairs: tuple[str, str],
+    incomplete: dict[str, IncompleteCheck] | None = None,
+    alerts: AlertReport | UnreadableAlertReport | None = None,
+) -> Checked:
     report = ProverReport(
         raw_rule_status={RulePath(name): status for name, status in pairs},  # type: ignore[misc]
         result_str="rules",
         link=_LINK,
         certora_run_stdout="",
+        incomplete={RulePath(name): check for name, check in (incomplete or {}).items()},
+        **({} if alerts is None else {"alerts": alerts}),
     )
     return Checked(build=_BUILT, report=report)
 
@@ -70,6 +89,7 @@ class _Gate:
     state: dict[str, Any] = dataclasses.field(default_factory=lambda: {
         "messages": [],
         "skipped": [],
+        "expected_failures": {},
         "summaries": [],
         "vfs": {},
         "version_history": [],
@@ -111,7 +131,6 @@ def gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _Gate:
             submission=Submission(manifest_path=Path("p/Cargo.toml"), stem="unit", msg="m"),
             submission_dir=tmp_path / "submissions",
             prover_opts=None,  # type: ignore[arg-type]
-            stamper=make_validation_stamper(PROVER_VALIDATION_KEY),
         )
     )
 
@@ -149,8 +168,10 @@ def _text(out: Any) -> str:
 async def test_every_listed_rule_verified_stamps_the_draft(gate: _Gate):
     out = await gate.verify()
 
-    history = tuning_history({**gate.state, "curr_spec": _DRAFT})  # type: ignore[arg-type]
-    assert out.update["validations"] == {PROVER_VALIDATION_KEY: spec_digest(_DRAFT, [], history)}
+    state = {**gate.state, "curr_spec": _DRAFT}
+    assert out.update["validations"] == {
+        PROVER_VALIDATION_KEY: checked_digest(state, tuning_history(state))  # type: ignore[arg-type]
+    }
     assert out.update["prover_link"] == _LINK
     assert "stamped" in _text(out)
 
@@ -171,20 +192,93 @@ async def test_the_conf_names_the_section_and_selects_the_units_feature_and_sett
 
 
 @pytest.mark.parametrize(
-    "outcome",
+    ("outcome", "said"),
     [
-        pytest.param(_checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED")), id="a rule failed"),
-        pytest.param(_checked(("rule_a", "VERIFIED")), id="a rule has no verdict"),
+        pytest.param(
+            _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED")),
+            "are not marked as expected failures: rule_b.",
+            id="a rule failed",
+        ),
+        pytest.param(_checked(("rule_a", "VERIFIED")), "No verdict came back for: rule_b.", id="a rule has no verdict"),
     ],
 )
-async def test_a_listed_rule_that_did_not_verify_does_not_stamp(gate: _Gate, outcome: Checked):
+async def test_a_listed_rule_that_did_not_verify_does_not_stamp(gate: _Gate, outcome: Checked, said: str):
     gate.outcome = outcome
 
     out = await gate.verify()
 
     assert "validations" not in out.update
     assert out.update["prover_link"] == _LINK
-    assert "Not verified: rule_b." in _text(out)
+    assert said in _text(out)
+
+
+async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart(gate: _Gate):
+    """A loop bound is the prover's limit, not a finding about the program."""
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"), incomplete={"rule_b": _LOOP})
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert f"rule_b: {_LOOP.assertion}" in _text(out)
+    assert "A loop needed more iterations" in _text(out)
+
+
+async def test_a_kind_this_version_does_not_know_does_not_stamp_when_marked(gate: _Gate):
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+    new = IncompleteCheck(UnknownKind("someKindAddedLater"), "a bound the Prover added later")
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"), incomplete={"rule_b": new})
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert "rule_b: a bound the Prover added later" in _text(out)
+
+
+async def test_a_limit_without_advice_of_its_own_is_reported_by_its_message(gate: _Gate):
+    cpi = IncompleteCheck(GeneratedKind.UNRESOLVED_CPI, "CPI call could not be resolved")
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"), incomplete={"rule_b": cpi})
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert "rule_b: CPI call could not be resolved" in _text(out)
+    assert "A loop needed more iterations" not in _text(out)
+
+
+async def test_a_rule_marked_before_its_first_run_is_stamped_by_that_run(gate: _Gate):
+    """A defect found by tracing the program needs no run before the marking."""
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))
+
+    out = await gate.verify()
+
+    assert "validations" in out.update
+    assert "not marked as expected failures" not in _text(out)
+
+
+async def test_a_marked_rule_stopped_by_the_provers_own_assertion_does_not_stamp(gate: _Gate):
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+    gate.outcome = _checked(
+        ("rule_a", "VERIFIED"),
+        ("rule_b", "VIOLATED"),
+        incomplete={"rule_b": _LOOP},
+    )
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert "expect_rule_failure does not account for" in _text(out)
+
+
+async def test_a_timeout_is_not_excused_by_a_marking(gate: _Gate):
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "TIMEOUT"))
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert "rule_b" in _text(out)
+    assert "not marked as expected failures" not in _text(out)
 
 
 async def test_unreadable_symbols_are_said_rather_than_left_as_a_match(gate: _Gate):
@@ -194,6 +288,45 @@ async def test_unreadable_symbols_are_said_rather_than_left_as_a_match(gate: _Ga
 
     assert "could not be read" in _text(out)
     assert "stamped" in _text(out)
+
+
+async def test_only_the_external_function_alerts_are_reported(gate: _Gate):
+    warning = "The following functions are neither inlined nor summarized. [solana_program::program::invoke]"
+    gate.outcome = _checked(
+        ("rule_a", "VERIFIED"),
+        ("rule_b", "VERIFIED"),
+        alerts=AlertReport((warning, "an unrelated alert", warning)),
+    )
+
+    out = await gate.verify()
+
+    assert "solana_program::program::invoke" in _text(out)
+    assert "an unrelated alert" not in _text(out)
+    assert out.update["external_functions"] == ExternalWarnings((warning,))
+
+
+async def test_an_unreadable_alert_report_is_not_reported_as_no_externals(gate: _Gate):
+    gate.outcome = _checked(
+        ("rule_a", "VERIFIED"),
+        ("rule_b", "VERIFIED"),
+        alerts=UnreadableAlertReport(),
+    )
+
+    out = await gate.verify()
+
+    assert "could not be read" in _text(out)
+    assert out.update["external_functions"] == UnreadableAlertReport()
+
+
+async def test_a_marked_rule_that_verified_does_not_stamp(gate: _Gate):
+    """The marking claims a defect this run did not show, so the draft is not ready to publish."""
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+
+    out = await gate.verify()
+
+    assert "validations" not in out.update
+    assert "marked as expected failures but VERIFIED: rule_b" in _text(out)
+    assert "did not reach a property verdict" not in _text(out)
 
 
 async def test_a_submission_without_results_does_not_stamp(gate: _Gate):
@@ -292,7 +425,7 @@ async def test_the_status_report_leaves_out_the_counterexample(tmp_path: Path):
     """A dump per violated rule would flood the author's context."""
     violated = RuleResult(
         path=RulePath(rule="rule_b"),
-        counterexample=Counterexample(trace="<the-whole-trace/>"),
+        counterexample=Counterexample(trace="<the-whole-trace/>", origin=UserAssertion()),
         status="VIOLATED",
     )
     text = await RuleStatusReport().analyze([violated], "tc", None, tmp_path)  # type: ignore[arg-type]
@@ -307,3 +440,45 @@ async def test_a_released_permit_does_not_build(tmp_path: Path):
         permit.release()
         with pytest.raises(RuntimeError):
             await staged.check()
+
+
+async def test_a_marking_after_the_run_stamps_without_another_submission(gate: _Gate):
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))
+    first = await gate.verify()
+    gate.state["last_verdicts"] = first.update["last_verdicts"]
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+
+    out = await gate.verify()
+
+    state = {**gate.state, "curr_spec": _DRAFT}
+    assert out.update["validations"] == {
+        PROVER_VALIDATION_KEY: checked_digest(state, tuning_history(state))  # type: ignore[arg-type]
+    }
+    assert "nothing was submitted" in _text(out)
+    assert len(gate.written) == 1
+
+
+async def test_a_draft_edited_since_the_run_is_submitted_again(gate: _Gate):
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VIOLATED"))
+    first = await gate.verify()
+    gate.state["last_verdicts"] = first.update["last_verdicts"]
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+
+    await gate.verify(_DRAFT + "// edited\n")
+
+    assert len(gate.written) == 2
+
+
+async def test_a_marked_incomplete_check_is_submitted_again(gate: _Gate):
+    gate.outcome = _checked(
+        ("rule_a", "VERIFIED"),
+        ("rule_b", "VIOLATED"),
+        incomplete={"rule_b": _LOOP},
+    )
+    first = await gate.verify()
+    gate.state["last_verdicts"] = first.update["last_verdicts"]
+    gate.state["expected_failures"] = {"rule_b": "the program underflows"}
+
+    await gate.verify()
+
+    assert len(gate.written) == 2

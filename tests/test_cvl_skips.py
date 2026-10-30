@@ -16,7 +16,7 @@ from langgraph.types import Command
 from langgraph.graph import MessagesState
 
 
-from composer.authoring.state import SkippedProperty, check_completion
+from composer.authoring.state import SkippedProperty, check_completion, make_validation_stamper
 from composer.spec.types import PropertyTitle
 from composer.spec.cvl_generation import (
     CVLGenerationExtra,
@@ -64,11 +64,13 @@ def _cvl(the_cvl: str) -> ToolCallDict:
 class CVLTestState(MessagesState, CVLGenerationExtra):
     result: NotRequired[str]
 
+_STAMPERS = [make_validation_stamper(k) for k in ("feedback", "something_else")]
+
 result_tool = result_tool_generator(
     "result",
     (str, "The commentary"),
     "When you're done with the generation",
-    validator=(CVLTestState, lambda st, _res, _id: check_completion(st))
+    validator=(CVLTestState, lambda st, _res, _id: check_completion(st, _STAMPERS))
 )
 
 class DummyPutCVL(WithAsyncImplementation[Command], WithInjectedId):

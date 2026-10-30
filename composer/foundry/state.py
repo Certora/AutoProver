@@ -1,12 +1,10 @@
 """State types + completion gate for the foundry test author.
 
 The generic authoring state (:mod:`composer.authoring.state`) supplies the buffer, the skip list,
-the validation stamps and the digest gate. What is foundry's own:
+the expected-failure markings, the validation stamps and the digest gate. ``expect_test_failure``
+and ``expect_test_passage`` write the markings, and the ``forge_test`` runner excludes the marked
+tests from the all-green check. What is foundry's own:
 
-* ``expected_failures: dict[str, str]`` — test-name → reason map for tests
-  intentionally expected to fail. Populated by ``expect_test_failure``,
-  cleared per-key by ``expect_test_passage``. The ``forge_test`` runner
-  excludes these from the all-green check.
 * ``last_test_names`` — the test-function names reported by the most
   recent ``forge_test`` run (parsed from forge's JSON output). The runner
   records this unconditionally on every run that produced parseable
@@ -16,7 +14,7 @@ the validation stamps and the digest gate. What is foundry's own:
 * ``property_tests`` — that mapping.
 """
 
-from typing import Annotated, NotRequired
+from typing import NotRequired
 
 from langgraph.graph import MessagesState
 from pydantic import BaseModel, Field
@@ -24,8 +22,8 @@ from pydantic import BaseModel, Field
 from graphcore.graph import FlowInput
 
 from composer.authoring.state import (
-    AuthoringExtra, MappingVocab, SkippedProperty, check_completion,
-    merge_expected_failures, validate_check_mapping,
+    CheckingExtra, MappingVocab, SkippedProperty, check_completion, make_validation_stamper,
+    make_verdict_stamper, validate_check_mapping,
 )
 from composer.spec.context import CacheKey, FoundryGeneration, FoundryJudge
 from composer.spec.types import CheckName, PropertyTitle
@@ -34,6 +32,9 @@ from composer.spec.types import CheckName, PropertyTitle
 FORGE_TEST_VALIDATION_KEY = "forge_test"
 
 FEEDBACK = "feedback"
+
+FORGE_TEST_STAMPER = make_verdict_stamper(FORGE_TEST_VALIDATION_KEY)
+FEEDBACK_STAMPER = make_validation_stamper(FEEDBACK)
 
 # WorkflowContext child key for the feedback judge (derives its memory
 # namespace and thread ids).
@@ -54,9 +55,8 @@ class PropertyTestMapping(BaseModel):
     )
 
 
-class FoundryGenerationExtra(AuthoringExtra):
+class FoundryGenerationExtra(CheckingExtra):
     property_tests: list[PropertyTestMapping]
-    expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     last_test_names: list[CheckName] | None
     failed: bool | None
     #: Stamped True by the budget monitor's state transformer when the wrap-up alert fires (the
@@ -75,7 +75,9 @@ class FoundryGenerationState(FoundryGenerationExtra, MessagesState):
 
 def check_foundry_completion(state: FoundryGenerationExtra) -> str | None:
     """Return None if the publish gate is satisfied, otherwise the reason."""
-    return check_completion(state, nothing_written="no test written yet.")
+    return check_completion(
+        state, (FORGE_TEST_STAMPER, FEEDBACK_STAMPER), nothing_written="no test written yet."
+    )
 
 
 #: How the foundry author words its publish-time mapping. Unlike CVL, forge names every test it

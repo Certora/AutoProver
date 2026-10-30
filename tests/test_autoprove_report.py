@@ -1213,10 +1213,10 @@ def _capture(events: list | None = None):
 
 
 def _violated(rule: str, method: str | None = None, cex: str = "<cex/>"):
-    from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+    from composer.prover.ptypes import Counterexample, RulePath, RuleResult, UserAssertion
     return RuleResult(
         path=RulePath(rule=rule, method=method),
-        counterexample=Counterexample(trace=cex),
+        counterexample=Counterexample(trace=cex, origin=UserAssertion()),
         status="VIOLATED",
     )
 

@@ -119,6 +119,18 @@
     "template_name": "cvlr/inert_summaries.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.cvlr.verify:_Verdicts": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_Verdicts",
+    "template_name": "cvlr/verdicts.j2",
+    "ty_sort": "TypedTemplate"
+  },
+  "composer.spec.cvlr.verify:_ExternalFunctions": {
+    "module": "composer.spec.cvlr.verify",
+    "qualname": "_ExternalFunctions",
+    "template_name": "cvlr/external_functions.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.feedback:FeedbackTemplate": {
     "module": "composer.spec.feedback",
     "qualname": "FeedbackTemplate",

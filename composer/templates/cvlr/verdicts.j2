@@ -1,0 +1,40 @@
+{%- if marked_verified %}
+These rules are marked as expected failures but VERIFIED: {{ marked_verified | join(", ") }}. Either the defect is not
+there, or the rule does not test for it. This draft cannot be stamped until that is resolved: fix the rule, or withdraw
+the marking with expect_rule_passage.
+{% endif %}
+{%- if incomplete %}
+These rules stopped on an assertion the prover generated rather than one of yours, so they never reached their property:
+{% for rule in incomplete %}  {{ rule.name }}{% if rule.assertion %}: {{ rule.assertion }}{% endif %}
+{% endfor -%}
+None of these says whether the rule's property holds.
+{%- for kind in advised %}
+{%- if kind == "loopUnwinding" %}
+A loop needed more iterations than the bound unrolls. Constrain what determines the trip count, or raise the bound. A
+summary directive cannot name a loop. If the property is about the loop, skip it and say what bound it needed.
+{%- elif kind == "cannotOverflow" %}
+`Cannot overflow` is a check the Prover adds on its own, not one your rule asserts: it could not show that an expression
+it treats as a pointer stays below 2^64. That is almost always because a value the rule reads from an account (a
+balance, an amount) is free to sit just below u64::MAX. Bound the account-data values on that rule's path —
+`cvlr_assume!(x < 1 << 63)` is enough — and record each bound as an assumption. A property about the top of the range
+cannot take the bound: skip it and say so.
+{%- endif %}
+{%- endfor %}
+expect_rule_failure does not account for one of these: a marking claims a real defect, and none has been shown.
+{% endif %}
+{%- if unverdicted %}
+No verdict came back for: {{ unverdicted | join(", ") }}. The prover's report does not name them, so they have not been
+checked, and this draft cannot be stamped until they are. Run verify_rules again. If they are still missing, the cause is
+in the prover run, not in your draft: stop resubmitting, and say which rules were never checked.
+{% endif %}
+{%- if property_failures %}
+These rules failed their property and are not marked as expected failures: {{ property_failures | join(", ") }}. Fix
+the rule, or mark it with expect_rule_failure and say why the failure is real.
+{% endif %}
+{%- if unfinished %}
+{{ unfinished | join(", ") }} did not reach a property verdict. A timeout, an error, a sanity failure, or a skip is not a
+finding, and expect_rule_failure does not account for one.
+{% endif %}
+{%- if stamped %}
+Every rule is accounted for. This draft is stamped.
+{% endif %}

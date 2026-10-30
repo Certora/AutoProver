@@ -1,17 +1,22 @@
 """The state an authoring session carries, and the gate that reads it.
 
 The publish gate is a *digest* gate, not a flag: a checker or judge that accepts the draft stamps
-:func:`spec_digest` of the buffer it accepted into ``validations``, and :func:`check_completion`
+the digest of the buffer it accepted into ``validations``, and :func:`check_completion`
 requires every ``required_validations`` key to carry a stamp equal to the digest of the buffer as it
 stands now. Editing the spec after a green run therefore invalidates that run without anything
 having to remember to clear it — the stamp simply stops matching.
 
 The digest covers the skip declarations as well as the spec text, because "this property is skipped,
-here is why" is part of what a judge accepted.
+here is why" is part of what a judge accepted. In a session that runs named checks, the stamp of a
+gate that reports those checks' verdicts also covers which of them are marked as expected to fail
+(:func:`make_verdict_stamper`): a run passes only relative to the markings, so a marking changed
+after a green run invalidates that run the same way an edit does. A judge is not shown the markings
+and a build does not depend on them, so their stamps leave them out.
 """
 
 import hashlib
 from dataclasses import dataclass
+from collections.abc import Iterable
 from typing import Annotated, Protocol, Sequence
 from typing_extensions import TypedDict
 
@@ -50,14 +55,18 @@ def merge_expected_failures(
 ) -> dict[CheckName, str]:
     """State reducer for the check-name → reason map of checks expected to fail.
 
-    An empty reason removes the marking — the marking tool rejects an empty reason at the tool
-    boundary, so an empty value can only mean the unmarking tool's delete."""
+    An empty reason removes the marking. The marking tools reject an empty reason, so an empty
+    value only comes from the tool that withdraws a marking.
+
+    LangGraph types a reducer as ``(Value, Value) -> Value``. This channel stores
+    ``dict[CheckName, str]``, so the update has to be that same map. An empty string is the
+    removal signal that fits in it."""
     to_ret = left.copy()
     for k, v in right.items():
         if not v:
             to_ret.pop(k, None)
-            continue
-        to_ret[k] = v
+        else:
+            to_ret[k] = v
     return to_ret
 
 
@@ -89,39 +98,78 @@ def spec_digest(
     return digester.hexdigest()
 
 
-class ValidationStamper(Protocol):
-    def __call__(
-        self, state: AuthoringExtra, version_history: Sequence[str] = ()
-    ) -> dict[str, str]: ...
+class CheckingExtra(AuthoringExtra):
+    """An authoring session whose gate runs named checks, any of which the author can mark as
+    expected to fail."""
+
+    expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
 
 
-def make_validation_stamper(key: str) -> ValidationStamper:
+def draft_digest(state: AuthoringExtra, version_history: Sequence[str] = ()) -> str:
+    """:func:`spec_digest` of the draft as it stands."""
+    return spec_digest(state["curr_spec"] or "", state["skipped"], version_history)
+
+
+def marked_digest(draft: str, expected_failures: Iterable[CheckName]) -> str:
+    """``draft`` bound to the names of the checks marked as expected to fail. The reasons are left
+    out: rewording one changes nothing a run checked."""
+    digester = hashlib.md5()
+    digester.update(draft.encode())
+    for name in sorted(expected_failures):
+        digester.update(f"expect:{name}".encode())
+    return digester.hexdigest()
+
+
+def checked_digest(state: CheckingExtra, version_history: Sequence[str] = ()) -> str:
+    """The digest a verdict stamp carries (:func:`make_verdict_stamper`): the draft and its
+    markings."""
+    return marked_digest(draft_digest(state, version_history), state["expected_failures"])
+
+
+class ValidationStamper[S: AuthoringExtra](Protocol):
+    def __call__(self, state: S, version_history: Sequence[str] = ()) -> dict[str, str]: ...
+
+
+def make_validation_stamper(key: str) -> ValidationStamper[AuthoringExtra]:
     """A ``state -> {key: digest}`` a gate tool merges into ``validations`` when it accepts the
     draft. Returned rather than inlined so the stamping tool never spells the digest itself."""
     def stamp(state: AuthoringExtra, version_history: Sequence[str] = ()) -> dict[str, str]:
-        return {key: spec_digest(state["curr_spec"] or "", state["skipped"], version_history)}
+        return {key: draft_digest(state, version_history)}
     return stamp
 
 
-def check_completion(
-    state: AuthoringExtra,
+def make_verdict_stamper(key: str) -> ValidationStamper[CheckingExtra]:
+    """:func:`make_validation_stamper` for a gate that accepts the draft on its checks' verdicts,
+    which mean what they mean only under the markings."""
+    def stamp(state: CheckingExtra, version_history: Sequence[str] = ()) -> dict[str, str]:
+        return {key: checked_digest(state, version_history)}
+    return stamp
+
+
+def check_completion[S: AuthoringExtra](
+    state: S,
+    stampers: Iterable[ValidationStamper[S]],
     version_history: Sequence[str] = (),
     *,
     nothing_written: str = "no spec written yet.",
 ) -> str | None:
     """None if the publish gate is satisfied, else the reason it is not.
 
-    A stamp that doesn't match the current digest is stale (the agent edited the spec — or, when a
-    ``version_history`` is in play, the source — after the stamp was issued) and is reported the
-    same way as a missing one — from the gate's point of view they are the same thing: nothing has
-    accepted *this* draft."""
-    spec = state["curr_spec"]
-    if spec is None:
+    ``stampers`` are the ones the session's gate tools stamp with. Each required key has to carry
+    the stamp its stamper would give the draft as it stands now. A stamp that doesn't match is stale
+    (the agent changed something that stamp covers after it was issued) and is reported the same way
+    as a missing one — from the gate's point of view they are the same thing: nothing has accepted
+    *this* draft."""
+    if state["curr_spec"] is None:
         return f"Completion REJECTED: {nothing_written}"
-    digest = spec_digest(spec, state["skipped"], version_history)
+    current: dict[str, str] = {}
+    for stamper in stampers:
+        current.update(stamper(state, version_history))
     validations = state["validations"]
     for key in state["required_validations"]:
-        if validations.get(key) != digest:
+        if key not in current:
+            raise ValueError(f"no stamper for the required validation {key!r}")
+        if validations.get(key) != current[key]:
             return f"Completion REJECTED: {key} validation not satisfied or stale."
     return None
 

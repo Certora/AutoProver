@@ -17,13 +17,13 @@ import pytest
 
 from composer.prover import core
 from composer.prover.core import TrivialFanoutCexHandler
-from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+from composer.prover.ptypes import Counterexample, RulePath, RuleResult, UserAssertion
 
 
 def _violated(rule: str) -> RuleResult:
     return RuleResult(
         path=RulePath(rule=rule),
-        counterexample=Counterexample(trace=f"<cex {rule}/>"),
+        counterexample=Counterexample(trace=f"<cex {rule}/>", origin=UserAssertion()),
         status="VIOLATED",
     )
 

@@ -23,6 +23,7 @@ def _state(settings: TunableConf = TunableConf()) -> dict:
     return {
         "messages": [],
         "curr_spec": DRAFT,
+        "expected_failures": {},
         "skipped": [],
         "summaries": [],
         "vfs": {},
