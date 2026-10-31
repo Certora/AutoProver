@@ -43,6 +43,7 @@ from composer.spec.cvlr.preflight import session_settings
 from composer.spec.cvlr.reference import SOROBAN, SOROBAN_V22, SOROBAN_V25, generations
 from composer.spec.cvlr.scaffold import (
     ENVS_DIR,
+    SOROBAN_NONDET,
     SOROBAN_SCAFFOLD,
     Write,
     apply,
@@ -373,6 +374,30 @@ def test_soroban_scaffold_plans_no_solana_furniture(tmp_path):
     assert "no-entrypoint" not in parsed["features"]["certora"]
     # No forks: the only redirects are the chain crate's own commit pins.
     assert set(parsed["patch"]["crates-io"]) == {"cvlr-soroban", "cvlr-soroban-derive"}
+
+
+def test_the_soroban_harness_gets_the_sdk_nondet_helpers(tmp_path):
+    _scaffolded(tmp_path)
+    harness = tmp_path / "src" / "certora"
+    assert f"pub mod {SOROBAN_NONDET};" in (harness / "mod.rs").read_text()
+    helpers = (harness / f"{SOROBAN_NONDET}.rs").read_text()
+    for name in ("nondet_address", "nondet_i128", "nondet_vec_internal", "nondet_map_internal"):
+        assert f"pub fn {name}" in helpers, name
+    # The prover does not model the `small` builtins, and an amount is an i128.
+    assert "cvlr_nondet_small" not in helpers.replace("Not `cvlr_nondet_small_i128`", "")
+
+
+@pytest.mark.parametrize(("reference", "sdk", "muxed"), [(SOROBAN_V22, "22.0.8", False), (SOROBAN_V25, "25.1.1", True)])
+def test_the_muxed_address_helper_is_written_only_where_the_sdk_has_the_type(
+    tmp_path, reference, sdk, muxed
+):
+    _scaffolded(tmp_path, reference=reference, sdk_version=sdk)
+    helpers = (tmp_path / "src" / "certora" / f"{SOROBAN_NONDET}.rs").read_text()
+    assert ("nondet_muxedaddress" in helpers) is muxed
+
+
+def test_the_solana_harness_gets_no_soroban_helpers():
+    assert not scaffold_for("solana").nondet_helpers
 
 
 def test_soroban_scaffold_declares_the_releases_and_reads_them_from_the_branch_commit(tmp_path):

@@ -236,10 +236,17 @@ class ChainScaffold:
     #: (default feature ``cvlr-nondet/std``) must be ``default-features = false`` or the wasm build
     #: dies on a duplicate lang item. A host ``cargo check`` passes either way.
     no_std: bool
+    #: Whether the harness gets :data:`SOROBAN_NONDET`, arbitrary values of the Soroban SDK's types.
+    nondet_helpers: bool = False
 
 
 SOLANA_SCAFFOLD = ChainScaffold(chain="solana", tuning_files=True, no_std=False)
-SOROBAN_SCAFFOLD = ChainScaffold(chain="soroban", tuning_files=False, no_std=True)
+SOROBAN_SCAFFOLD = ChainScaffold(
+    chain="soroban", tuning_files=False, no_std=True, nondet_helpers=True
+)
+
+#: The harness module holding the Soroban SDK's arbitrary values (``harness_files/``).
+SOROBAN_NONDET = "soroban_nondet"
 
 _SCAFFOLDS = {s.chain: s for s in (SOLANA_SCAFFOLD, SOROBAN_SCAFFOLD)}
 
@@ -264,7 +271,21 @@ def _harness_source(relative: Path) -> str:
     return files(__package__).joinpath("harness_files", *template.parts).read_text()
 
 
-def _harness_files(dialect: PathDialect, *, tuning_files: bool = True) -> tuple[Write, ...]:
+def _soroban_nondet_source(reference: ChainReference) -> str:
+    """:data:`SOROBAN_NONDET`'s source for ``reference``'s SDK generation. ``MuxedAddress`` exists
+    from soroban-sdk 23, so its helper is written only for a generation that has the type."""
+    source = _harness_source(Path(f"{SOROBAN_NONDET}.rs"))
+    if int(_generation(reference.platform.witnesses[0].line)) >= 23:
+        source += _harness_source(Path(f"{SOROBAN_NONDET}_muxed.rs"))
+    return source
+
+
+def _harness_files(
+    dialect: PathDialect,
+    *,
+    tuning_files: bool = True,
+    nondet_helpers: str | None = None,
+) -> tuple[Write, ...]:
     """AutoProver's files, with paths relative to the package root.
 
     ``mod.rs`` declares ``specs`` as ``pub``. ``cvlr::mock_fn(with = crate::certora::specs::…)``
@@ -275,12 +296,24 @@ def _harness_files(dialect: PathDialect, *, tuning_files: bool = True) -> tuple[
     ``specs/mod.rs`` is written empty so the module exists before any rule file does. A module
     created later is one a later step can forget to declare.
     """
+    root = _harness_source(Path("mod.rs"))
+    helpers: tuple[Write, ...] = ()
+    if nondet_helpers is not None:
+        root += f"pub mod {SOROBAN_NONDET};\n"
+        helpers = (
+            Write(
+                path=HARNESS_DIR / f"{SOROBAN_NONDET}.rs",
+                contents=nondet_helpers,
+                why="arbitrary values of the Soroban SDK's types",
+            ),
+        )
     return (
         Write(
             path=HARNESS_DIR / "mod.rs",
-            contents=_harness_source(Path("mod.rs")),
+            contents=root,
             why="the harness module root",
         ),
+        *helpers,
         Write(
             path=SPECS_DIR / "mod.rs",
             contents=_harness_source(Path("specs") / "mod.rs"),
@@ -942,10 +975,12 @@ def _plan_harness(
     package: CratePackage,
     relative: Path,
     dialect: PathDialect,
+    reference: ChainReference,
     chain: ChainScaffold,
     plan: _PlanBuilder,
 ) -> None:
-    for file in _harness_files(dialect, tuning_files=chain.tuning_files):
+    helpers = _soroban_nondet_source(reference) if chain.nondet_helpers else None
+    for file in _harness_files(dialect, tuning_files=chain.tuning_files, nondet_helpers=helpers):
         on_disk = package.root / file.path
         if on_disk.is_file() and on_disk.read_text() == file.contents:
             plan.add_satisfied(f"{relative / file.path} is current")
@@ -1108,7 +1143,7 @@ def plan_scaffold(
     dialect = dialect_for(workspace, reference)
 
     _plan_workspace_manifest(reference, chain, plan)
-    _plan_harness(package, relative, dialect, chain, plan)
+    _plan_harness(package, relative, dialect, reference, chain, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, chain, plan)
     _plan_forks(workspace, reference, plan)
