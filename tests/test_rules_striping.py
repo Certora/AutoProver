@@ -419,7 +419,7 @@ def _prover_complete(st: StateWithSkips) -> str | None:
     """None once every run-target buffer carries a prover stamp at its current digest."""
     return check_buffer_completion(
         st["buffers"], st["validations"], ["prover"], skipped=[], version_history=[],
-        config=st["config"],
+        config=st["config"], rule_skips=st["rule_skips"].keys(),
     )
 
 

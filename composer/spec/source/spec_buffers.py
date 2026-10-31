@@ -19,7 +19,7 @@ import json
 import os
 import posixpath
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import Annotated
 
@@ -29,6 +29,7 @@ from typing_extensions import TypedDict
 from certora_autosetup.cache.content_cache import hash_content_parts, hash_text
 from certora_autosetup.parsers.spec_imports import imports_in_cvl
 from certora_autosetup.setup.summary_resolver import extract_cvl_ast
+from composer.authoring.state import marked_digest
 from composer.spec.cvl_generation import FEEDBACK_VALIDATION_KEY
 from composer.spec.gen_types import SPECS_DIR
 from composer.spec.types import RuleName
@@ -182,6 +183,9 @@ def run_targets(buffers: Mapping[str, NamedBuffer]) -> list[NamedBuffer]:
 #: Standalone (not per-buffer) validation key for the single skip review.
 SKIPS_VALIDATION_KEY = "skips_review"
 
+#: Per-buffer validation key a buffer earns when the prover accepts it.
+PROVER_VALIDATION_KEY = "prover"
+
 
 # Prover-conf keys that name the run, not the configuration itself: which spec/rules to run and the run
 # label. They vary per buffer and per striped sub-run, so they are stripped before the remaining config
@@ -198,12 +202,18 @@ def buffer_state_digest(
     include_claim: bool = False,
 ) -> str:
     """The per-buffer analogue of ``spec_digest``: a buffer's content + import closure bound to the
-    applied-edit history. Every per-buffer stamp — feedback and prover — and the completion check key
-    off this, so editing the buffer, anything it imports, or the source invalidates that buffer's stamps.
+    applied-edit history. Every per-buffer stamp — feedback directly, prover through
+    :func:`buffer_prover_digest` — and the completion check key off this, so editing the buffer, anything
+    it imports, or the source invalidates that buffer's stamps.
 
-    Skips are deliberately NOT keyed here. A skip declaration is owned by no buffer (``validate_coverage``
-    keeps skipped and buffer-assigned disjoint), and skip quality is reviewed once against the whole spec
-    (:func:`skips_review_digest`), so a skip change must not re-verify every buffer.
+    Expected-failure markings are NOT keyed here. The prover history identifies a run by this digest, and
+    a marking changes how a run is judged, not which run it was; the prover stamp binds the markings on
+    top (:func:`buffer_prover_digest`).
+
+    Skips are deliberately NOT keyed here either. A skip declaration is owned by no buffer
+    (``validate_coverage`` keeps skipped and buffer-assigned disjoint), and skip quality is reviewed once
+    against the whole spec (:func:`skips_review_digest`), so a skip change must not re-verify every
+    buffer.
 
     With ``include_claim`` the buffer's declared ``property_rules`` also key the digest, so re-assigning
     a claim re-triggers review. The feedback stamp sets it (the judge reviews a buffer against the
@@ -222,6 +232,24 @@ def buffer_state_digest(
         )
         extra.append(f"claim:{claim}")
     return buffer_digest(buffers, name, extra_parts=extra)
+
+
+def buffer_prover_digest(
+    buffers: Mapping[str, NamedBuffer],
+    name: str,
+    *,
+    version_history: Sequence[str],
+    config: Mapping[str, object] | None = None,
+    rule_skips: Collection[str],
+) -> str:
+    """The digest a buffer's prover stamp carries: :func:`buffer_state_digest` bound to which of the
+    buffer's own rules are marked as expected to fail. A buffer passes only relative to its markings,
+    so changing one invalidates that buffer's prover stamp, and no other buffer's."""
+    owned = buffers[name].owned_rules
+    return marked_digest(
+        buffer_state_digest(buffers, name, version_history=version_history, config=config),
+        [RuleName(r) for r in rule_skips if r in owned],
+    )
 
 
 def skips_review_digest(
@@ -248,6 +276,7 @@ def check_buffer_completion(
     skipped: Sequence[tuple[str, str]],
     version_history: Sequence[str],
     config: Mapping[str, object] | None = None,
+    rule_skips: Collection[str],
 ) -> str | None:
     """None if every run-target buffer carries each required validation (e.g. ``feedback``, ``prover``)
     stamped at its current digest AND (when anything is skipped) the single skip review is current, else
@@ -257,16 +286,22 @@ def check_buffer_completion(
 
     With no run-target buffers this is vacuously satisfied (there is nothing to stamp) — the
     all-properties-skipped case, whose validity is decided by ``validate_coverage`` instead."""
+    def digest(key: str, name: str) -> str:
+        # The feedback stamp tracks a buffer's claimed properties (the judge reviews against them);
+        # the prover stamp tracks the buffer's markings instead.
+        if key == PROVER_VALIDATION_KEY:
+            return buffer_prover_digest(
+                buffers, name, version_history=version_history, config=config, rule_skips=rule_skips,
+            )
+        return buffer_state_digest(
+            buffers, name, version_history=version_history, config=config,
+            include_claim=(key == FEEDBACK_VALIDATION_KEY),
+        )
+
     stale: list[str] = []
     for b in run_targets(buffers):
         for key in required_validations:
-            # The feedback stamp tracks a buffer's claimed properties (the judge reviews against them);
-            # the prover stamp does not.
-            d = buffer_state_digest(
-                buffers, b.name, version_history=version_history, config=config,
-                include_claim=(key == FEEDBACK_VALIDATION_KEY),
-            )
-            if validations.get(f"{key}:{b.name}") != d:
+            if validations.get(f"{key}:{b.name}") != digest(key, b.name):
                 stale.append(f"{b.name!r} {key}")
     if skipped and validations.get(SKIPS_VALIDATION_KEY) != skips_review_digest(
         buffers, skipped=skipped, version_history=version_history

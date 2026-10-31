@@ -16,9 +16,9 @@ from typing import Any, cast
 
 import pytest
 
-from composer.authoring.state import SkippedProperty, check_completion, spec_digest
+from composer.authoring.state import SkippedProperty, check_completion, checked_digest, draft_digest
 from composer.rustapp.session import (
-    FEEDBACK_KEY, VALIDATE_KEY, PropertyCheckMapping, RustSessionState, _unexplained,
+    FEEDBACK_KEY, STAMPERS, VALIDATE_KEY, PropertyCheckMapping, RustSessionState, _unexplained,
     _verdict_report, declared_checks, declared_names, targets_of,
 )
 from composer.rustapp.wire import Check, Outcome, Verdict
@@ -43,6 +43,10 @@ def _state(**kw) -> RustSessionState:
     return cast(RustSessionState, {**base, **kw})
 
 
+def _gate(state: RustSessionState) -> str | None:
+    return check_completion(state, STAMPERS)
+
+
 def _check(name: str, target: str | None = None, properties: list[str] | None = None) -> Check:
     return Check(name=name, properties=properties or ["p"], target=target)
 
@@ -60,17 +64,17 @@ def _verdict(outcome: Outcome, detail: str | None = None) -> Verdict:
 # ---------------------------------------------------------------------------
 
 def test_a_clean_run_satisfies_the_gate_for_the_draft_it_saw():
-    stamped = _state(validations={VALIDATE_KEY: spec_digest(DRAFT, [])})
-    assert check_completion(stamped) is None
+    stamped = _state(validations={VALIDATE_KEY: checked_digest(_state())})
+    assert _gate(stamped) is None
 
 
 def test_editing_the_spec_after_a_clean_run_invalidates_it():
     # The whole reason the stamp is a digest: nothing has to remember to clear it.
     stamped = _state(
         curr_spec=DRAFT + "\n// one more line",
-        validations={VALIDATE_KEY: spec_digest(DRAFT, [])},
+        validations={VALIDATE_KEY: checked_digest(_state())},
     )
-    assert "stale" in (check_completion(stamped) or "")
+    assert "stale" in (_gate(stamped) or "")
 
 
 def test_declaring_a_skip_after_a_clean_run_also_invalidates_it():
@@ -78,22 +82,42 @@ def test_declaring_a_skip_after_a_clean_run_also_invalidates_it():
     # gate must not carry over from a draft that didn't make it.
     stamped = _state(
         skipped=[SkippedProperty(property_title="no_free_mint", reason="no oracle")],
-        validations={VALIDATE_KEY: spec_digest(DRAFT, [])},
+        validations={VALIDATE_KEY: checked_digest(_state())},
     )
-    assert "stale" in (check_completion(stamped) or "")
+    assert "stale" in (_gate(stamped) or "")
+
+
+def test_marking_a_check_after_a_clean_run_also_invalidates_it():
+    # A run passes relative to the markings, so a stamp earned under other markings proves nothing.
+    stamped = _state(
+        expected_failures={"c_no_free_mint": "mints for free"},
+        validations={VALIDATE_KEY: checked_digest(_state())},
+    )
+    assert "stale" in (_gate(stamped) or "")
+
+
+def test_marking_a_check_leaves_the_feedback_stamp_current():
+    # The judge is not shown the markings, so a review of the draft still stands after one changes.
+    stamped = _state(
+        required_validations=[VALIDATE_KEY, FEEDBACK_KEY],
+        expected_failures={"c_no_free_mint": "mints for free"},
+        validations={FEEDBACK_KEY: draft_digest(_state())},
+    )
+    assert FEEDBACK_KEY not in (_gate(stamped) or "")
+    assert VALIDATE_KEY in (_gate(stamped) or "")
 
 
 def test_every_required_check_must_have_stamped_the_current_draft():
     # A wheel that declares a judge requires both; a validate stamp alone is not enough.
     both = _state(
         required_validations=[VALIDATE_KEY, FEEDBACK_KEY],
-        validations={VALIDATE_KEY: spec_digest(DRAFT, [])},
+        validations={VALIDATE_KEY: checked_digest(_state())},
     )
-    assert FEEDBACK_KEY in (check_completion(both) or "")
+    assert FEEDBACK_KEY in (_gate(both) or "")
 
 
 def test_nothing_written_is_reported_as_such_rather_than_as_a_stale_stamp():
-    assert "no spec written yet" in (check_completion(_state(curr_spec=None)) or "")
+    assert "no spec written yet" in (_gate(_state(curr_spec=None)) or "")
 
 
 # ---------------------------------------------------------------------------

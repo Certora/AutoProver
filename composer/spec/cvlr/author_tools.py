@@ -2,6 +2,8 @@
 
 * ``summarize_for_prover`` replaces a function with an unconstrained stand-in.
 * ``adjust_prover_config`` changes the unit's prover settings.
+* ``expect_rule_failure`` and ``expect_rule_passage`` mark a rule as a finding
+  or put it back under the gate.
 
 Each one changes the unit's state, and each invalidates the prover stamp. ``verify_rules`` (:mod:`composer.spec.cvlr.verify`) is what
 builds with that state and earns the stamp.
@@ -24,6 +26,7 @@ from composer.prover.conf import dump_conf
 from composer.spec.cvlr.conf import SettingsEdit, tunable_conf
 from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.types import CheckName
 from composer.ui.tool_display import tool_display
 
 
@@ -162,4 +165,65 @@ class AdjustProverConfig(
             "Prover config updated; the prover stamp is invalidated, so re-run `verify_rules`.\n\n"
             f"```json\n{dump_conf(tunable_conf(edit.apply(settings)))}```",
             prover_settings=edit,
+        )
+
+
+@tool_display(lambda p: f"Expecting rule `{p['rule_name']}` to fail", None)
+class ExpectRuleFailure(
+    WithInjectedState[CvlrGenerationState], WithInjectedId, WithImplementation[Command]
+):
+    """Record that a rule is meant to fail because the program violates the property.
+
+    The rule stays in the harness and the prover keeps reporting the violation.
+    ``verify_rules`` stops treating it as unfinished. Use it only once the
+    defect is shown, by a counterexample or by tracing the program. A rule can
+    be marked before it has run. The marking accounts for the rule only in a
+    run where the rule fails on its own assertion. A marking invalidates the
+    prover stamp. Re-run ``verify_rules``.
+    """
+
+    rule_name: str = Field(description="The name of the rule expected to fail")
+    reason: str = Field(
+        description="Why the failure is a genuine defect in the program rather than in the rule"
+    )
+
+    @override
+    def run(self) -> Command:
+        # An empty reason removes the marking, so a stored mark has to say why.
+        if not self.reason.strip():
+            return tool_state_update(
+                self.tool_call_id,
+                "A non-empty reason is required when marking a rule as expected to fail.",
+            )
+        return tool_state_update(
+            self.tool_call_id,
+            f"Recorded: {self.rule_name} is expected to fail. The prover stamp is invalidated, so "
+            "re-run `verify_rules`.",
+            expected_failures={CheckName(self.rule_name): self.reason},
+        )
+
+
+@tool_display(lambda p: f"Expecting rule `{p['rule_name']}` to pass", None)
+class ExpectRulePassage(
+    WithInjectedState[CvlrGenerationState], WithInjectedId, WithImplementation[Command]
+):
+    """Withdraw an ``expect_rule_failure`` marking, putting the rule back under the gate.
+
+    A withdrawal invalidates the prover stamp. Re-run ``verify_rules``.
+    """
+
+    rule_name: str = Field(description="The name of the rule that should verify after all")
+
+    @override
+    def run(self) -> Command:
+        if self.rule_name not in self.state["expected_failures"]:
+            return tool_state_update(
+                self.tool_call_id, f"{self.rule_name} is not marked as expected to fail."
+            )
+        # An empty reason removes the marking.
+        return tool_state_update(
+            self.tool_call_id,
+            f"Withdrawn: {self.rule_name} must verify. The prover stamp is invalidated, so re-run "
+            "`verify_rules`.",
+            expected_failures={CheckName(self.rule_name): ""},
         )

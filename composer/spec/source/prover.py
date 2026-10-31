@@ -59,7 +59,8 @@ from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR, buffer_spec_path, co
 from composer.spec.util import string_hash
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.spec_buffers import (
-    NamedBuffer, SpecBuffersExtra, buffer_state_digest, run_targets,
+    PROVER_VALIDATION_KEY, NamedBuffer, SpecBuffersExtra, buffer_prover_digest, buffer_state_digest,
+    run_targets,
 )
 
 
@@ -123,7 +124,7 @@ def rule_selection(
 
 DELETE_SKIP = "__delete_skip"
 
-VALIDATION_KEY = "prover"
+VALIDATION_KEY = PROVER_VALIDATION_KEY
 
 # How often the idle collect wait wakes to re-check the budget wrap-up guard while no job has finished.
 _IDLE_WAIT_TICK = 15.0
@@ -900,6 +901,14 @@ def get_prover_tool(
                 buffers, name, version_history=state["version_history"], config=state["config"],
             )
 
+        def _prover_stamp(
+            state: StateWithSkips, buffers: Mapping[str, NamedBuffer], name: str
+        ) -> dict[str, str]:
+            return {f"{VALIDATION_KEY}:{name}": buffer_prover_digest(
+                buffers, name, version_history=state["version_history"], config=state["config"],
+                rule_skips=state["rule_skips"].keys(),
+            )}
+
         def _buffer_complete_at(
             state: StateWithSkips, buffers: Mapping[str, NamedBuffer], name: str, digest: str,
             *, extra_history: Sequence[ProverHistoryItem] = (),
@@ -1058,12 +1067,12 @@ def get_prover_tool(
             for b in targets:
                 d = cur_digest(b.name)
                 if _buffer_complete_at(state, buffers, b.name, d, extra_history=prover_update):
-                    prover_stamps[f"prover:{b.name}"] = d
+                    prover_stamps.update(_prover_stamp(state, buffers, b.name))
 
             # Status board — the agent's work-list. `running` counts only a live job at the CURRENT digest;
             # a job left running at a stale digest (its shared import changed) is doomed, so its buffer falls
             # under needs-(re)submission until the agent relaunches it.
-            complete = {b.name for b in targets if f"prover:{b.name}" in prover_stamps}
+            complete = {b.name for b in targets if f"{VALIDATION_KEY}:{b.name}" in prover_stamps}
             running = {
                 j.name for j in buffer_jobs.values()
                 if not j.task.done() and j.name in buffers and j.digest == cur_digest(j.name)

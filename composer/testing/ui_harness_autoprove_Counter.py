@@ -847,9 +847,9 @@ _CVL_TAPE: list[BaseMessage] = [
         _tc("read_rough_draft"),
     ),
     # J2.3 — good=True verdict. Stamps the buffer's feedback validation at its
-    # current digest (which includes its claimed properties). rule_skips is NOT
-    # part of the digest, so the later expect_rule_failure won't invalidate this
-    # stamp.
+    # current digest (which includes its claimed properties). rule_skips enters
+    # only the prover stamp, so the later expect_rule_failure won't invalidate
+    # this one.
     _ai(
         "Judge: approving the component spec.",
         _tc("result", good=True, feedback=""),
@@ -884,8 +884,8 @@ _CVL_TAPE: list[BaseMessage] = [
 
     # R6 — author responds to the surfaced bug by marking the rule as
     # expected-to-fail. ``expect_rule_failure`` writes into ``rule_skips``
-    # via a Command. ``rule_skips`` is NOT part of the digest used by
-    # validation stamps, so the prior feedback stamp remains valid.
+    # via a Command. ``rule_skips`` enters only the prover stamp, so the prior
+    # feedback stamp remains valid.
     _ai(
         "The CEX flags a real bug in Counter.incrementOther. Marking the "
         "rule as expected-to-fail so we can re-run the prover with it "
@@ -1158,8 +1158,8 @@ _NAG_CVL_TAPE: list[BaseMessage] = [
     *_nag_streak_turns(),
 
     # NG-react — the turn after the nag reminder landed. React as it suggests:
-    # take the stuck rule out of the verification obligation. rule_skips is
-    # not part of the validation digest, so the feedback stamp survives.
+    # take the stuck rule out of the verification obligation. rule_skips
+    # enters only the prover stamp, so the feedback stamp survives.
     _ai(
         "The reminder is right — the rule has failed sanity identically on "
         "every run; its requires are unsatisfiable as written. Marking it "
