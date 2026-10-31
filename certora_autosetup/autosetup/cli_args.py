@@ -265,6 +265,17 @@ Default Behavior: By default, all configurations must be successfully submitted.
     )
 
     parser.add_argument(
+        '--build-only',
+        type=str,
+        default=None,
+        metavar='PATH',
+        help='Make the project compile under certoraRun and stop: detect the build system, run '
+             'the compilation analysis with its workarounds, and write the resulting '
+             'compilation settings to PATH as JSON. Runs no summaries, sanity specs, base conf, '
+             'warmup or prover job. Exits non-zero when the project does not compile.'
+    )
+
+    parser.add_argument(
         "--composer-setup",
         type=str,
         default=None

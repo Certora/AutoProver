@@ -9,6 +9,8 @@ prover-specific pieces as the three phase objects:
   tool. Returns a ``ProverPrepared``.
 * ``ProverPrepared.prepare_formalization`` — AutoSetup, then the custom summaries
   that build on its config. Returns a ``ProverRunner``.
+* ``ExternalModePrepared`` — what ``prepare_system`` returns for an external run mode: no harness
+  creation, and the project build (AutoSetup's build step) in ``prepare_external_mode``.
 * ``ProverRunner`` — per-batch CVL generation (``batch_cvl_generation``) and
   prover-run-backed verdicts (``make_prover_fetcher``).
 
@@ -25,9 +27,11 @@ from langchain_core.tools import BaseTool
 
 from composer.io.multi_job import TaskInfo
 from composer.llm.provider import CacheLevel
-from composer.spec.context import WorkflowContext, CVLGeneration
+from composer.spec.context import WorkflowContext, CVLGeneration, SourceCode
 from composer.spec.types import PropertyFormulation
-from composer.spec.gen_types import CVLResource, SPECS_DIR, certora_relative_to_project
+from composer.spec.gen_types import (
+    AUTOPROVE_INTERNAL_DIR, CVLResource, SPECS_DIR, certora_relative_to_project, under_project,
+)
 from composer.spec.system_model import (
     ContractComponentInstance, ContractInstance, SourceApplication, HarnessedApplication,
     SourceExplicitContract, HarnessedExplicitContract, SourceExternalActor,
@@ -37,8 +41,9 @@ from composer.spec.cvl_generation import GeneratedCVL
 from composer.spec.prop_inference import CERTORA_BACKEND_GUIDANCE
 from composer.spec.source.harness import (
     run_harness_creation, run_autosetup_phase, ContractSetup, SystemDescriptionHarnessed,
-    lift_harnessed,
+    lift_harnessed, lift_unharnessed,
 )
+from composer.spec.source.autosetup import SetupFailure, run_autosetup_build
 from composer.spec.source.summarizer import setup_summaries
 from composer.spec.source.prover import get_prover_tool, materializing_project, ProverToolset
 from composer.spec.source.plugin import CertoraProverTools
@@ -57,7 +62,7 @@ from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 
 from composer.spec.source.task_ids import (
-    HARNESS_TASK_ID, AUTOSETUP_TASK_ID, SUMMARIES_TASK_ID,
+    HARNESS_TASK_ID, AUTOSETUP_TASK_ID, SUMMARIES_TASK_ID, PROJECT_BUILD_TASK_ID,
 )
 from composer.prover.core import ProverOptions
 from composer.ui.autoprove_app import AutoProvePhase
@@ -67,7 +72,8 @@ from composer.pipeline.core import (
     Curtailed
 )
 from composer.pipeline.ecosystem import main_instance
-from composer.pipeline.run_mode import RunMode
+from composer.pipeline.run_mode import EXTERNAL_MODES, RunMode
+from composer.pipeline.modes import ModeSupport, ProjectBuild
 from composer.pipeline.keys import COMMON_SYSTEM_CACHE_KEY
 from composer.spec.source.keys import AP_PROPERTIES_KEY_NAME
 
@@ -224,6 +230,62 @@ class ProverPrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, Con
         )
 
 @dataclass
+class ExternalModePrepared(PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]):
+    """The prepared system of a run in an external mode: the located main contract, without
+    harness creation, and the project build in place of AutoSetup.
+
+    The project's own confs name the contracts they verify, so no harness is generated and
+    ``main`` is the unharnessed lift (``lift_unharnessed``)."""
+    _analyzed: SourceApplication
+    _prover_opts: ProverOptions
+
+    @override
+    async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedCVL, ContractComponentInstance]:
+        raise RuntimeError("a run in an external mode does not formalize")
+
+    @override
+    async def prepare_external_mode(self, run: PipelineRun) -> ModeSupport:
+        build = await run.runner(
+            TaskInfo(PROJECT_BUILD_TASK_ID, "Project Build", AutoProvePhase.AUTOSETUP),
+            lambda: build_project(run.source, self._analyzed, self._prover_opts),
+        )
+        return ModeSupport(build=build, prover_options=self._prover_opts)
+
+
+#: Where the project build's output goes, relative to the project root.
+PROJECT_BUILD_LOG = AUTOPROVE_INTERNAL_DIR / "project_build.log"
+
+
+async def build_project(
+    source: SourceCode, analyzed: SourceApplication, prover_opts: ProverOptions,
+) -> ProjectBuild:
+    """Run AutoSetup's build step over every contract the analysis found, so the compilation
+    settings cover the whole scene the project's confs may name."""
+    project_root = Path(source.project_root)
+    log_path = under_project(project_root, PROJECT_BUILD_LOG)
+    extra_files = [
+        f"{c.path}:{c.solidity_identifier}"
+        for c in analyzed.contract_components if c.solidity_identifier != source.contract_name
+    ]
+    result = await run_autosetup_build(
+        project_root, source.relative_path, source.contract_name, prover_opts, extra_files,
+        log_path,
+    )
+    if isinstance(result, SetupFailure):
+        return ProjectBuild(
+            succeeded=False, log_path=log_path,
+            error=result.error + (f"\n{result.stderr}" if result.stderr else ""),
+        )
+    return ProjectBuild(
+        succeeded=True,
+        compilation_config=result.compilation_config,
+        solc_versions=result.solc_versions,
+        sources_patched=result.import_patcher_applied,
+        log_path=log_path,
+    )
+
+
+@dataclass
 class ProverBackend:
     """``PipelineBackend[AutoProvePhase, GeneratedCVL, None, SpecIdentity, ContractComponentInstance,
     ContractInstance, SourceApplication, None]`` (P, FormT, H, A, Unit, Main, App, Pre) — structural."""
@@ -232,7 +294,8 @@ class ProverBackend:
         "analysis": AutoProvePhase.COMPONENT_ANALYSIS,
         "extraction": AutoProvePhase.BUG_ANALYSIS,
         "formalization": AutoProvePhase.CVL_GEN,
-        "report": AutoProvePhase.REPORT
+        "report": AutoProvePhase.REPORT,
+        "external_mode": AutoProvePhase.EVALUATION,
     })
     analysis_spec = SystemAnalysisSpec(COMMON_SYSTEM_CACHE_KEY, AP_PROPERTIES_KEY_NAME)
 
@@ -251,6 +314,13 @@ class ProverBackend:
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
         preflight: None,
     ) -> PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]:
+        if run.run_mode in EXTERNAL_MODES:
+            # The harness agent costs LLM calls and writes harness files into the project; an
+            # external mode runs the project's own confs, which already name their contracts.
+            return ExternalModePrepared(
+                main=main_instance(lift_unharnessed(analyzed), run.source),
+                _analyzed=analyzed, _prover_opts=self._prover_opts,
+            )
         sys_desc = await run.runner(
             TaskInfo(HARNESS_TASK_ID, "Harness Creation", AutoProvePhase.HARNESS),
             lambda: run_harness_creation(run.ctx, run.source, run.env, analyzed),

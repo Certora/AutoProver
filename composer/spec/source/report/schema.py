@@ -8,7 +8,8 @@ inferred `FormalizedProperty`s it covers, and a `RuleVerdict` may surface under 
 outcome ("Verified" vs "Successful test") is a render-time concern, not stored here.
 
 The report is a **per-run snapshot** — no guarantee that property/group slugs stay stable across
-runs. Bump `schema_version` on a breaking change.
+runs. Bump `schema_version` on a breaking change. A minor bump (3.1 -> 3.2) adds optional fields
+only, so a reader of the new version still loads every older report.
 """
 from enum import Enum
 from typing import Literal
@@ -98,6 +99,21 @@ class RuleVerdict(BaseModel):
         return (self.spec_file, self.name)
 
 
+type CoverageStatus = Literal["covered", "partial", "uncovered"]
+
+
+class PropertyCoverage(BaseModel):
+    """A judgement of how well the rules a property maps to establish it. Written by a run that
+    checks specs it did not author (``run_mode="evaluate"``); absent otherwise."""
+    status: CoverageStatus
+    reason: str = Field(description="Why the rules establish the property fully, partly, or not at all.")
+    added_by_evaluator: bool = Field(
+        default=False,
+        description="True when the property was added during evaluation rather than inferred "
+        "with the rest of the property list.",
+    )
+
+
 class FormalizedProperty(PropertyFormulation):
     """An inferred property (title, methods, sort, description) that at least one CVL rule
     formalizes, tagged with its owning component. ``rule_refs`` are the property→rule edges; the
@@ -108,6 +124,7 @@ class FormalizedProperty(PropertyFormulation):
         default_factory=list,
         description="Identities of the rules that (jointly) formalize this property.",
     )
+    coverage: PropertyCoverage | None = None
 
     @property
     def key(self) -> PropertyKey:
@@ -310,6 +327,61 @@ class Finding(BaseModel):
     provenance: FindingProvenance | None = None
 
 
+type FeedbackSeverity = Literal["info", "warning", "error"]
+
+
+class RuleFeedback(BaseModel):
+    """A review remark on one rule as written: what is wrong or weak about it and how to fix it.
+
+    About the rule's text or its conf, not its verdict, so a VERIFIED rule can carry one. A rule
+    no property claims (an orphan, see ``AutoProverReport.rules``) can carry one as well."""
+    rule: RuleName
+    #: Basename of the spec defining the rule; with ``rule`` it is the rule's identity. ``None``
+    #: when the remark is about a rule name across every spec that declares it.
+    spec_file: str | None = None
+    #: Project-relative path of the conf the remark is about, or ``None`` when it holds for every
+    #: conf that checks the rule.
+    conf: str | None = None
+    severity: FeedbackSeverity
+    #: Open vocabulary, e.g. ``"vacuous"`` or ``"tolerance-accepts-behaviour"``.
+    kind: str
+    explanation: str
+    suggested_fix: str | None = None
+
+
+class ConfCoverage(BaseModel):
+    """Whether the confs that verify one spec, taken together, check every rule of it on every
+    method. A gap is closed by a completing run, and this records what was missing before it."""
+    spec: str = Field(description="Project-relative path of the spec.")
+    confs: list[str] = Field(
+        default_factory=list, description="Project-relative paths of the confs that verify the spec.",
+    )
+    rules_unchecked_before_completion: list[RuleName] = Field(
+        default_factory=list,
+        description="Rules no conf checked, before any completing run.",
+    )
+    methods_excluded: dict[RuleName, list[str]] = Field(
+        default_factory=dict,
+        description="Per parametric rule, the methods no conf instantiated it on, before any "
+        "completing run.",
+    )
+    completion_conf: str | None = Field(
+        default=None,
+        description="Project-relative path of the conf written to close the gap, if one was needed.",
+    )
+    complete: bool = Field(
+        description="Every rule was checked on every method once the completing run (if any) finished.",
+    )
+
+
+class SpecCoverageScore(BaseModel):
+    """A named coverage score with its per-view breakdown, e.g. a static measure of how much of
+    the code the specs constrain. The producer names the score and its views."""
+    name: str
+    score: float
+    views: dict[str, float] = Field(default_factory=dict)
+
+
 class DeprioritizedProperty(PropertyFormulation):
     """A property this run inferred and deliberately did not pursue, with the ranker's reason.
 
@@ -323,11 +395,11 @@ class DeprioritizedProperty(PropertyFormulation):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1"] = "3.1"
+    schema_version: Literal["3.0", "3.1", "3.2"] = "3.2"
     backend: ReportBackend = "prover"
-    #: How much of the inferred property set the run pursued ("comprehensive" or
-    #: "prioritized"). Absent on reports written before the mode existed, which are all
-    #: comprehensive.
+    #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
+    #: "evaluate" for a run that checked the project's own specs). Absent on reports written
+    #: before the mode existed, which are all comprehensive.
     run_mode: str | None = None
     #: What a prioritized run set aside. Empty for a comprehensive run.
     deprioritized: list[DeprioritizedProperty] = Field(default_factory=list)
@@ -341,6 +413,9 @@ class AutoProverReport(BaseModel):
     #: component name -> prover run link/path
     prover_links: dict[ComponentName, str] = Field(default_factory=dict)
     properties: list[FormalizedProperty]
+    #: Every rule the report shows. A formalizing run keeps only rules some property maps to and
+    #: counts the rest in ``coverage.dropped_orphan_rules``. An evaluate run keeps them all, so
+    #: a rule here may have no property pointing at it.
     rules: list[RuleVerdict]
     groups: list[PropertyGroup]
     #: Formalization gaps — properties that exist but no rule formalizes (see the two gap types).
@@ -360,3 +435,9 @@ class AutoProverReport(BaseModel):
     #: when nothing is violated, when synthesis was unavailable, or for a non-prover backend). Prose
     #: is synthesized at report time — see ``report/findings.py``.
     findings: list[Finding] = Field(default_factory=list)
+    #: Review remarks on individual rules. Empty for a run that wrote its own rules.
+    rule_feedback: list[RuleFeedback] = Field(default_factory=list)
+    #: Per spec, whether its confs together checked every rule on every method.
+    conf_coverage: list[ConfCoverage] = Field(default_factory=list)
+    #: Coverage scores computed over the specs, when the run produced any.
+    coverage_scores: list[SpecCoverageScore] = Field(default_factory=list)

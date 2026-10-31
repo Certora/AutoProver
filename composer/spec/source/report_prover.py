@@ -28,9 +28,13 @@ _NODE_TO_OUTCOME: dict[NodeStatus, Outcome] = {
 }
 
 
-def _fetch(api: ProverOutputAPI, link: str, spec_file: str | None) -> dict[RuleName, Verdict]:
+def fetch_run_verdicts(
+    api: ProverOutputAPI, link: str, spec_file: str | None
+) -> dict[RuleName, Verdict]:
     """rule_name -> rolled-up `Verdict` for one prover run, each stamped with ``spec_file`` (the spec that
     run verified — constant for the run). Best-effort: any POU failure -> {}.
+
+    Blocking: call it off the event loop (``asyncio.to_thread``).
 
     A run link is a raw ``/jobStatus/`` job URL; POU (and the report's own links) want the ``/output/``
     view, so normalize before the call and stamp the normalized link onto the verdict.
@@ -56,7 +60,7 @@ def _fetch(api: ProverOutputAPI, link: str, spec_file: str | None) -> dict[RuleN
     return verdicts
 
 
-def _fetch_covering(
+def fetch_covering_verdicts(
     api: ProverOutputAPI, run_link_specs: list[tuple[str, str]]
 ) -> dict[RuleName, Verdict]:
     """rule_name -> `Verdict` across the runs that compose the component's buffers.
@@ -71,7 +75,7 @@ def _fetch_covering(
     """
     verdicts: dict[RuleName, Verdict] = {}
     for link, spec_file in run_link_specs:
-        for name, v in _fetch(api, link, spec_file).items():
+        for name, v in fetch_run_verdicts(api, link, spec_file).items():
             # First writer wins, and the newest run is read first, so a later run's verdict
             # never overwrites it.
             verdicts.setdefault(name, v)
@@ -82,7 +86,7 @@ def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[Ge
     """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, reading every
     prover run that composes the component's buffers (``GeneratedCVL.run_link_specs``). With buffers +
     rule-striping one component's rules are run across several jobs, so a fetch keyed on a single link
-    would report every rule whose verdict came from another run as UNKNOWN; ``_fetch_covering`` unions
+    would report every rule whose verdict came from another run as UNKNOWN; ``fetch_covering_verdicts`` unions
     them newest-run-first, so a rule re-proved in a later scoped run wins over its earlier verdict. Each
     rule is stamped with the spec its run verified, taken from ``run_link_specs``. POU calls run off the
     event loop (one blocking call per run). Only ever invoked for delivered results (collect skips
@@ -93,6 +97,6 @@ def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[Ge
         run_link_specs = formalized.result.run_link_specs
         if not run_link_specs:
             return {}
-        return await asyncio.to_thread(_fetch_covering, api, run_link_specs)
+        return await asyncio.to_thread(fetch_covering_verdicts, api, run_link_specs)
 
     return fetch

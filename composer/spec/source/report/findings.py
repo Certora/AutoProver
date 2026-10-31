@@ -122,9 +122,10 @@ async def build_findings(
     async def _one(rule: RuleVerdict) -> Finding | None:
         try:
             instances = await fetch_evidence(rule.name)
-            # Every rule in the report is referenced by >=1 property (collect drops orphans), so pass
-            # ALL of them: the rule may jointly formalize several, and only the counterexample says
-            # which one actually broke — that is the LLM's job, not ours to pre-guess.
+            # A rule is usually referenced by >=1 property (collect drops orphans unless asked to
+            # keep them, and a kept orphan gets an empty list here), so pass ALL of them: the rule
+            # may jointly formalize several, and only the counterexample says which one actually
+            # broke — that is the LLM's job, not ours to pre-guess.
             props = props_by_ref.get(rule.ref, [])
             # A rule's properties may share a group (some may be in none); dedupe by slug, first-seen order.
             rule_groups = list({g.slug: g for p in props if (g := group_by_key.get(p.key)) is not None}.values())
