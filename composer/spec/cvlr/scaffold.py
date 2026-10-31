@@ -43,6 +43,7 @@ reference set.
 """
 
 import re
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from importlib.resources import files
@@ -65,7 +66,7 @@ from composer.cargo.manifest import (
 from composer.cargo.metadata import CratePackage, GitSource, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
-from composer.spec.cvlr import forks
+from composer.spec.cvlr import forks, soroban_types
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
 from composer.spec.cvlr.reference import (
     ChainReference,
@@ -1016,6 +1017,43 @@ def _plan_harness(
             )
 
 
+def _plan_nondet_impls(
+    package: CratePackage, relative: Path, reference: ChainReference, plan: _PlanBuilder
+) -> None:
+    """Append ``Nondet`` implementations of the package's contract types to the files defining them
+    (:mod:`composer.spec.cvlr.soroban_types`).
+
+    A name defined in two files is left out: ``use super::*`` in a third file could mean either.
+    """
+    sources = soroban_types.package_sources(package.root / "src", skip=package.root / HARNESS_DIR)
+    defined = {path: soroban_types.parse_contract_types(path.read_text(errors="replace")) for path in sources}
+    counts = Counter(t.name for types in defined.values() for t in types)
+    muxed = int(_generation(reference.platform.witnesses[0].line)) >= 23
+    implemented = frozenset(
+        t.name
+        for t in soroban_types.implementable(
+            [t for types in defined.values() for t in types if counts[t.name] == 1], muxed=muxed
+        )
+    )
+    for path, types in defined.items():
+        mine = [t for t in types if t.name in implemented]
+        if not mine:
+            continue
+        rel = relative / path.relative_to(package.root)
+        if soroban_types.has_nondet_module(path.read_text(errors="replace")):
+            plan.add_satisfied(f"{rel} already has its contract types' arbitrary values")
+            continue
+        plan.add_change(
+            AppendSection(
+                path=rel,
+                contents=soroban_types.render_nondet_module(
+                    mine, implemented, muxed=muxed, feature=DEFAULT_FEATURE
+                ),
+                why=f"arbitrary values of {', '.join(t.name for t in mine)}, for rules over them",
+            )
+        )
+
+
 def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
     """Add ``[patch.crates-io]`` entries for the chain's verification forks.
 
@@ -1144,6 +1182,8 @@ def plan_scaffold(
 
     _plan_workspace_manifest(reference, chain, plan)
     _plan_harness(package, relative, dialect, reference, chain, plan)
+    if chain.nondet_helpers:
+        _plan_nondet_impls(package, relative, reference, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, chain, plan)
     _plan_forks(workspace, reference, plan)
