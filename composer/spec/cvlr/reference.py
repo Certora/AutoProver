@@ -158,6 +158,11 @@ class PlatformGeneration:
     #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
     #: is already the one the starting layers use, which is the monolith's.
     path_aliases: tuple[PathAlias, ...] = ()
+    #: The lowest patch release within this generation the chain crate accepts, when it asks for
+    #: one. ``cvlr-soroban``'s SDK-22 branch requires ``soroban-sdk ^22.0.8``, so a project *locked*
+    #: to 22.0.7 is on the generation and still unresolvable. Cargo reports that as a version
+    #: conflict naming neither side's reason, so the scaffold says it first.
+    minimum: str | None = None
 
 
 @dataclass(frozen=True)
@@ -470,23 +475,59 @@ SOLANA_V1_18 = ChainReference(
     ),
 )
 
-SOROBAN = ChainReference(
-    core=_CORE,
-    chain_crate=CrateRelease("cvlr-soroban", "0.4.0"),
-    # The derive crate is a companion of the chain crate. A target uses it when it writes the
-    # attribute macros. It is declared and pinned like a model's release, and models no program,
-    # so it is not withholdable.
-    companions=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),
-    forks=(),
-    platform=PlatformGeneration(
-        label="soroban-sdk 22.x",
-        sdk_crates=(CrateRequirement("soroban-sdk", "22"),),
-        # Soroban has one SDK crate, so the declared crate and the witness are the same. Spelled
-        # out because that is a fact about this platform. On Solana the witness list names a crate
-        # this generation does not declare.
-        witnesses=(CrateRequirement("soroban-sdk", "22"),),
-    ),
+_CVLR_SOROBAN_REPO = "https://github.com/Certora/cvlr-soroban.git"
+
+#: What both Soroban lines' authors are told the manual gets wrong for them.
+_SOROBAN_CAVEATS = (
+    "The CVLR manual is written for Solana. Its account helpers and `cvlr-solana` items do not "
+    "exist on Soroban: a contract's state is its storage, reached through `Env`, and an "
+    "authorization check is `require_auth` on an `Address`.",
 )
+
+
+def _soroban_line(sdk: str, minimum: str, rev: str) -> ChainReference:
+    """The reference set for a Soroban project on SDK generation ``sdk``.
+
+    ``cvlr-soroban`` is cut per SDK generation, because its helpers return the SDK's own types and
+    each generation defines its own ``Address``. No branch is published, so the chain crate and its
+    derive crate are read from the branch's commit. Each branch takes the core crates from crates.io
+    (``>= 0.4, < 1``), so it resolves onto the shared core with one copy of each.
+    """
+    commit = GitCommit(_CVLR_SOROBAN_REPO, rev)
+    return ChainReference(
+        core=_CORE,
+        chain_crate=CrateRelease("cvlr-soroban", "0.4.0", unpublished=commit),
+        # The derive crate is a companion of the chain crate. A target uses it when it writes the
+        # attribute macros. It is declared and pinned like a model's release, and models no
+        # program, so it is not withholdable.
+        companions=(CrateRelease("cvlr-soroban-derive", "0.4.0", unpublished=commit),),
+        forks=(),
+        caveats=_SOROBAN_CAVEATS,
+        platform=PlatformGeneration(
+            label=f"soroban-sdk {sdk}.x",
+            sdk_crates=(CrateRequirement("soroban-sdk", sdk),),
+            # Soroban has one SDK crate, so the declared crate and the witness are the same.
+            # Spelled out because that is a fact about this platform. On Solana the witness list
+            # names a crate this generation does not declare.
+            witnesses=(CrateRequirement("soroban-sdk", sdk),),
+            minimum=minimum,
+        ),
+    )
+
+
+#: ``cvlr-soroban`` branch ``soroban-25.1.1``.
+SOROBAN_V25 = _soroban_line("25", "25.1.1", "faf7fb826f395cc0573a0ce674b7e4099cdf6f57")
+
+#: ``cvlr-soroban`` branch ``soroban-22.0.8``.
+SOROBAN_V22 = _soroban_line("22", "22.0.8", "d00c0ab7499407bab4be0993176cbaf96d183461")
+
+#: The newest Soroban line, for callers with no project in hand: the corpus builders and the crate
+#: reference, which describe current CVLR rather than what one target resolves.
+#:
+#: SDK 26 has a branch (``main``), and it is not offered: it reads the core crates from an
+#: unreleased ``cvlr`` branch, so beside the shared core it would put two copies of each in the
+#: graph.
+SOROBAN = SOROBAN_V25
 
 #: Keyed by ``composer.pipeline.ecosystem.ChainTag``, minus ``evm``. CVLR is the Rust-side
 #: specification language and has no EVM line.
@@ -496,7 +537,7 @@ SOROBAN = ChainReference(
 #: (:func:`composer.spec.cvlr.scaffold.select_generation`).
 REFERENCE_SET: dict[str, tuple[ChainReference, ...]] = {
     "solana": (SOLANA_V3, SOLANA_V2, SOLANA_V1_18),
-    "soroban": (SOROBAN,),
+    "soroban": (SOROBAN_V25, SOROBAN_V22),
 }
 
 

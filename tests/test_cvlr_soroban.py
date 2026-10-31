@@ -32,10 +32,15 @@ from composer.spec.cvlr.conf import (
 )
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE, SOROBAN_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import HarnessModule
-from composer.spec.cvlr.manifest import ManifestMissing, rule_names_in, rule_names_in_wasm
+from composer.spec.cvlr.manifest import (
+    ManifestCorrupt,
+    ManifestMissing,
+    rule_names_in,
+    rule_names_in_wasm,
+)
 from composer.spec.cvlr.pipeline import CvlrBackend, CvlrFormalizer
 from composer.spec.cvlr.preflight import session_settings
-from composer.spec.cvlr.reference import SOROBAN
+from composer.spec.cvlr.reference import SOROBAN, SOROBAN_V22, SOROBAN_V25, generations
 from composer.spec.cvlr.scaffold import (
     ENVS_DIR,
     SOROBAN_SCAFFOLD,
@@ -43,6 +48,7 @@ from composer.spec.cvlr.scaffold import (
     apply,
     plan_scaffold,
     scaffold_for,
+    select_generation,
 )
 from composer.spec.cvlr.verify import BuildPermit, HarnessTarget, gate_tools
 from composer.spec.types import PropertyFormulation
@@ -70,7 +76,7 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [dependencies]
-soroban-sdk = "22.0.7"
+soroban-sdk = "22.0.8"
 """
 
 
@@ -78,7 +84,7 @@ def _project(
     root: Path,
     *,
     manifest: str = MANIFEST,
-    sdk_version: str | None = "22.0.7",
+    sdk_version: str | None = "22.0.8",
 ) -> tuple[Workspace, CratePackage]:
     (root / "src").mkdir(parents=True, exist_ok=True)
     for path, contents in (
@@ -263,28 +269,42 @@ def _custom(name: str, payload: bytes) -> bytes:
     return b"\x00" + _leb(len(body)) + body
 
 
-def _record(tag: int, payload: bytes) -> bytes:
-    return bytes([tag]) + len(payload).to_bytes(4, "little") + payload
-
-
 def _module(*sections: bytes) -> bytes:
     # A type section (id 1, empty vector) in front, so the reader has to skip a non-custom one.
     return b"\x00asm\x01\x00\x00\x00" + b"\x01\x01\x00" + b"".join(sections)
 
 
-def test_the_rule_list_is_read_from_the_wasm_custom_section(tmp_path):
-    rules = _record(0, b"CV1") + _record(1, b"mint_conserves") + _record(1, b"burn_auth")
+#: What ``cvlr-log`` links into every program: the ``.cvlr_rules`` anchor record and nothing else.
+_ANCHOR_ONLY = b"\x00" + (3).to_bytes(4, "little") + b"CV1"
+
+
+def test_the_soroban_rule_list_is_read_from_certora_rules(tmp_path):
+    """``cvlr_soroban_derive``'s ``#[rule]`` writes NUL-terminated names into ``certora_rules``,
+    the section certoraSorobanProver reads. ``.cvlr_rules`` holds only the anchor on a Soroban
+    build, so reading it would list no rules and every submission would be refused."""
     wasm_file = tmp_path / "token.wasm"
-    wasm_file.write_bytes(_module(_custom("name", b"\x00"), _custom(".cvlr_rules", rules)))
+    wasm_file.write_bytes(
+        _module(
+            _custom("certora_rules", b"mint_conserves\0burn_auth\0"),
+            _custom(".cvlr_rules", _ANCHOR_ONLY),
+        )
+    )
     assert rule_names_in_wasm(wasm_file) == {"mint_conserves", "burn_auth"}
     # By suffix, so the gate needs no chain of its own.
     assert rule_names_in(wasm_file) == {"mint_conserves", "burn_auth"}
 
 
-def test_a_wasm_without_the_section_did_not_list_its_rules(tmp_path):
+def test_a_wasm_without_certora_rules_did_not_list_its_rules(tmp_path):
     wasm_file = tmp_path / "token.wasm"
-    wasm_file.write_bytes(_module(_custom("name", b"\x00")))
+    wasm_file.write_bytes(_module(_custom(".cvlr_rules", _ANCHOR_ONLY)))
     with pytest.raises(ManifestMissing):
+        rule_names_in_wasm(wasm_file)
+
+
+def test_a_truncated_certora_rules_section_is_not_trusted(tmp_path):
+    wasm_file = tmp_path / "token.wasm"
+    wasm_file.write_bytes(_module(_custom("certora_rules", b"mint_conserves\0burn")))
+    with pytest.raises(ManifestCorrupt):
         rule_names_in_wasm(wasm_file)
 
 
@@ -335,9 +355,9 @@ def _planned_files(plan) -> set[str]:
     return {c.path.as_posix() for c in plan.changes if isinstance(c, Write)}
 
 
-def _scaffolded(tmp_path: Path, **kw) -> dict:
+def _scaffolded(tmp_path: Path, reference=SOROBAN_V22, **kw) -> dict:
     workspace, package = _project(tmp_path, **kw)
-    plan = plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD)
+    plan = plan_scaffold(workspace, package, reference, SOROBAN_SCAFFOLD)
     assert not plan.blocked, plan.blocked
     assert apply(plan, workspace.root)
     return tomllib.loads((tmp_path / "Cargo.toml").read_text())
@@ -345,28 +365,40 @@ def _scaffolded(tmp_path: Path, **kw) -> dict:
 
 def test_soroban_scaffold_plans_no_solana_furniture(tmp_path):
     workspace, package = _project(tmp_path)
-    plan = plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD)
+    plan = plan_scaffold(workspace, package, SOROBAN_V22, SOROBAN_SCAFFOLD)
     assert not plan.blocked
     assert not any(ENVS_DIR.as_posix() in f for f in _planned_files(plan)), "no tuning files"
     parsed = _scaffolded(tmp_path)
     assert "metadata" not in parsed.get("package", {})
     assert "no-entrypoint" not in parsed["features"]["certora"]
-    assert "patch" not in parsed
+    # No forks: the only redirects are the chain crate's own commit pins.
+    assert set(parsed["patch"]["crates-io"]) == {"cvlr-soroban", "cvlr-soroban-derive"}
 
 
-def test_soroban_scaffold_pins_the_reference_set_from_crates_io(tmp_path):
-    deps = _scaffolded(tmp_path)["dependencies"]
-    for crate in SOROBAN.scaffold_crates():
+def test_soroban_scaffold_declares_the_releases_and_reads_them_from_the_branch_commit(tmp_path):
+    parsed = _scaffolded(tmp_path)
+    deps = parsed["dependencies"]
+    for crate in SOROBAN_V22.scaffold_crates():
         assert deps[crate.name]["version"] == f"={crate.version}"
         assert deps[crate.name]["optional"] is True
-        assert "git" not in deps[crate.name]
-    assert deps["cvlr"]["version"] == f"={SOROBAN.core.version}"
+    # The core is a crates.io release; the chain crate and its derive crate are its branch's commit.
+    assert "cvlr" not in parsed["patch"]["crates-io"]
+    for name in ("cvlr-soroban", "cvlr-soroban-derive"):
+        patch = parsed["patch"]["crates-io"][name]
+        assert patch["git"] == "https://github.com/Certora/cvlr-soroban.git"
+        assert patch["rev"] == SOROBAN_V22.chain_crate.unpublished.rev  # type: ignore[union-attr]
+
+
+def test_both_soroban_lines_share_solanas_core_release():
+    # cvlr 0.6.2 is no_std and declares its env imports, so one core serves every chain.
+    assert SOROBAN_V22.core == SOROBAN_V25.core
+    assert SOROBAN_V22.core.unpublished is None
 
 
 def test_soroban_scaffold_is_idempotent(tmp_path):
     _scaffolded(tmp_path)
     workspace, package = _project(tmp_path)
-    again = plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD)
+    again = plan_scaffold(workspace, package, SOROBAN_V22, SOROBAN_SCAFFOLD)
     assert again.changes == ()
 
 
@@ -374,23 +406,48 @@ def test_soroban_scaffold_turns_off_core_cvlrs_std_default(tmp_path):
     """Core ``cvlr``'s default ``cvlr-nondet/std`` collides with ``soroban-sdk``'s ``panic_impl``
     in the wasm build; a host ``cargo check`` never sees it."""
     deps = _scaffolded(tmp_path)["dependencies"]
-    assert deps[SOROBAN.core.name]["default-features"] is False
+    assert deps[SOROBAN_V22.core.name]["default-features"] is False
     # Only the core: cvlr-soroban's defaults are empty, and upstream leaves them on.
-    assert "default-features" not in deps[SOROBAN.chain_crate.name]
+    assert "default-features" not in deps[SOROBAN_V22.chain_crate.name]
 
 
 def test_soroban_workspace_pin_also_turns_off_core_cvlrs_std_default(tmp_path):
     """Cargo ignores a member's ``default-features = false`` unless the workspace entry agrees."""
     parsed = _scaffolded(tmp_path, manifest="[workspace]\n" + MANIFEST)
     pins = parsed["workspace"]["dependencies"]
-    assert pins[SOROBAN.core.name]["default-features"] is False
-    assert "default-features" not in pins[SOROBAN.chain_crate.name]
-    assert parsed["dependencies"][SOROBAN.core.name]["workspace"] is True
+    assert pins[SOROBAN_V22.core.name]["default-features"] is False
+    assert "default-features" not in pins[SOROBAN_V22.chain_crate.name]
+    assert parsed["dependencies"][SOROBAN_V22.core.name]["workspace"] is True
+
+
+@pytest.mark.parametrize(
+    ("sdk", "expected"),
+    [("25.1.1", "25"), ("22.0.8", "22"), ("26.1.0", None), ("23.0.0", None), ("20.5.0", None)],
+)
+def test_the_line_is_chosen_by_the_sdk_the_contract_links(tmp_path, sdk, expected):
+    workspace, package = _project(tmp_path, sdk_version=sdk)
+    chosen = select_generation(workspace, package, generations("soroban"))
+    lines = {"25": SOROBAN_V25, "22": SOROBAN_V22}
+    assert chosen is (lines[expected] if expected else None)
+
+
+def test_the_newest_line_is_the_one_named_for_callers_without_a_project():
+    assert SOROBAN is SOROBAN_V25 is generations("soroban")[0]
+
+
+def test_a_project_locked_below_the_branchs_patch_is_told_to_update_its_lockfile(tmp_path):
+    """Phoenix's case: on SDK 22, locked to 22.0.7, and the 22 branch needs 22.0.8. Cargo would
+    report a conflict naming neither; the scaffold names the fix."""
+    workspace, package = _project(tmp_path, sdk_version="22.0.7")
+    plan = plan_scaffold(workspace, package, SOROBAN_V22, SOROBAN_SCAFFOLD)
+    (blocked,) = plan.blocked
+    assert "22.0.7" in blocked.problem and "22.0.8" in blocked.problem
+    assert "cargo update -p soroban-sdk" in blocked.resolution
 
 
 def test_soroban_platform_gate_refuses_the_wrong_sdk_generation(tmp_path):
     workspace, package = _project(tmp_path, sdk_version="20.5.0")
-    plan = plan_scaffold(workspace, package, SOROBAN, SOROBAN_SCAFFOLD)
+    plan = plan_scaffold(workspace, package, SOROBAN_V22, SOROBAN_SCAFFOLD)
     assert plan.blocked
     assert any("soroban-sdk" in b.problem for b in plan.blocked)
 

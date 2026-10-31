@@ -424,6 +424,10 @@ def _generation(version: str) -> str:
 class _OnGeneration:
     """The package links the reference's generation of its platform crates."""
 
+    witness: CrateRequirement | None = None
+    #: The versions of ``witness`` linked into the package.
+    builds: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True)
 class _OffGeneration:
@@ -452,7 +456,9 @@ def _read_platform(
         if not copies:
             continue
         off = tuple(c.version for c in copies if _generation(c.version) != _generation(witness.line))
-        return _OffGeneration(witness, off) if off else _OnGeneration()
+        if off:
+            return _OffGeneration(witness, off)
+        return _OnGeneration(witness, tuple(c.version for c in copies))
     return None
 
 
@@ -501,8 +507,59 @@ def _check_platform(
                     resolution=f"move the project to {witness.name} {witness.line}",
                 )
             )
+        case _OnGeneration(witness=witness, builds=builds) if witness is not None:
+            _check_patch_level(witness, builds, reference, plan)
         case _OnGeneration() | None:
             pass
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    """A version as integers, for comparison. A non-numeric tail (``-rc1``) ends the parse, so a
+    prerelease compares as its release rather than refusing a project over a suffix."""
+    out: list[int] = []
+    for part in version.split("."):
+        digits = ""
+        for ch in part:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if not digits:
+            break
+        out.append(int(digits))
+    return tuple(out)
+
+
+def _check_patch_level(
+    witness: CrateRequirement,
+    builds: tuple[str, ...],
+    reference: ChainReference,
+    plan: _PlanBuilder,
+) -> None:
+    """Refuse a project *locked* below the patch the chain crate's own requirement names.
+
+    The generation matches, so nothing is incompatible: cargo cannot resolve the two, and reports
+    it as a version conflict that names neither the CVLR crate nor the lockfile. The manifest's own
+    range usually already admits the newer patch, so the fix is a lockfile update.
+    """
+    minimum = reference.platform.minimum
+    if minimum is None:
+        return
+    below = [v for v in builds if _version_tuple(v) < _version_tuple(minimum)]
+    if not below:
+        return
+    plan.add_blocked(
+        Blocked(
+            path=Path("Cargo.toml"),
+            problem=(
+                f"this project is locked to {witness.name} {', '.join(below)}, and the CVLR line "
+                f"for {reference.platform.label} ({reference.line()}) requires at least {minimum}"
+            ),
+            resolution=(
+                f"run `cargo update -p {witness.name}` (the manifest's range normally already "
+                f"allows {minimum}), or pin {witness.name} to {minimum} or newer"
+            ),
+        )
+    )
 
 
 @dataclass(frozen=True)

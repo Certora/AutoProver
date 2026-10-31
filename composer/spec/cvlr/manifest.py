@@ -1,9 +1,15 @@
 """Rule names from a built program's ``.cvlr_rules`` section.
 
-``#[rule]`` writes one record per rule into that section: an ELF section of the
-SBF ``.so`` on Solana, and a custom section of the ``.wasm`` on Soroban, which
-is what ``link_section`` produces on a wasm target. Neither prover reads the
-section, so a submission still names its rules in the conf.
+``#[rule]`` writes one record per rule into that ELF section of the SBF ``.so``.
+The Solana prover does not read the section, so a submission still names its
+rules in the conf.
+
+A Soroban contract's rules are listed elsewhere: ``cvlr_soroban_derive``'s
+``#[rule]`` writes each name, NUL-terminated, into the wasm custom section
+``certora_rules``, which is the section ``certoraSorobanProver`` reads. That
+section is the Soroban list (:func:`rule_names_in_wasm`). A wasm build also
+carries ``.cvlr_rules``, since ``cvlr-log`` links its anchor into every
+program, but a rule recorded only there is one the Soroban prover cannot see.
 
 A record is a tag byte, a little-endian ``u32`` length, and that many payload
 bytes. Tag 0 is the anchor and its payload is ``CV1``. Tag 1 is one rule
@@ -93,16 +99,33 @@ def _leb128(data: bytes, offset: int) -> tuple[int, int]:
             return value, offset
 
 
+#: The wasm custom section ``cvlr_soroban_derive`` lists rules in.
+_SOROBAN_SECTION = "certora_rules"
+
+
 def rule_names_in_wasm(wasm: Path) -> set[str]:
-    """The rule names in ``wasm``'s ``.cvlr_rules`` custom section.
+    """The rule names in ``wasm``'s ``certora_rules`` custom section.
 
     :raises ManifestMissing: the section is absent.
     :raises ManifestCorrupt: the file or the section cannot be read.
     """
-    return _names(_wasm_section(wasm))
+    data = _wasm_section(wasm, _SOROBAN_SECTION)
+    if data and not data.endswith(b"\0"):
+        raise ManifestCorrupt(f"{_SOROBAN_SECTION} does not end with a NUL", offset=len(data))
+    names: set[str] = set()
+    offset = 0
+    for raw in data.split(b"\0")[:-1]:
+        if not raw:
+            raise ManifestCorrupt("rule name is empty", offset=offset)
+        try:
+            names.add(raw.decode("utf-8"))
+        except UnicodeDecodeError as exc:
+            raise ManifestCorrupt("rule name is not UTF-8", offset=offset) from exc
+        offset += len(raw) + 1
+    return names
 
 
-def _wasm_section(wasm: Path) -> bytes:
+def _wasm_section(wasm: Path, section: str) -> bytes:
     try:
         data = wasm.read_bytes()
     except OSError as exc:
@@ -120,15 +143,15 @@ def _wasm_section(wasm: Path) -> bytes:
                 raise ValueError("section runs past the end of the module")
             if section_id == _WASM_CUSTOM:
                 name_len, name_at = _leb128(data, body)
-                if data[name_at : name_at + name_len] == _SECTION.encode():
+                if data[name_at : name_at + name_len] == section.encode():
                     found.append(data[name_at + name_len : end])
             offset = end
     except ValueError as exc:
         raise ManifestCorrupt(f"{wasm} could not be read as a wasm module") from exc
     if len(found) > 1:
-        raise ManifestCorrupt(f"{wasm} has more than one {_SECTION} section")
+        raise ManifestCorrupt(f"{wasm} has more than one {section} section")
     if not found:
-        raise ManifestMissing(f"{wasm} has no {_SECTION} section")
+        raise ManifestMissing(f"{wasm} has no {section} section")
     return found[0]
 
 

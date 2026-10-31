@@ -541,17 +541,18 @@ class CargoCheck(
                 )
 
 
-def _unread(err: ManifestMissing | ManifestCorrupt) -> str:
+def _unread(err: ManifestMissing | ManifestCorrupt, artifact: Path) -> str:
     """What the author is told when the built artifact did not list its rules."""
+    section = "certora_rules" if artifact.suffix == ".wasm" else ".cvlr_rules"
     if isinstance(err, ManifestMissing):
         return (
-            "The build has no `.cvlr_rules` section, so the rules were not listed. "
+            f"The build has no `{section}` section, so the rules were not listed. "
             "Nothing was submitted."
         )
     if err.offset is None:
-        return "The `.cvlr_rules` section could not be read. Nothing was submitted."
+        return f"The `{section}` section could not be read. Nothing was submitted."
     return (
-        f"The `.cvlr_rules` section could not be read at offset {err.offset}. "
+        f"The `{section}` section could not be read at offset {err.offset}. "
         "Nothing was submitted."
     )
 
@@ -602,9 +603,9 @@ async def _stage_and_submit(
         except ManifestCorrupt as err:
             # The offset, not the section. A bad record's payload is not a log line.
             _log.warning("could not read .cvlr_rules in %s at offset %s", artifact, err.offset)
-            return _unread(err)
+            return _unread(err, artifact)
         except ManifestMissing as err:
-            return _unread(err)
+            return _unread(err, artifact)
         chosen = (
             choose(names)
             if choose is not None

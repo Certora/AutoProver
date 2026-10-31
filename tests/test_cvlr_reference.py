@@ -107,7 +107,7 @@ def test_a_companion_crate_cannot_be_withheld_though_it_is_pinned_like_a_model()
     # Soroban's derive crate is declared beside the chain crate and pinned the same way, and it
     # models no program — so there is no target it could be an answer key for. The bound is the
     # type, not a list someone has to remember to keep in step.
-    assert ref.CrateRelease("cvlr-soroban-derive", "0.4.0") in ref.SOROBAN.crates()
+    assert ("cvlr-soroban-derive", "0.4.0") in {(c.name, c.version) for c in ref.SOROBAN.crates()}
     assert ref.SOROBAN.models == ()
     with pytest.raises(ValueError, match="this chain models: none"):
         ref.SOROBAN.withholding("cvlr-soroban-derive")
