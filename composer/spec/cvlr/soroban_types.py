@@ -418,6 +418,21 @@ def has_nondet_module(src: str) -> bool:
     return re.search(rf"\bmod\s+{NONDET_MODULE}\b", src) is not None
 
 
+def is_test_source(path: Path, src_root: Path) -> bool:
+    """Whether ``path`` is compiled only by ``cargo test``, as far as its place says: under a
+    ``test``/``tests`` directory, or a ``test.rs``, ``tests.rs`` or ``test_*.rs``."""
+    parts = path.relative_to(src_root).parts
+    return (
+        any(p in ("test", "tests") for p in parts[:-1])
+        or path.stem in ("test", "tests")
+        or path.stem.startswith("test_")
+    )
+
+
 def package_sources(src_root: Path, skip: Path) -> list[Path]:
-    """The package's ``.rs`` files, in a stable order, without ``skip`` (the harness)."""
-    return sorted(p for p in src_root.rglob("*.rs") if not p.is_relative_to(skip))
+    """The package's non-test ``.rs`` files, in a stable order, without ``skip`` (the harness)."""
+    return sorted(
+        p
+        for p in src_root.rglob("*.rs")
+        if not p.is_relative_to(skip) and not is_test_source(p, src_root)
+    )

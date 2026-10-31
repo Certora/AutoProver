@@ -255,3 +255,14 @@ def test_the_manifest_is_untouched_by_the_generated_implementations(tmp_path):
     apply(plan_scaffold(workspace, package, SOROBAN_V22, SOROBAN_SCAFFOLD), tmp_path)
     parsed = tomllib.loads((tmp_path / "Cargo.toml").read_text())
     assert "certora_nondet" not in str(parsed)
+
+
+def test_test_sources_get_no_implementations(tmp_path):
+    workspace, package = _project(tmp_path)
+    (tmp_path / "src" / "tests").mkdir()
+    (tmp_path / "src" / "tests" / "queries.rs").write_text(
+        "#[contracttype]\npub struct OnlyInTests { pub n: u32 }\n"
+    )
+    appends = _appends(plan_scaffold(workspace, package, SOROBAN_V22, SOROBAN_SCAFFOLD))
+    assert "src/tests/queries.rs" not in appends
+

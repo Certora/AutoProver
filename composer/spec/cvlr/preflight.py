@@ -32,7 +32,12 @@ from composer.cargo.session import (
 )
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import sandbox_cargo_home
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
+from composer.spec.cvlr.conf import (
+    DEFAULT_FEATURE,
+    HOST_RUST_TOOLCHAIN,
+    PLATFORM_TOOLS_VERSION,
+    SOROBAN_RUST_TOOLCHAIN,
+)
 from composer.spec.cvlr.crates import CvlrSources, Divergence
 from composer.spec.cvlr.scaffold import (
     ScaffoldBlocked,
@@ -43,6 +48,7 @@ from composer.spec.cvlr.scaffold import (
     select_generation,
 )
 from composer.spec.cvlr.reference import ChainReference
+from composer.spec.cvlr.soroban_imports import ContractImport, build_imports, contract_imports
 from composer.spec.cvlr.tree import ProjectSource
 
 _log = logging.getLogger(__name__)
@@ -90,6 +96,10 @@ class CvlrPreflight:
     #: What an edit to the program may write. Read from the same scaffolded graph as
     #: :attr:`sources`.
     source: ProjectSource
+    #: The workspace contracts the package imports with ``contractimport!``, in build order. Each
+    #: cargo session builds them before compiling the package (:mod:`~composer.spec.cvlr.soroban_imports`).
+    #: Empty on Solana.
+    contract_imports: tuple[ContractImport, ...] = ()
 
     def describe(self) -> str:
         lines = [self.scaffold.describe()]
@@ -273,6 +283,7 @@ async def prepare_workspace(
         sources=sources,
         gaps=sources.gaps(reference),
         source=ProjectSource.of(resolved_in, project_root),
+        contract_imports=contract_imports(resolved_in, fresh) if chain == "soroban" else (),
     )
 
 
@@ -281,13 +292,13 @@ def session_settings(chain: str) -> tuple[str | None, CheckWith]:
 
     Solana checks for the SBF target with the platform tools (:func:`~composer.cargo.sbf.sbf_check`)
     and pins the host toolchain (:data:`~composer.spec.cvlr.conf.HOST_RUST_TOOLCHAIN`). Soroban's
-    build is an ordinary rustup target, so it checks on the host and follows the project's own
-    ``rust-toolchain.toml``.
+    build is an ordinary rustup target, so it checks on the host, with its own pinned toolchain
+    (:data:`~composer.spec.cvlr.conf.SOROBAN_RUST_TOOLCHAIN`) rather than the project's.
 
     Raises :class:`~composer.cargo.sbf.PlatformToolsMissing` when Solana's tools are absent.
     """
     if chain == "soroban":
-        return None, HostCheck()
+        return SOROBAN_RUST_TOOLCHAIN, HostCheck()
     return HOST_RUST_TOOLCHAIN, sbf_check(PLATFORM_TOOLS_VERSION)
 
 
@@ -320,6 +331,12 @@ async def gate_workspace(
             f"could not fetch the dependency graph for {pre.workspace_root} "
             f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
         )
+    if pre.contract_imports:
+        failure = await build_imports(
+            session, pre.contract_imports, target_directory=pre.target_directory
+        )
+        if failure is not None:
+            raise PreflightFailed(failure)
     run = await session.check(manifest_dir=pre.package_dir, features=features)
     _log.info(
         "preflight gate: %s in %dms%s",

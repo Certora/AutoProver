@@ -25,6 +25,7 @@ from composer.spec.cvlr.chains import SOLANA_CVLR, SOROBAN_CVLR
 from composer.spec.cvlr.conf import (
     BASE_CONF,
     SOROBAN_BASE_CONF,
+    SOROBAN_RUST_TOOLCHAIN,
     RunOverlay,
     TunableConf,
     soroban_conf,
@@ -256,8 +257,12 @@ def test_wasm_artifact_is_under_the_release_target(tmp_path):
     )
 
 
-def test_a_soroban_session_checks_on_the_host_and_follows_the_projects_toolchain():
-    assert session_settings("soroban") == (None, HostCheck())
+def test_a_soroban_session_checks_on_the_host_with_its_own_pinned_toolchain():
+    # Not the project's: Phoenix pins 1.81, which predates wasm32v1-none.
+    toolchain, check = session_settings("soroban")
+    assert check == HostCheck()
+    assert toolchain == SOROBAN_RUST_TOOLCHAIN
+    assert tuple(map(int, toolchain.split("."))) >= (1, 85)
 
 
 # ---------------------------------------------------------------------------------------------

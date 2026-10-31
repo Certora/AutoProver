@@ -164,6 +164,16 @@ def _with_target_hint(diagnostics: str) -> str:
     )
 
 
+def _with_target_hint_for(diagnostics: str, toolchain: str | None) -> str:
+    hinted = _with_target_hint(diagnostics)
+    if toolchain is None or hinted == diagnostics:
+        return hinted
+    return hinted.replace(
+        f"run `rustup target add {WASM_TARGET}`",
+        f"run `rustup target add {WASM_TARGET} --toolchain {toolchain}`",
+    )
+
+
 async def wasm_build(session: CargoSession, build: WasmBuild) -> WasmRun:
     """Run the slow tier in ``session``'s workdir, confined."""
     program, *args = build.argv()
@@ -174,7 +184,7 @@ async def wasm_build(session: CargoSession, build: WasmBuild) -> WasmRun:
         return WasmRun(
             elapsed,
             CompileFailed(
-                diagnostics=_with_target_hint(built.stderr.strip()),
+                diagnostics=_with_target_hint_for(built.stderr.strip(), session.toolchain),
                 exit_code=built.exit_code,
             ),
             session.confined,

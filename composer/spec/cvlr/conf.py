@@ -164,6 +164,14 @@ PLATFORM_TOOLS_VERSION = "v1.53"
 #: ``scripts/Dockerfile.solana`` installs this one.
 HOST_RUST_TOOLCHAIN = "1.90.0"
 
+#: The Rust toolchain a Soroban run's cargo sessions use, whatever the target's
+#: ``rust-toolchain.toml`` pins. A Soroban project's pin dates from the ``wasm32-unknown-unknown``
+#: build, and newer compilers broke that build by emitting post-MVP wasm features, so pins like
+#: Phoenix's 1.81 are common. This backend builds for ``wasm32v1-none``, which emits Wasm 1.0 and
+#: needs rustc 1.84; the CVLR graph has edition-2024 crates, which need 1.85; soroban-sdk 25 refuses
+#: 1.90. The toolchain needs the ``wasm32v1-none`` target installed.
+SOROBAN_RUST_TOOLCHAIN = "1.95.0"
+
 
 #: The cargo feature that compiles the verification module into the program. The scaffold writes
 #: this name (``certora = ["no-entrypoint", "dep:cvlr", …]``), and preflight passes it to

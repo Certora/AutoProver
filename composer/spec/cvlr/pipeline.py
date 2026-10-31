@@ -86,6 +86,7 @@ from composer.spec.cvlr.preflight import (
 from composer.spec.cvlr.patch import snapshot, write_component_patches, write_patch
 from composer.spec.cvlr.prover import Submission
 from composer.spec.cvlr.scaffold import ENVS_DIR, declare_unit_features, scaffold_for
+from composer.spec.cvlr.soroban_imports import build_imports
 from composer.spec.cvlr.tree import SharedTree
 from composer.spec.cvlr.tuning import SUMMARIES, TuningFiles
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
@@ -575,6 +576,13 @@ class CvlrStagedFormalizer[U: FeatureUnit](StagedFormalizer[GeneratedHarness, U]
             if isinstance(warmed, WarmFailed)
             else None
         )
+        if failure is None and (imports := self.deps.preflight.contract_imports):
+            # The tree is a copy without `target/`, so what the gate built is not in it.
+            failure = await build_imports(
+                session,
+                imports,
+                target_directory=_tree_target_directory(self.deps.preflight, tree.root),
+            )
         build = SharedBuild(
             tree=tree,
             session=session,
