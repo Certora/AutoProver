@@ -2252,10 +2252,10 @@ because the core had Solana in it rather than because the chains differ in machi
   under [templates/soroban/](../composer/templates/soroban/). The chain-neutral procedure is
   duplicated rather than factored, on purpose, until the Soroban text has met a prover.
 - **The submission's shape** is the one place the backend reads the tag: tuning files (from the
-  scaffold's `env_families`) and the wasm build's identity. `summarize_for_prover` is bound only
+  scaffold's `ChainScaffold.tuning_files`) and the wasm build's identity. `summarize_for_prover` is bound only
   where there are tuning files; `CvlrPreflight` now carries cargo's `target_directory`.
 - **Wording in shared tool schemas.** `verify_rules` said "Certora Solana Prover" and `put_harness`
-  named `cvlr_rules!`, which the 0.4 line Soroban builds on does not have; both are now neutral.
+  named `cvlr_rules!`, which registers no rule the Soroban Prover reads; both are now neutral.
 - **Not yet ported: the munge editor.** Its charter is written for Solana programs, so a Soroban
   run binds no `code_editor` (`CvlrChain.program_editing`). A Soroban charter is the remaining
   §7.9 item, with the `#[contractimpl]` surface reader and worked example.
@@ -2274,6 +2274,40 @@ One Soroban fact changed what the prompts teach: Certora's own Soroban specs sta
 properties as assume-violation, call, `cvlr_assert!(false)`, in confs *without* `rule_sanity`. This
 backend's conf runs the vacuity check, which reports that shape as vacuous, so the Soroban author is
 taught the success-implies-condition form instead.
+
+#### 7.9.2 On the current core, and what two real projects needed
+
+The work above was rebuilt on `feature/solana` (branch `feature/soroban`), whose submit path, conf,
+scaffold and editor had all been rewritten in the meantime, so the Soroban arm is expressed in their
+terms rather than merged. What that and a free run over two SDF kickoff projects settled:
+
+- **Pins.** `REFERENCE_SET["soroban"]` holds one line per SDK generation with a `cvlr-soroban`
+  branch, SDK 25 and SDK 22, on the shared published `cvlr` 0.6.2, which is `no_std` and declares its
+  env imports. The chain crate and its derive crate are read from the branch commit through the
+  `GitCommit` patch mechanism; each branch takes the core from crates.io, so the graph has one copy of
+  each core crate. SDK 26 (`main`) is not offered: it reads the core from an unreleased `cvlr`
+  branch. A lockfile below the branch's own requirement (Phoenix's 22.0.7 against 22.0.8) is refused
+  with `cargo update -p soroban-sdk` named.
+- **The rule list is `certora_rules`, not `.cvlr_rules`.** `cvlr_soroban_derive`'s `#[rule]` writes
+  NUL-terminated names into that wasm custom section, which is what `certoraSorobanProver` reads; a
+  Soroban build's `.cvlr_rules` holds only `cvlr-log`'s anchor. The gate reads `certora_rules`.
+- **Arbitrary values are scaffolded.** The harness gets `soroban_nondet.rs` (SDK types, bounded
+  collections; scalars from `nondet::<T>()`, since the prover does not model the `small` builtins),
+  and every `#[contracttype]` / `#[contracterror]` whose fields can all be built gets an
+  `impl Nondet` in a `certora`-gated child module of its defining file
+  ([`soroban_types`](../composer/spec/cvlr/soroban_types.py)). Adapted from Julian's
+  `scripts/soroban` on `julian/soroban-setup`.
+- **Toolchain.** Soroban sessions pin `SOROBAN_RUST_TOOLCHAIN` (1.95.0). Project pins date from the
+  `wasm32-unknown-unknown` build (Phoenix: 1.81), which predates `wasm32v1-none` and edition 2024.
+- **Contract imports.** A contract that `contractimport!`s a sibling's wasm does not compile on a
+  fresh checkout. Preflight records the imported workspace members in build order, and the gate's
+  session and the formalizer's tree build them first ([`soroban_imports`](../composer/spec/cvlr/soroban_imports.py)).
+- **Names in the artifact.** The build overrides `strip` and `debug` so counterexamples carry function
+  names; `opt-level` and `overflow-checks` are the project's.
+
+With those, all nine Phoenix contracts and both one-way-channel contracts scaffold, pass the gate,
+build and list their rule. No prover run has been made on this line yet; the first one is also the
+first check that the prover accepts a `wasm32v1-none` artifact with the names and debug info kept.
 
 ### 7.10 Revisit — the working-copy and munge reasoning, once the backend works
 
