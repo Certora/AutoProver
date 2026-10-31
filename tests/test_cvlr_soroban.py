@@ -147,8 +147,17 @@ def _build(root: Path, features: tuple[str, ...] = ()) -> WasmBuild:
 
 def test_wasm_argv_names_the_release_wasm_target(tmp_path):
     argv = _build(tmp_path, ("certora", "unit_a")).argv()
-    assert argv[:6] == ["cargo", "rustc", "--lib", "--target", WASM_TARGET, "--release"]
+    start = argv.index("rustc")
+    assert argv[start : start + 5] == ["rustc", "--lib", "--target", WASM_TARGET, "--release"]
     assert argv[argv.index("--features") + 1] == "certora unit_a"
+
+
+def test_the_build_keeps_names_and_debug_info_and_nothing_else(tmp_path):
+    argv = _build(tmp_path).argv()
+    overrides = [argv[i + 1] for i, a in enumerate(argv) if a == "--config"]
+    assert overrides == ["profile.release.strip=false", "profile.release.debug=2"]
+    # Global options, so they reach the build whichever subcommand follows.
+    assert argv.index("--config") < argv.index("rustc")
 
 
 def test_the_target_is_the_one_cvlr_declares_its_env_imports_for():

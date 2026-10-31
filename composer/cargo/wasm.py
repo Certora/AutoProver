@@ -37,6 +37,18 @@ WASM_TARGET = "wasm32v1-none"
 #: link error — so drop this as soon as those branches carry the attribute.
 LINK_ARGS = ("-C", "link-arg=--allow-undefined")
 
+#: Overrides of the project's release profile that keep the function names and debug info a
+#: Soroban release profile usually strips (``strip = "symbols"``). A rule is exported by name, so it
+#: verifies either way; without the ``name`` section a counterexample's call trace shows function
+#: indices, and the analysis of it reads names. Nothing that changes what the code does —
+#: ``opt-level``, ``overflow-checks`` — is overridden: the run verifies the project as it builds.
+PROFILE_OVERRIDES = (
+    "--config",
+    "profile.release.strip=false",
+    "--config",
+    "profile.release.debug=2",
+)
+
 
 @dataclasses.dataclass(frozen=True)
 class WasmIdentity:
@@ -64,7 +76,7 @@ class WasmBuild:
         ``cargo rustc --lib`` rather than ``cargo build`` so :data:`LINK_ARGS` reach only the
         contract's own link step, leaving dependencies and the project's ``RUSTFLAGS`` alone.
         """
-        args = ["cargo", "rustc", "--lib", "--target", WASM_TARGET, "--release"]
+        args = ["cargo", *PROFILE_OVERRIDES, "rustc", "--lib", "--target", WASM_TARGET, "--release"]
         args += ["--manifest-path", str(self.manifest_path)]
         if self.features:
             args += ["--features", " ".join(self.features)]
