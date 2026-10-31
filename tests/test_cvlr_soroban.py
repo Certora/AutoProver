@@ -529,6 +529,16 @@ def test_the_soroban_prompts_offer_no_tool_a_soroban_run_does_not_bind():
         assert "code_editor" not in text, name
 
 
+def test_the_soroban_prompts_teach_the_scaffolds_arbitrary_values():
+    prompts = _prompts(SOROBAN_CVLR)
+    assert "crate::certora::soroban_nondet" in prompts["author_system"]
+    assert "Config::nondet()" in prompts["author_system"]
+    # The judge must not send the author after these as invented names.
+    assert "soroban_nondet" in prompts["judge_system"]
+    # cvlr's own rule forms write a section the Soroban prover does not read.
+    assert "cvlr_rules!" in prompts["author_system"]
+
+
 def test_the_soroban_author_is_steered_off_the_assert_false_rejection_form():
     # This backend's conf runs the vacuity check, which reports a rule that can only end inside a
     # failing call as vacuous — so the spelling Certora's own panics confs use comes back failed here.

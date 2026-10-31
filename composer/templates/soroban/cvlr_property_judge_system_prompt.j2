@@ -68,6 +68,14 @@ be stale; the tool is authoritative.
    on this backend; "would be tedious" and "is universally quantified" are not — a rule's parameters
    and `nondet()` are the universal quantifier and the prover reasons over every value.
 
+   Two sources of arbitrary values are real and need no proof that they exist: the SDK helpers in
+   `crate::certora::soroban_nondet` (`nondet_address()`, `nondet_i128()`, `nondet_vec_internal(..)`
+   and the rest), and `T::nondet()` for the contract's own `#[contracttype]`s and
+   `#[contracterror]`s, which the scaffold implemented to reach every variant and field. A rule that
+   builds its inputs from them is quantifying over every value of those types. What to check is the
+   other direction: a hand-written `Nondet` whose `match` names only some variants, with no
+   catch-all, quantifies over a subset.
+
 7. **Loop bounds that were assumed away rather than constrained.** An unwinding violation means the
    prover could not account for iterations past the bound. Flag a rule whose assumption exists only to
    make a loop short enough, without the author saying so — the rule then proves its property for
