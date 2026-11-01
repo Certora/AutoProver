@@ -8,6 +8,7 @@ live model and no postgres.
 """
 
 import logging
+import pathlib
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -221,6 +222,26 @@ async def test_restatements_naming_unknown_properties_remove_nothing(script) -> 
     assert await _run(_Env(lite), max_rounds=5) == ["a", "b"]
 
 
+class _FailingStub(_StructuredStub):
+    def with_structured_output(self, schema, **kwargs) -> Runnable:  # type: ignore[override]
+        def answer(_messages: Any) -> _RoundRestatements:
+            raise ValueError("unparseable structured output")
+        return RunnableLambda(answer)
+
+
+async def test_a_failed_restatement_check_keeps_the_round(script, caplog) -> None:
+    root = _ctx()
+    s = script(_round("a"), _round("b", "c"), _round())
+    with caplog.at_level(logging.WARNING, logger="composer.spec.prop_inference"):
+        assert await _run(_Env(_FailingStub(answers=[])), max_rounds=3, ctx=root) == ["a", "b", "c"]
+    assert s.runs == 3
+    assert any("restatement check failed" in r.getMessage() for r in caplog.records)
+    # The kept rounds are cached, so a rerun makes no model call.
+    s2 = script()
+    assert await _run(_Env(_FailingStub(answers=[])), max_rounds=3, ctx=root) == ["a", "b", "c"]
+    assert s2.runs == 0
+
+
 async def test_round_zero_makes_no_dedup_call(script) -> None:
     lite = _no_restatements(0)
     script(_round("a"))
@@ -230,18 +251,40 @@ async def test_round_zero_makes_no_dedup_call(script) -> None:
 
 # --- what later rounds are told -------------------------------------------------------
 
-async def test_each_round_sees_every_earlier_property_and_its_own_angle(script) -> None:
+_ANGLES = ("Sibling entry points", "Standards and interfaces", "Outside state", "Sequences and liveness")
+
+
+async def test_each_later_round_sees_every_earlier_property_and_every_angle(script) -> None:
     s = script(_round("a", reasoning="looked at deposits"), _round("b"), _round())
     await _run(_Env(_no_restatements(2)), max_rounds=5)
 
     first, second, third = (p[-1] for p in s.prompts)
-    assert "<prior_properties>" not in first
+    assert "<prior_properties>" not in first and "<round_angles>" not in first
     assert "`a`" in second and "looked at deposits" in second
     assert "`a`" in third and "`b`" in third
-    assert "may be wrong" in second
-    # A different angle each round.
-    assert "Standards and interfaces" in second and "Sibling entry points" not in second
-    assert "Sibling entry points" in third and "Standards and interfaces" not in third
+    assert "is incomplete" in second
+    # An empty round ends the loop, so every later round checks every angle, sibling entry
+    # points first.
+    for prompt in (second, third):
+        positions = [prompt.index(a) for a in _ANGLES]
+        assert positions == sorted(positions)
+
+
+@pytest.mark.parametrize("template", [
+    "property_analysis_prompt.j2", "solana/property_prompt.j2", "soroban/property_prompt.j2",
+])
+async def test_angles_name_no_chain_specific_mechanism(template: str) -> None:
+    block = load_jinja_template("shared/prior_properties.j2", prior_properties=[_round("a")], unit_noun="component")
+    angles = block[block.index("<round_angles>"):block.index("</round_angles>")].lower()
+    for word in ("token", "vault", "permit", "donation", "re-entry"):
+        assert word not in angles, word
+    # Every ecosystem's prompt includes the same block.
+    source = (pathlib.Path(pi.__file__).parents[1] / "templates" / template).read_text()
+    assert 'include "shared/prior_properties.j2"' in source
+
+
+async def test_dedup_prompt_names_no_chain() -> None:
+    assert "smart-contract" not in load_jinja_template("property_dedup_system.j2")
 
 
 async def test_validator_rejects_titles_of_earlier_rounds(script) -> None:
@@ -454,3 +497,14 @@ async def test_cache_walker_rebuilds_the_keys_from_the_run_tags() -> None:
     old = AutoProveCacheTags(cache_root=["ns"], contract_name="C", memory_ns=None, interactive=False)
     assert old.max_bug_rounds is None
     assert str(await _resolve_bug_key(feat, old)) == "bug_analysis"
+    # Evaluate runs from before the round limit wrote no evaluate-mode segment either.
+    old_eval = AutoProveCacheTags(
+        cache_root=["ns"], contract_name="C", memory_ns=None, interactive=False, run_mode="evaluate",
+    )
+    assert str(await _resolve_bug_key(feat, old_eval)) == "bug_analysis"
+
+
+@pytest.mark.parametrize("given, expected", [("5", 5), ("2", 2), ("none", None), ("None", None)])
+async def test_inputs_path_round_limit_accepts_none(given: str, expected: int | None) -> None:
+    from composer.cli.cache_autoprove import _max_bug_rounds_arg
+    assert _max_bug_rounds_arg(given) == expected

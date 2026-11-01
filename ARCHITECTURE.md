@@ -197,9 +197,10 @@ README's Phase 0–4:
 - **Per-component property extraction** ([spec/prop_inference.py](composer/spec/prop_inference.py))
   — multi-round agent producing `PropertyFormulation`s (attack vectors, safety properties,
   invariants), optionally refined interactively or against a threat model. Each round sees all
-  properties found so far and looks for the missing ones. From the second round on, a round
-  starts from one angle: standards, sibling entry points, outside state, or call sequences and
-  liveness. A light-model call then removes the round's restatements of earlier properties.
+  properties found so far and looks for the missing ones. From the second round on, each round
+  checks the same four angles: sibling entry points, standards, outside state, and call
+  sequences and liveness. A light-model call then removes the round's restatements of earlier
+  properties; if that call fails, the round keeps all its properties.
   The loop stops at the first round that adds nothing, at `--max-bug-rounds` (default 5), or
   under budget pressure.
 - **CVL generation** ([spec/cvl_generation.py](composer/spec/cvl_generation.py),

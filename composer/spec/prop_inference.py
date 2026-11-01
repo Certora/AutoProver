@@ -5,7 +5,7 @@ Parameterized by source availability via AnalysisInput tuple.
 
 Inference runs in rounds. Each round is a fresh agent run that sees every property the earlier
 rounds kept, with their reasoning, and is asked for what they missed; from the second round on
-it is also given one angle to start from (``shared/prior_properties.j2``). A light-model call
+it is also given a list of angles to check (``shared/prior_properties.j2``). A light-model call
 then drops the round's restatements of earlier properties (:func:`_drop_restatements`). The loop
 stops at the first round that keeps nothing, at ``max_rounds``, or under budget pressure.
 """
@@ -352,10 +352,16 @@ async def _drop_restatements(
         "earlier": earlier, "fresh": fresh,
     }).render_to(load_jinja_template)
     bound = with_structured_output(env.llm_lite(), _RoundRestatements)
-    result = await bound.ainvoke(
-        [SystemMessage(load_jinja_template("property_dedup_system.j2")), HumanMessage(prompt)],
-        config={"metadata": {"thread_id": thread_id}},
-    )
+    try:
+        result = await bound.ainvoke(
+            [SystemMessage(load_jinja_template("property_dedup_system.j2")), HumanMessage(prompt)],
+            config={"metadata": {"thread_id": thread_id}},
+        )
+    except Exception:
+        # The round's properties are kept as they are: the agent work behind them is the
+        # expensive part, and a missed restatement costs at most one more round.
+        _log.warning("restatement check failed; keeping all %d new properties", len(fresh), exc_info=True)
+        return fresh, []
     assert isinstance(result, _RoundRestatements)
 
     fresh_titles = {p.title for p in fresh}

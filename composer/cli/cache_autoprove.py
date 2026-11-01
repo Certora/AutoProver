@@ -176,9 +176,12 @@ async def _resolve_bug_key(
     an evaluate-mode run. All come from the run tags; records written before the
     ``interactive`` tag existed leave it ``None``, in which case probe both variants and
     use whichever was written. Records written before the ``max_bug_rounds`` tag existed
-    leave it ``None``, which is also how their keys were spelled."""
+    leave it ``None``; their keys carry neither the round limit nor the evaluate-mode
+    segment, so both are left out."""
     xc_digest = combine_digests(tags.extra_context_digests)
-    existing_specs = run_mode_name(tags.run_mode) == "evaluate"
+    existing_specs = (
+        tags.max_bug_rounds is not None and run_mode_name(tags.run_mode) == "evaluate"
+    )
     if tags.interactive is not None:
         return BUG_ANALYSIS_KEY(
             tags.threat_model_digest, with_refinement=tags.interactive,
@@ -600,6 +603,13 @@ async def _async_main(args: argparse.Namespace) -> int:
         return 0
 
 
+def _max_bug_rounds_arg(value: str) -> int | None:
+    """``--max-bug-rounds``: a round limit, or ``none`` for keys with no round-limit segment."""
+    if value.lower() == "none":
+        return None
+    return int(value)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Cache & Memory Explorer for the Auto-Prove pipeline"
@@ -646,10 +656,11 @@ def main() -> int:
                                "digest is suffixed onto per-component cache keys. Defaults "
                                "to the plugins installed in this environment; pass with no "
                                "names to force plugin-free keys.")
-    p_inputs.add_argument("--max-bug-rounds", dest="max_bug_rounds", type=int,
+    p_inputs.add_argument("--max-bug-rounds", dest="max_bug_rounds", type=_max_bug_rounds_arg,
                           default=DEFAULT_MAX_BUG_ROUNDS,
                           help="The --max-bug-rounds of the original run; it parameterizes the "
-                               f"bug-analysis cache key (default: {DEFAULT_MAX_BUG_ROUNDS}).")
+                               f"bug-analysis cache key (default: {DEFAULT_MAX_BUG_ROUNDS}). Pass "
+                               "'none' for a run whose keys predate the round limit.")
 
     args = parser.parse_args()
     return asyncio.run(_async_main(args))
