@@ -296,8 +296,8 @@ class CompilationWorkaroundManager:
         # Installed compilers usable as a substitute, probed once (shutil.which +
         # subprocess per candidate) and reused across every pass of the loop.
         self._solc_candidates: Optional[List[Tuple[str, str]]] = None
-        # solc binary -> the EVM version it uses when none is requested (None when
-        # the binary could not be run), probed once per binary.
+        # solc binary -> its default EVM version (None when the binary could not
+        # be run), probed once per binary.
         self._default_evm_versions: Dict[str, Optional[str]] = {}
         # consumer -> [(lib_name, lib_path), ...] in insertion order. A second
         # firing for the same consumer (different missing library) regenerates the
@@ -1841,8 +1841,8 @@ class CompilationWorkaroundManager:
         return None
 
     def _solc_default_evm_version(self, solc_binary: str) -> Optional[str]:
-        """The EVM version ``solc_binary`` compiles for when none is requested, or
-        None when the binary cannot be run.
+        """The default EVM version of ``solc_binary``, or None when the binary
+        cannot be run.
 
         Read from the metadata of an empty contract compiled with no evmVersion
         setting: solc records the version it used there. Every solc from 0.4.x on
