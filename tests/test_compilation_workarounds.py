@@ -1,5 +1,6 @@
 """Unit tests for CompilationWorkaroundManager detectors and retry-loop guards."""
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -1579,6 +1580,63 @@ def test_unseeded_cancun_map_not_promoted_to_scalar(manager, monkeypatch, tmp_pa
     assert success is True
     assert compilation_config["solc_evm_version_map"] == {"Foo": "cancun"}
     assert "solc_evm_version" not in compilation_config
+
+
+def test_unseeded_cancun_map_covers_every_contract(manager, monkeypatch, tmp_path) -> None:
+    # The prover rejects a solc_evm_version_map that misses a file. With no
+    # declared version, the contracts that need no cancun get their own
+    # compiler's default, read from that compiler.
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+        ContractHandle(contract_name="Old", source_file="contracts/Old.sol"),
+    ]
+    defaults = {"solc8.24": "shanghai", "solc7.6": "istanbul"}
+    probed: list = []
+
+    def fake_default(solc_binary):
+        probed.append(solc_binary)
+        return defaults[solc_binary]
+
+    monkeypatch.setattr(manager, "_solc_default_evm_version", fake_default)
+    success, updated, compilation_config, _ = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        [CANCUN_MCOPY_OUTPUT],
+        contracts,
+        extra_config={"compiler_map": {"Foo": "solc8.24", "Bar": "solc8.24", "Old": "solc7.6"}},
+    )
+    assert success is True
+    expected = {"Foo": "cancun", "Bar": "shanghai", "Old": "istanbul"}
+    assert compilation_config["solc_evm_version_map"] == expected
+    assert updated["solc_evm_version_map"] == expected
+    assert sorted(probed) == ["solc7.6", "solc8.24"]
+
+
+def test_solc_default_evm_version_read_from_metadata(manager, monkeypatch) -> None:
+    calls: list = []
+    metadata = json.dumps({"settings": {"evmVersion": "shanghai"}})
+    stdout = json.dumps({"contracts": {"probe.sol": {"Probe": {"metadata": metadata}}}})
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        request = json.loads(kwargs["input"])
+        assert "evmVersion" not in request["settings"]
+        return subprocess.CompletedProcess(cmd, returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run)
+    assert manager._solc_default_evm_version("solc8.24") == "shanghai"
+    assert manager._solc_default_evm_version("solc8.24") == "shanghai"
+    assert calls == [["solc8.24", "--standard-json"]]  # probed once per binary
+
+
+def test_solc_default_evm_version_none_when_binary_missing(manager, monkeypatch) -> None:
+    def fake_run(cmd, **kwargs):
+        raise FileNotFoundError(cmd[0])
+
+    monkeypatch.setattr("certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run)
+    assert manager._solc_default_evm_version("solc9.99") is None
 
 
 # =============================================================================
