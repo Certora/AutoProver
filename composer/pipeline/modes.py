@@ -110,10 +110,8 @@ class ModeResult(BaseModel):
 class RunModeImpl[U: FeatureUnit, Main](ABC):
     """A running mode implementation, built by :meth:`RunModeLoader.initialize`."""
 
-    #: Whether the driver builds the project before the hand-off. When ``False`` the backend
-    #: runs no build (for the prover backend: no AutoSetup process, no ``project_build.log``,
-    #: no import fixes in the project sources), and the mode gets ``project_build=None``. The
-    #: backend's ``prover_options`` reach the mode either way.
+    #: Build the project before invoking the mode. If False, project_build is None;
+    #: prover_options are provided either way.
     needs_project_build: ClassVar[bool] = True
 
     @abstractmethod
