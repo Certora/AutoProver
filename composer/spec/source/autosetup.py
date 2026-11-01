@@ -10,10 +10,10 @@ import logging
 import re
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pydantic import BaseModel, Field
 from pathlib import Path
-from typing import TypedDict, Literal, Annotated
+from typing import TextIO, TypedDict, Literal, Annotated
 from pydantic import Discriminator
 import asyncio
 from composer.prover.core import ProverOptions
@@ -85,6 +85,105 @@ async def _drain(
         sink(buf)
 
 
+def _autosetup_args(
+    relative_path: str,
+    main_contract: str,
+    prover_opts: ProverOptions,
+    extra_files: Sequence[str],
+    *mode_args: str,
+) -> list[str]:
+    """The AutoSetup command line both entry points share; ``mode_args`` picks what it outputs."""
+    main_contract_path = f"{relative_path}:{main_contract}"
+    args = [
+        sys.executable, "-m", "certora_autosetup.autosetup",
+        *mode_args,
+        "--no-strip-contracts",
+        "--skip-harnessing",
+        "--skip-test-run",
+        "--run-source", "AUTO_PROVER",
+        "--main-contract",
+        main_contract_path,
+        main_contract_path,
+        *extra_files,
+    ]
+    if not prover_opts.cloud:
+        args.append("--use-local-runner")
+    return args
+
+
+async def _run_autosetup_process(
+    project_root: Path, args: list[str], log: TextIO | None = None,
+) -> tuple[int, list[str]]:
+    """Run AutoSetup with ``args`` in ``project_root``, streaming its stdout as
+    ``auto_setup_*`` events (and to ``log`` when given, stderr too). Returns the exit code and
+    the stderr lines."""
+
+    def emitter(
+        s: AutoSetupEvents
+    ):
+        emit_custom_event(s)
+
+    def to_log(line: str) -> None:
+        if log is not None:
+            log.write(line + "\n")
+
+    class CB():
+        def log_start(self):
+            emitter({
+                "type": "auto_setup_start"
+            })
+
+        def log_stdout(self, line: str):
+            to_log(line)
+            emitter({
+                "line": line,
+                "type": "auto_setup_output"
+            })
+
+        def log_complete(self, returncode: int):
+            emitter({
+                "return_code": returncode,
+                "type": "auto_setup_complete"
+            })
+
+    cb = CB()
+    stderr_lines: list[str] = []
+
+    def on_stderr(line: str) -> None:
+        to_log(line)
+        stderr_lines.append(line)
+
+    _logger.debug("Starting AutoSetup process")
+    cb.log_start()
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        cwd=project_root,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        stdin=asyncio.subprocess.DEVNULL,
+    )
+    assert proc.stdout is not None and proc.stderr is not None
+
+    try:
+        _logger.debug("Draining AutoSetup subprocess output")
+        await asyncio.gather(
+            _drain(proc.stdout, cb.log_stdout, logging.INFO),
+            _drain(proc.stderr, on_stderr, logging.ERROR),
+        )
+    except BaseException:
+        _logger.exception("Error while draining AutoSetup subprocess output")
+        # A sink raising (or cancellation) would leave the child running with
+        # its pipes half-drained; kill it so wait() can reap.
+        if proc.returncode is None:
+            proc.kill()
+        raise
+    finally:
+        _logger.debug("AutoSetup process complete, waiting for exit")
+        returncode = await proc.wait()
+    cb.log_complete(returncode)
+    return returncode, stderr_lines
+
+
 async def run_autosetup(
     project_root: Path,
     relative_path: str,
@@ -104,81 +203,16 @@ async def run_autosetup(
     Returns:
         SetupResult with compilation config and summaries path
     """
-
-    def emitter(
-        s: AutoSetupEvents
-    ):
-        emit_custom_event(s)
-
-    class CB():
-        def log_start(self):
-            emitter({
-                "type": "auto_setup_start"
-            })
-
-        def log_stdout(self, line: str):
-            emitter({
-                "line": line,
-                "type": "auto_setup_output"
-            })
-
-        def log_complete(self, returncode: int):
-            emitter({
-                "return_code": returncode,
-                "type": "auto_setup_complete"
-            })
-
-    cb = CB()
     certora_dir = project_root / "certora"
     with tempfile.NamedTemporaryFile("r") as f:
         # AutoSetup writes its composer-facing result (config + summary paths) to
         # this temp file via --composer-setup; we read it back once the process exits.
-        main_contract_path = f"{relative_path}:{main_contract}"
-        args = [
-            sys.executable, "-m", "certora_autosetup.autosetup",
-            "--composer-setup", f.name,
-            "--no-strip-contracts",
-            "--skip-harnessing",
-            "--skip-test-run",
-            "--run-source", "AUTO_PROVER",
-            "--main-contract",
-            main_contract_path,
-            main_contract_path,
-            *extra_files,
-        ]
-
-        if not prover_opts.cloud:
-            args.append("--use-local-runner")
-
-        _logger.debug("Starting AutoSetup process")
-        cb.log_start()
-        proc = await asyncio.create_subprocess_exec(
-            *args,
-            cwd=project_root,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.DEVNULL,
+        returncode, stderr_lines = await _run_autosetup_process(
+            project_root,
+            _autosetup_args(
+                relative_path, main_contract, prover_opts, extra_files, "--composer-setup", f.name,
+            ),
         )
-        assert proc.stdout is not None and proc.stderr is not None
-
-        stderr_lines: list[str] = []
-        try:
-            _logger.debug("Draining AutoSetup subprocess output")
-            await asyncio.gather(
-                _drain(proc.stdout, cb.log_stdout, logging.INFO),
-                _drain(proc.stderr, stderr_lines.append, logging.ERROR),
-            )
-        except BaseException:
-            _logger.exception("Error while draining AutoSetup subprocess output")
-            # A sink raising (or cancellation) would leave the child running with
-            # its pipes half-drained; kill it so wait() can reap.
-            if proc.returncode is None:
-                proc.kill()
-            raise
-        finally:
-            _logger.debug("AutoSetup process complete, waiting for exit")
-            returncode = await proc.wait()
-        cb.log_complete(returncode)
         if returncode != 0:
             return SetupFailure(
                 error="AutoSetup failed",
@@ -210,6 +244,46 @@ async def run_autosetup(
         summaries_path=str(resolved_summary_path.relative_to(certora_dir)),
         user_types=udts,
     )
+
+
+class BuildSuccess(BaseModel):
+    """What ``certora_autosetup --build-only`` wrote: the compilation settings under which the
+    project's scene compiles (see ``certora_autosetup.autosetup.types.ProjectBuildResult``)."""
+    compilation_config: dict
+    solc_versions: list[str]
+    import_patcher_applied: bool
+    contracts: list[str]
+
+
+async def run_autosetup_build(
+    project_root: Path,
+    relative_path: str,
+    main_contract: str,
+    prover_opts: ProverOptions,
+    extra_files: Sequence[str],
+    log_path: Path,
+) -> BuildSuccess | SetupFailure:
+    """Run only AutoSetup's build step (``--build-only``): build-system detection and the
+    compilation analysis with its workarounds, stopping before summaries, sanity specs, base
+    conf and warmup. The process output, stdout and stderr, goes to ``log_path``.
+
+    Not cached: the import fixes the build may apply edit project sources, so a cache hit would
+    leave the tree uncompilable."""
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile("r") as f, log_path.open("w") as log:
+        returncode, stderr_lines = await _run_autosetup_process(
+            project_root,
+            _autosetup_args(
+                relative_path, main_contract, prover_opts, extra_files, "--build-only", f.name,
+            ),
+            log,
+        )
+        if returncode != 0:
+            return SetupFailure(
+                error=f"AutoSetup build failed (exit {returncode})",
+                stderr="\n".join(stderr_lines),
+            )
+        return BuildSuccess.model_validate_json(f.read())
 
 
 # --- AutoSetup LLM token-usage ingestion -----------------------------------

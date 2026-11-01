@@ -25,6 +25,11 @@ result-type-keyed cache, and (since the report is backend-agnostic) building + p
 property-keyed report. Everything backend-specific — the harnessed lift, the autosetup/summaries
 pre-work, the formalizer itself, per-unit verdicts — is contributed through the three phase
 objects, and never inspected by the driver.
+
+A run in an external mode (``evaluate``; see :mod:`composer.pipeline.modes`) takes the chain only
+as far as ``PreparedSystem`` and extraction. It never calls ``prepare_formalization``; it calls
+``PreparedSystem.prepare_external_mode`` (the project build) instead. The mode implementation
+receives the extracted batches and the build, and returns the report, which the driver writes.
 """
 
 import asyncio
@@ -44,7 +49,7 @@ from contextlib import nullcontext
 from composer.io.multi_job import TaskInfo
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import (
-    WorkflowContext, ComponentGroup
+    WorkflowContext,
 )
 from composer.spec.system_model import (
     BaseApplication, FeatureUnit
@@ -78,11 +83,11 @@ from composer.diagnostics.budget import (
     BudgetExceeded, BudgetPressureAbort, total_budget, named_budget_or_nop, time_budget,
 )
 
-from .run_mode import RunMode, run_mode_name
+from .run_mode import EXTERNAL_MODES, RunMode, run_mode_name
 from .ptypes import (
     DEFAULT_MAX_CPU_TASKS,
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
-    Curtailed,  Delivered, RunBudget,
+    Curtailed,  Delivered, ExtractedBatch, ExtractionFailure, RunBudget,
     FinalProperties, GaveUp, PersistedPluginArtifact, PipelineRun, PluginArtifact,
     RegisteredArtifacts, SystemAnalysisSpec
 )
@@ -91,6 +96,7 @@ from .plugin_api import (
     PluginToolContext, ProvidedTools,
 )
 from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
+from .modes import ModeContext, ModeSupport, RunModeImpl, load_run_mode
 
 _log = logging.getLogger(__name__)
 
@@ -264,6 +270,13 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         never mentions staging at all."""
         ...
 
+    async def prepare_external_mode(self, run: PipelineRun) -> ModeSupport:
+        """What a run in an external mode gets from the backend in place of
+        :meth:`prepare_formalization`: the project build and the backend's prover options (see
+        :class:`~composer.pipeline.modes.ModeSupport`). The driver runs it alongside extraction
+        and passes the result to the mode. A backend with nothing to build returns nothing."""
+        return ModeSupport()
+
 
 class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
     @property
@@ -304,15 +317,9 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
 
 
 # ---- the per-unit batch -------------------------------------------------------
-@dataclass
-class _Batch[U: FeatureUnit](BackendJob[U]):
-    feat_ctx: WorkflowContext[ComponentGroup]
-
-
-class ExtractionFailure[U: FeatureUnit](NamedTuple):
-    """A component whose property extraction raised, and what took it down."""
-    unit: U
-    error: BaseException
+#: The driver's name for :class:`~composer.pipeline.ptypes.ExtractedBatch`, which lives in ``ptypes``
+#: so that :mod:`composer.pipeline.modes` can hand it to a mode without importing the driver.
+_Batch = ExtractedBatch
 
 
 class ExtractionResult[U: FeatureUnit](NamedTuple):
@@ -469,10 +476,15 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
 ) -> CorePipelineResult[FormT]:
     # Only the plugins whose hooks accept this ecosystem's unit are loaded (and only those pay
     # their ``initialize`` cost); the driver below can hand them its units unconditionally.
-    async with load_plugins(run, ecosystem.unit_type) as plugins:
+    # An external mode's implementation is entered here too, and only for a run in that mode.
+    async with (
+        load_plugins(run, ecosystem.unit_type) as plugins,
+        load_run_mode(run.run_mode, ecosystem.unit_type) as mode_impl,
+    ):
         return await run_pipeline_inner(
             backend, run, plugins, interactive=interactive, threat_model=threat_model,
             extra_context=extra_context, max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
+            mode_impl=mode_impl,
         )
 
 # ---- the driver --------------------------------------------------------------
@@ -486,13 +498,21 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     extra_context: Sequence[Document] = (),
     max_bug_rounds: int = 3,
     ecosystem: Ecosystem[App, Main, U],
+    mode_impl: RunModeImpl[U, Any] | None = None,
 ) -> CorePipelineResult[FormT]:
+    """``mode_impl`` is the implementation of an external run mode (see
+    :mod:`composer.pipeline.modes`); required exactly when ``run.run_mode`` is one."""
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
 
     assert ecosystem.supports_greenfield or run.env.sort != "greenfield", (
         f"ecosystem {ecosystem.name!r} has no greenfield prompts; got sort='greenfield'"
     )
+    if (run.run_mode in EXTERNAL_MODES) != (mode_impl is not None):
+        raise ValueError(
+            f"run mode {run.run_mode.value!r} "
+            + ("needs a mode implementation" if mode_impl is None else "takes no mode implementation")
+        )
 
     # 1. Backend preflight ∥ system analysis. The preflight (Crucible: build the program and gate a
     #    skeleton harness through the real toolchain) reads nothing analysis produces, so it starts
@@ -546,23 +566,56 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     async def _prepare_formalization() -> Formalizer[FormT, U] | StagedFormalizer[FormT, U]:
         with named_budget_or_nop("formalization_preparation"):
             return await prepared.prepare_formalization(run)
+
+    async def _extract() -> ExtractionResult[U]:
+        return await _extract_all(
+            backend.analysis_spec.properties_key,
+            prepared.main,
+            backend.backend_guidance,
+            run,
+            phases["extraction"],
+            interactive,
+            threat_model,
+            extra_context,
+            max_bug_rounds,
+            ecosystem,
+            plugin_manager.bind_phase(
+                phases.get("extraction_plugin") or phases["extraction"],
+            )
+        )
+
+    # An external mode works on the project's own verification artifacts, so the backend's
+    # pre-formalization setup (AutoSetup, summaries) is never started: it is the most
+    # expensive step of the front half, and its specs and summaries are not what the mode
+    # measures. The backend's ``prepare_external_mode`` runs instead, alongside extraction as
+    # ``prepare_formalization`` would: for the prover backend it builds the project, so the
+    # project's confs compile. A task group, so a failure in either cancels the other.
+    if mode_impl is not None:
+        async def _prepare_external_mode() -> ModeSupport:
+            with named_budget_or_nop("formalization_preparation"):
+                return await prepared.prepare_external_mode(run)
+
+        async with asyncio.TaskGroup() as tg:
+            support_task = tg.create_task(_prepare_external_mode())
+            extract_task = tg.create_task(_extract())
+        support, extracted = support_task.result(), extract_task.result()
+        return await _hand_off_to_mode(
+            mode_impl, backend.artifact_store, run,
+            ModeContext(
+                run=run, main=prepared.main,
+                batches=extracted.batches, extraction_failures=extracted.failed,
+                threat_model=threat_model, extra_context=extra_context,
+                artifact_store=backend.artifact_store,
+                phase=phases.get("external_mode", phases["formalization"]),
+                project_build=support.build,
+                prover_options=support.prover_options,
+                active_plugins=plugin_manager.plugin_manifest,
+            ),
+        )
+
     staged_task = asyncio.create_task(_prepare_formalization())
 
-    batches, extraction_failures = await _extract_all(
-        backend.analysis_spec.properties_key,
-        prepared.main,
-        backend.backend_guidance,
-        run,
-        phases["extraction"],
-        interactive,
-        threat_model,
-        extra_context,
-        max_bug_rounds,
-        ecosystem,
-        plugin_manager.bind_phase(
-            phases.get("extraction_plugin") or phases["extraction"],
-        )
-    )
+    batches, extraction_failures = await _extract()
     # 3b. Prioritized runs formalize one property, not every component's. This is the first
     #     point where every component's candidates exist together — inference never sees more
     #     than the unit it was given, and the per-component plugin hook cannot compare across
@@ -790,6 +843,42 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         _log.warning("report phase failed (continuing)", exc_info=True)
 
     return _tally(outcomes + lost_at_extraction, run.run_mode, len(deprioritized))
+
+
+async def _hand_off_to_mode[P: enum.Enum, H, U: FeatureUnit, FormT: BackendResult](
+    impl: RunModeImpl[U, Any],
+    store: ArtifactStore[Any, FormT],
+    run: PipelineRun[P, H],
+    ctx: ModeContext[P, H, U, Any],
+) -> CorePipelineResult[FormT]:
+    """Run an external mode and persist its report.
+
+    The mode's spend is charged to the formalization cap: it takes the place of formalization in
+    the run. The driver stamps the run's mode and active-plugin list onto the report, the way it does
+    for a report it builds itself, so the provenance cannot disagree with the run. A failed project
+    build is listed among the run's failures, ahead of the mode's own. Unlike the
+    report a formalizing run builds, this one is the run's whole deliverable, so a failure to
+    produce or write it fails the run."""
+    with named_budget_or_nop("formalization"):
+        result = await impl.run(ctx)
+    report = result.report.model_copy(update={
+        "run_mode": run.run_mode.value, "active_plugins": ctx.active_plugins,
+    })
+    store.write_report(report)
+    build_failures = (
+        [f"project build: {ctx.project_build.error or 'failed'}"]
+        if ctx.project_build is not None and not ctx.project_build.succeeded else []
+    )
+    failures = [
+        *build_failures,
+        *(f"{f.unit.display_name}: {f.error}" for f in ctx.extraction_failures),
+        *result.failures,
+    ]
+    return CorePipelineResult(
+        len(ctx.batches) + len(ctx.extraction_failures),
+        sum(len(b.props) for b in ctx.batches),
+        [], failures, run.run_mode, mode_succeeded=result.succeeded,
+    )
 
 
 #: The driver-owned task id for the ranking step. Backend-agnostic, like the per-unit
