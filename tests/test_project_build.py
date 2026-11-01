@@ -327,7 +327,7 @@ async def test_an_external_mode_skips_harness_creation_and_builds_the_project(tm
     assert prepared.main.contract.harnesses == []
     assert run.tasks == []
 
-    support = await prepared.prepare_external_mode(run)  # type: ignore[arg-type]
+    support = await prepared.prepare_external_mode(run, build=True)  # type: ignore[arg-type]
     assert isinstance(support, ModeSupport)
     assert support.prover_options is opts
     assert support.build == ProjectBuild(
@@ -352,11 +352,28 @@ async def test_a_failed_build_becomes_a_failed_project_build(tmp_path, monkeypat
     monkeypatch.setattr(pipeline_mod, "run_autosetup_build", failing_build)
     run = _Run(tmp_path, RunMode.EVALUATE)
     prepared = await _backend(tmp_path, ProverOptions(app="evm")).prepare_system(_APP, run, None)  # type: ignore[arg-type]
-    support = await prepared.prepare_external_mode(run)  # type: ignore[arg-type]
+    support = await prepared.prepare_external_mode(run, build=True)  # type: ignore[arg-type]
 
     assert support.build is not None and not support.build.succeeded
     assert support.build.error == "AutoSetup build failed (exit 1)\nSource not found"
     assert support.build.compilation_config == {}
+
+
+@pytest.mark.asyncio
+async def test_no_build_runs_when_the_mode_needs_none(tmp_path, monkeypatch):
+    async def no_build(*_a, **_kw):
+        raise AssertionError("a mode that needs no build must not run AutoSetup")
+
+    monkeypatch.setattr(pipeline_mod, "run_autosetup_build", no_build)
+    monkeypatch.setattr(pipeline_mod, "build_project", no_build)
+    opts = ProverOptions(app="evm", server="staging")
+    run = _Run(tmp_path, RunMode.EVALUATE)
+    prepared = await _backend(tmp_path, opts).prepare_system(_APP, run, None)  # type: ignore[arg-type]
+    support = await prepared.prepare_external_mode(run, build=False)  # type: ignore[arg-type]
+
+    assert support == ModeSupport(build=None, prover_options=opts)
+    assert run.tasks == []
+    assert not (tmp_path / pipeline_mod.PROJECT_BUILD_LOG).exists()
 
 
 # ---------------------------------------------------------------------------

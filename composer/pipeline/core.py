@@ -28,8 +28,9 @@ objects, and never inspected by the driver.
 
 A run in an external mode (``evaluate``; see :mod:`composer.pipeline.modes`) takes the chain only
 as far as ``PreparedSystem`` and extraction. It never calls ``prepare_formalization``; it calls
-``PreparedSystem.prepare_external_mode`` (the project build) instead. The mode implementation
-receives the extracted batches and the build, and returns the report, which the driver writes.
+``PreparedSystem.prepare_external_mode`` (the project build) instead, and skips the build when
+the implementation declares ``needs_project_build = False``. The mode implementation receives the
+extracted batches and the build (or ``None``), and returns the report, which the driver writes.
 """
 
 import asyncio
@@ -270,11 +271,12 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         never mentions staging at all."""
         ...
 
-    async def prepare_external_mode(self, run: PipelineRun) -> ModeSupport:
-        """What a run in an external mode gets from the backend in place of
-        :meth:`prepare_formalization`: the project build and the backend's prover options (see
-        :class:`~composer.pipeline.modes.ModeSupport`). The driver runs it alongside extraction
-        and passes the result to the mode. A backend with nothing to build returns nothing."""
+    async def prepare_external_mode(self, run: PipelineRun, *, build: bool) -> ModeSupport:
+        """Prepare backend support for an external mode, alongside extraction.
+
+        With build=False, skip the project build but still provide prover options.
+        The default implementation returns empty support.
+        """
         return ModeSupport()
 
 
@@ -584,16 +586,15 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             )
         )
 
-    # An external mode works on the project's own verification artifacts, so the backend's
-    # pre-formalization setup (AutoSetup, summaries) is never started: it is the most
-    # expensive step of the front half, and its specs and summaries are not what the mode
-    # measures. The backend's ``prepare_external_mode`` runs instead, alongside extraction as
-    # ``prepare_formalization`` would: for the prover backend it builds the project, so the
-    # project's confs compile. A task group, so a failure in either cancels the other.
+    # External modes prepare backend support instead of formalization.
+    # Modes that build their own confs can skip the shared project build.
+    # Run alongside extraction; failure in either task cancels the other.
     if mode_impl is not None:
         async def _prepare_external_mode() -> ModeSupport:
             with named_budget_or_nop("formalization_preparation"):
-                return await prepared.prepare_external_mode(run)
+                return await prepared.prepare_external_mode(
+                    run, build=mode_impl.needs_project_build,
+                )
 
         async with asyncio.TaskGroup() as tg:
             support_task = tg.create_task(_prepare_external_mode())
