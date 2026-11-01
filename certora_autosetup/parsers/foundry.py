@@ -9,13 +9,23 @@ contain actual bytecode (logic contracts) vs interfaces/abstract contracts.
 import json
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, NamedTuple, Optional
 
 from certora_autosetup.build_systems.foundry import FoundryManager
 from certora_autosetup.parsers.base import ContractExtractor
 from certora_autosetup.setup.solidity_utils import find_all_library_files_and_names
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.types import ContractHandle
+
+
+class ArtifactContract(NamedTuple):
+    """A contract with bytecode, as one Foundry build artifact records it."""
+
+    name: str
+    # e.g. "0.8.33"; empty when the artifact records no compiler version.
+    compiler_version: str
+    # The EVM version forge compiled it for; None when the artifact records none.
+    evm_version: Optional[str]
 
 
 class FoundryContractExtractor(ContractExtractor):
@@ -31,11 +41,12 @@ class FoundryContractExtractor(ContractExtractor):
         """
         super().__init__(project_root, FoundryManager, profile=profile)
 
-    def build_source_path_to_contracts_map(self) -> Dict[str, List[tuple]]:
-        """Build source_path -> [(contract_name, compiler_version)] mapping from Foundry artifacts.
+    def build_source_path_to_contracts_map(self) -> Dict[str, List[ArtifactContract]]:
+        """Build source_path -> [ArtifactContract] mapping from Foundry artifacts.
 
-        Walks out/{File}.sol/*.json, reads each artifact's compilationTarget and compiler version,
-        and builds a dict mapping the full relative source path to (contract_name, version) tuples.
+        Walks out/{File}.sol/*.json, reads each artifact's compilationTarget, compiler version
+        and EVM version, and builds a dict mapping the full relative source path to the
+        contracts compiled from it.
         Applies the same filters as extract_logic_contracts_impl: non-empty bytecode only,
         excludes libraries/deps/tests.
         """
@@ -47,7 +58,7 @@ class FoundryContractExtractor(ContractExtractor):
         library_files = {Path(file).stem: names for file, names in library_files.items()}
         project_files = self.project_source_files()
 
-        source_path_map: Dict[str, List[tuple]] = {}
+        source_path_map: Dict[str, List[ArtifactContract]] = {}
 
         for subdir in sorted(artifacts_dir.iterdir()):
             if not subdir.is_dir() or not subdir.name.endswith(".sol"):
@@ -94,7 +105,7 @@ class FoundryContractExtractor(ContractExtractor):
                         continue
 
                     source_path_map.setdefault(source_path, []).append(
-                        (actual_contract_name, compiler_version)
+                        ArtifactContract(actual_contract_name, compiler_version, settings.get("evmVersion"))
                     )
 
                 except (json.JSONDecodeError, KeyError, Exception):
@@ -103,8 +114,8 @@ class FoundryContractExtractor(ContractExtractor):
         self.log(f"Built source-path contract map: {len(source_path_map)} source file(s)")
         for src_path, entries in source_path_map.items():
             stem = Path(src_path).stem
-            if any(name != stem for name, _ver in entries):
-                names = [name for name, _ver in entries]
+            if any(entry.name != stem for entry in entries):
+                names = [entry.name for entry in entries]
                 self.log(f"  {src_path} -> {names} (differs from filename stem '{stem}')")
 
         return source_path_map

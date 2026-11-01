@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import certora_autosetup.utils.contract_utils as cu
+from certora_autosetup.parsers.foundry import ArtifactContract
 from certora_autosetup.utils.contract_utils import auto_detect_contracts, resolve_contract_handles, with_contract_handle
 from certora_autosetup.utils.types import ContractHandle
 
@@ -70,7 +71,7 @@ def test_resolve_rebases_the_artifact_lookup(nested_project, monkeypatch) -> Non
     # lookup misses and the inferred name is silently left wrong.
     class _Extractor:
         def build_source_path_to_contracts_map(self):
-            return {"src/Widget.sol": [("TheRealName", "0.8.27")]}
+            return {"src/Widget.sol": [ArtifactContract("TheRealName", "0.8.27", None)]}
 
     monkeypatch.setattr(cu, "FoundryContractExtractor", lambda *a, **k: _Extractor())
 

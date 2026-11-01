@@ -38,6 +38,7 @@ from certora_autosetup.utils.solc_version_resolver import (
     pragma_admits,
     read_pragma_from_source_file,
     resolve_pragma_to_version,
+    solc_default_evm_version,
 )
 from certora_autosetup.utils.types import ContractHandle
 
@@ -296,9 +297,6 @@ class CompilationWorkaroundManager:
         # Installed compilers usable as a substitute, probed once (shutil.which +
         # subprocess per candidate) and reused across every pass of the loop.
         self._solc_candidates: Optional[List[Tuple[str, str]]] = None
-        # solc binary -> its default EVM version (None when the binary could not
-        # be run), probed once per binary.
-        self._default_evm_versions: Dict[str, Optional[str]] = {}
         # consumer -> [(lib_name, lib_path), ...] in insertion order. A second
         # firing for the same consumer (different missing library) regenerates the
         # consumer's harness covering every library it has needed so far.
@@ -1533,7 +1531,7 @@ class CompilationWorkaroundManager:
             if c.contract_name in emap:
                 continue
             solc_binary = cmap[c.contract_name]
-            default_evm = self._solc_default_evm_version(solc_binary)
+            default_evm = solc_default_evm_version(solc_binary)
             if default_evm is None:
                 self.log(
                     f"Cannot read the default EVM version of {solc_binary}; "
@@ -1839,39 +1837,6 @@ class CompilationWorkaroundManager:
         if solc_name.startswith("solc") and len(solc_name) > 4 and solc_name[4].isdigit():
             return f"0.{solc_name[4:]}"  # "solc8.34" -> "0.8.34"
         return None
-
-    def _solc_default_evm_version(self, solc_binary: str) -> Optional[str]:
-        """The default EVM version of ``solc_binary``, or None when the binary
-        cannot be run.
-
-        Read from the metadata of an empty contract compiled with no evmVersion
-        setting: solc records the version it used there. Every solc from 0.4.x on
-        does this, while the ``--help`` text that also names the default changed
-        format over the releases.
-        """
-        if solc_binary in self._default_evm_versions:
-            return self._default_evm_versions[solc_binary]
-        request = {
-            "language": "Solidity",
-            "sources": {"probe.sol": {"content": "contract Probe {}"}},
-            "settings": {"outputSelection": {"*": {"*": ["metadata"]}}},
-        }
-        evm_version: Optional[str] = None
-        try:
-            result = subprocess.run(
-                [solc_binary, "--standard-json"],
-                input=json.dumps(request),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            )
-            metadata = json.loads(json.loads(result.stdout)["contracts"]["probe.sol"]["Probe"]["metadata"])
-            evm_version = metadata["settings"]["evmVersion"]
-        except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
-            pass
-        self._default_evm_versions[solc_binary] = evm_version
-        return evm_version
 
     @staticmethod
     def _get_plain_solc_version() -> Optional[str]:

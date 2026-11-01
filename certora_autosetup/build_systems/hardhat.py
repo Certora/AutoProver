@@ -6,15 +6,19 @@ Parallel to FoundryManager but adapted for Hardhat's JavaScript/TypeScript confi
 """
 
 import json
+import os
 import subprocess
 import sys
 from typing import Dict, Any, List, Optional
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from certora_autosetup.build_systems.base import BuildSystemConfig
 from certora_autosetup.build_systems.config_files import HARDHAT_CONFIG_FILENAMES
 from certora_autosetup.build_systems.manager import BuildSystemManager
+from certora_autosetup.utils.logger import logger
+from certora_autosetup.utils.solc_version_resolver import assign_evm_versions
+from certora_autosetup.utils.types import ContractHandle
 
 
 @dataclass
@@ -30,6 +34,10 @@ class HardhatConfig(BuildSystemConfig):
 
     # Configuration type
     config_type: str = "javascript"  # "javascript" or "typescript"
+
+    # evmVersion of each `solidity.overrides` entry that sets one, keyed by the
+    # source path relative to the directory certoraRun runs from.
+    evm_version_overrides: Dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         """Initialize default values for mutable fields."""
@@ -68,6 +76,25 @@ class HardhatConfig(BuildSystemConfig):
     def get_artifact_directory(self) -> str:
         """Return Hardhat artifact directory."""
         return self.artifacts or "artifacts"
+
+    def apply_per_contract_settings(
+        self,
+        contracts: List[ContractHandle],
+        config_dict: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Give the contracts named by Hardhat `overrides` the evmVersion set there.
+
+        The other contracts keep the conf's EVM version (see assign_evm_versions).
+        """
+        known = {
+            c.contract_name: self.evm_version_overrides[os.path.normpath(c.source_file)]
+            for c in contracts
+            if os.path.normpath(c.source_file) in self.evm_version_overrides
+        }
+        if known:
+            assign_evm_versions(config_dict, contracts, known)
+            logger.log(f"Applied Hardhat overrides: evmVersion for {sorted(known)}", "INFO", "HardhatConfig")
+        return config_dict
 
 
 class HardhatManager(BuildSystemManager):
@@ -276,6 +303,7 @@ class HardhatManager(BuildSystemManager):
             )
             solidity = {}
 
+        evm_version_overrides: Dict[str, str] = {}
         # Solidity can be a string (version) or object (settings)
         if isinstance(solidity, str):
             solc_version = solidity
@@ -315,6 +343,7 @@ class HardhatManager(BuildSystemManager):
             optimizer_runs = optimizer_settings.get("runs", 200)
             via_ir = settings.get("viaIR", False)
             evm_version = settings.get("evmVersion")
+            evm_version_overrides = self._evm_version_overrides(solidity.get("overrides"))
         else:
             solc_version = None
             optimizer = False
@@ -352,8 +381,28 @@ class HardhatManager(BuildSystemManager):
             artifacts=artifacts,
             cache=cache,
             paths=paths,
-            config_type=config_type
+            config_type=config_type,
+            evm_version_overrides=evm_version_overrides,
         )
+
+    def _evm_version_overrides(self, overrides: object) -> Dict[str, str]:
+        """evmVersion of each `solidity.overrides` entry that sets one.
+
+        Hardhat keys an override by the source path relative to its project root.
+        The result is keyed relative to the directory certoraRun runs from, which
+        is how contract source paths are written in the conf.
+        """
+        if not isinstance(overrides, dict):
+            return {}
+        result: Dict[str, str] = {}
+        for source_name, override in overrides.items():
+            if not isinstance(override, dict):
+                continue
+            evm_version = override.get("settings", {}).get("evmVersion")
+            if evm_version:
+                source_path = os.path.relpath(self.project_root / source_name, self.run_root)
+                result[os.path.normpath(source_path)] = evm_version
+        return result
 
     def _get_default_config(self, config_type: str = "javascript") -> HardhatConfig:
         """
