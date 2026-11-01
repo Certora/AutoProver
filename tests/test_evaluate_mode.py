@@ -268,6 +268,7 @@ class _Prepared:
     def __init__(self, build: ProjectBuild | None = None) -> None:
         self.prepared = 0
         self.external = 0
+        self.build_asked: list[bool] = []
         self._build = build if build is not None else ProjectBuild(
             succeeded=True, compilation_config={"solc": "solc8.28"}, solc_versions=["solc8.28"],
         )
@@ -276,9 +277,10 @@ class _Prepared:
         self.prepared += 1
         raise AssertionError("an external mode must never start prepare_formalization")
 
-    async def prepare_external_mode(self, _run):
+    async def prepare_external_mode(self, _run, *, build: bool):
         self.external += 1
-        return ModeSupport(build=self._build, prover_options=_OPTS)
+        self.build_asked.append(build)
+        return ModeSupport(build=self._build if build else None, prover_options=_OPTS)
 
 
 class _Backend:
@@ -370,6 +372,8 @@ async def test_evaluate_hands_the_batches_to_the_mode_and_writes_its_report(monk
 
     assert backend.prepared.prepared == 0
     assert backend.prepared.external == 1
+    # A mode builds the project unless it declares otherwise.
+    assert backend.prepared.build_asked == [True]
     assert events == ["constructed", "enter", "exit"]
 
     [ctx] = impl.seen
@@ -397,6 +401,25 @@ async def test_evaluate_hands_the_batches_to_the_mode_and_writes_its_report(monk
     assert result.outcomes == []
     assert result.failures == ["farms: inference broke"]
     assert result.mode_succeeded is True and not result.all_failed
+
+
+@pytest.mark.asyncio
+async def test_a_mode_that_needs_no_build_gets_none_and_the_prover_options(monkeypatch):
+    class _NoBuild(_Impl):
+        needs_project_build = False
+
+    impl = _NoBuild()
+    _install(monkeypatch, _EntryPoint("evaluate", _loader_for(impl, [])))
+    _patch_front_half(monkeypatch, {"deposits": ["a"]})
+
+    backend = _Backend()
+    result = await run_pipeline(backend, _Run(RunMode.EVALUATE), max_bug_rounds=1, ecosystem=EVM)  # type: ignore[arg-type]
+
+    assert backend.prepared.build_asked == [False]
+    [ctx] = impl.seen
+    assert ctx.project_build is None
+    assert ctx.prover_options is _OPTS
+    assert result.failures == []
 
 
 @pytest.mark.asyncio
@@ -477,8 +500,9 @@ async def test_a_backend_with_nothing_to_build_hands_over_nothing():
         async def prepare_formalization(self, run):  # pragma: no cover - never called
             raise AssertionError
 
-    support = await _Plain(main="m").prepare_external_mode(_Run(RunMode.EVALUATE))  # type: ignore[arg-type]
-    assert support == ModeSupport()
+    for build in (True, False):
+        support = await _Plain(main="m").prepare_external_mode(_Run(RunMode.EVALUATE), build=build)  # type: ignore[arg-type]
+        assert support == ModeSupport()
 
 
 def test_the_failure_headline_fits_the_mode():

@@ -10,7 +10,8 @@ prover-specific pieces as the three phase objects:
 * ``ProverPrepared.prepare_formalization`` — AutoSetup, then the custom summaries
   that build on its config. Returns a ``ProverRunner``.
 * ``ExternalModePrepared`` — what ``prepare_system`` returns for an external run mode: no harness
-  creation, and the project build (AutoSetup's build step) in ``prepare_external_mode``.
+  creation, and the project build (AutoSetup's build step) in ``prepare_external_mode``, unless
+  the mode declares it needs none.
 * ``ProverRunner`` — per-batch CVL generation (``batch_cvl_generation``) and
   prover-run-backed verdicts (``make_prover_fetcher``).
 
@@ -244,12 +245,14 @@ class ExternalModePrepared(PreparedSystem[GeneratedCVL, ContractComponentInstanc
         raise RuntimeError("a run in an external mode does not formalize")
 
     @override
-    async def prepare_external_mode(self, run: PipelineRun) -> ModeSupport:
-        build = await run.runner(
+    async def prepare_external_mode(self, run: PipelineRun, *, build: bool) -> ModeSupport:
+        if not build:
+            return ModeSupport(prover_options=self._prover_opts)
+        project_build = await run.runner(
             TaskInfo(PROJECT_BUILD_TASK_ID, "Project Build", AutoProvePhase.AUTOSETUP),
             lambda: build_project(run.source, self._analyzed, self._prover_opts),
         )
-        return ModeSupport(build=build, prover_options=self._prover_opts)
+        return ModeSupport(build=project_build, prover_options=self._prover_opts)
 
 
 #: Where the project build's output goes, relative to the project root.
