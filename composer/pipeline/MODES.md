@@ -62,14 +62,20 @@ failed `ProjectBuild` and decides what it means. A backend with no build step
 The build is not cached. Its import fixes edit project sources, so a cache
 hit would leave the tree uncompilable.
 
+### Property inference
+
+In an `evaluate` run, every inference round gets a notice about the specs that
+the project's authors wrote. The agent's source tools can read those specs.
+The notice says that they can be incomplete or wrong. It asks for a complete
+property list, not a list copied from the specs. The text is
+`EXISTING_SPECS_NOTICE` in `composer/spec/prop_inference.py`.
+
 ### Caching
 
-The extraction cache keys do not include the run mode. A component's key
-includes the harnessed application, and an external-mode run lifts the
-analysis with no harnesses. So an external-mode run replays a `comprehensive`
-run's inference at no cost when that run's harness creation generated no
-harnesses, and the reverse is also true. When the `comprehensive` run did
-generate harnesses, the keys differ and inference runs again.
+The notice changes the prompt, so the bug-analysis key of an `evaluate` run
+has an `-es` segment. An `evaluate` run thus never replays the inference of a
+`comprehensive` or `prioritized` run, and the reverse is also true. The other
+extraction keys do not include the run mode.
 
 ## Shipping a mode
 

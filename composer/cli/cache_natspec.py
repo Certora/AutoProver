@@ -141,27 +141,32 @@ async def build_component_tree(
     comp,
     *,
     with_refinement: bool,
+    max_bug_rounds: int | None,
 ):
     async with node_for(contract_ctx, key, comp.name) as feat_ctx:
         # Bug analysis cache: aggregate (_BugAnalysisCache.items) → agent
         # result (_AgentResult) → per-round (_AgentRoundWithHistory).
-        bug_key = BUG_ANALYSIS_KEY(None, with_refinement=with_refinement)
+        bug_key = BUG_ANALYSIS_KEY(
+            None, with_refinement=with_refinement, max_rounds=max_bug_rounds,
+        )
         async with node_for(feat_ctx, bug_key, "Bug Analysis", _BugAnalysisCache) as bug_ctx:
             async with node_for(
                 bug_ctx, AGENT_RESULT_KEY, "Agent result", _AgentResult,
             ) as agent_ctx:
                 # Probe rounds 0..N until first miss. Round indices are dense
-                # (no holes) by construction in _run_bug_analysis_inner.
-                i = 0
+                # (no holes) by construction in _run_bug_analysis_inner, and each
+                # round's key is derived from the rounds before it.
+                prior: list[_AgentRoundWithHistory] = []
                 while True:
+                    i = len(prior)
                     round_node = await leaf(
-                        agent_ctx, AGENT_ROUND_KEY(i),
+                        agent_ctx, AGENT_ROUND_KEY(i, prior),
                         f"Round {i + 1}", _AgentRoundWithHistory,
                     )
                     if round_node.value is None:
                         break
                     yield round_node
-                    i += 1
+                    prior.append(round_node.value)
 
         # If bug analysis is cached, its items drive the per-batch cache key.
         bug_cache = await feat_ctx.child(bug_key).cache_get(_BugAnalysisCache)
@@ -183,12 +188,14 @@ async def build_contract_tree(
     summ: NatspecApplication,
     *,
     with_refinement: bool,
+    max_bug_rounds: int | None,
 ):
     async with node_for(contract_ctx, PROPERTIES_KEY, "properties") as prop_ctx:
         for comp in contract.components:
             comp_key = _component_cache_key(comp, summ.application_type)
             async for t in build_component_tree(
                 prop_ctx, comp_key, comp, with_refinement=with_refinement,
+                max_bug_rounds=max_bug_rounds,
             ):
                 yield t
 
@@ -199,6 +206,7 @@ async def build_tree_inner(
     doc_digest: str,
     from_source: bool,
     interactive: bool,
+    max_bug_rounds: int | None,
 ):
     # Source analysis: which Application subclass was used is determined by
     # whether the original pipeline run passed --source-root. Caller tells us.
@@ -321,6 +329,7 @@ async def build_tree_inner(
         async with node_for(root_ctx, contract_key, f"Contract: {c.name}") as contract_ctx:
             async for t in build_contract_tree(
                 contract_ctx, c, summary, with_refinement=interactive,
+                max_bug_rounds=max_bug_rounds,
             ):
                 yield t
 
@@ -332,11 +341,12 @@ async def build_tree(
     *,
     from_source: bool,
     interactive: bool,
+    max_bug_rounds: int | None,
 ) -> CacheNode[NatSpecCachedValue]:
     """Build the NatSpec pipeline cache tree by reading the store."""
     return await collect_tree(
         "root", root_ctx,
-        build_tree_inner(root_ctx, store, doc_digest, from_source, interactive),
+        build_tree_inner(root_ctx, store, doc_digest, from_source, interactive, max_bug_rounds),
     )
 
 
@@ -522,6 +532,7 @@ async def _async_main(args: argparse.Namespace) -> int:
                 root_ctx, store, tags.doc_digest,
                 from_source=tags.from_source,
                 interactive=tags.interactive,
+                max_bug_rounds=tags.max_bug_rounds,
             )
 
         app = CacheExplorerApp(

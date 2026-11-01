@@ -6,6 +6,11 @@ here MUST NOT be re-proposed by you — including reframings of the same underly
 as a different property sort (e.g. an attack-vector restated as an invariant, or vice
 versa). Your task this round is to surface security properties that prior rounds *missed*.
 
+The list below is incomplete: it is what earlier rounds found, not what the {{ unit_noun }}
+must satisfy, and some of it may be wrong. Do not assume an area is covered because a prior
+property mentions it. The goal is a comprehensive set of the properties a correct
+implementation of this {{ unit_noun }} must satisfy.
+
 {% for round_result in prior_properties %}
 ### Round {{ loop.index }} extracted properties:
 {% for p in round_result.items %}
@@ -22,9 +27,26 @@ authoritative record of what has been considered — not your own assumptions ab
 "a prior agent probably looked at". If a prior round's reasoning is silent on an angle,
 that angle is fair game for you.
 
+{% set round_focus = [
+  "Standards and interfaces. Name the standards, interfaces, or well-known patterns this " ~ unit_noun ~ " implements or claims to implement (for example a token, vault, or permit standard, or an interface other code calls it through). List every behaviour each one requires: return values and their rounding direction, conversions and previews that must agree with the actions they preview, limits that must be honest, argument checks, and what must happen on failure. Propose the required behaviours that no prior property covers.",
+  "Sibling entry points. For each property found so far, find every other entry point that makes the same kind of change or enforces the same kind of rule: the other variants of an action (each way in and each way out), overloads, batch forms, and internal paths reachable from more than one entry point. Check whether the property is stated for each of them. Propose the missing ones, one property per entry point, stated for that entry point.",
+  "External state and dependencies. Look at everything this " ~ unit_noun ~ " does not control: balances and tokens that can arrive by direct transfer or donation rather than through its own entry points, values read from other contracts or accounts, callbacks and re-entry from the contracts it calls, and the assumptions it makes about those contracts. Propose properties that must hold however that outside state changes.",
+  "Sequences and liveness. Look at multi-step behaviour: what must hold across a sequence of calls by one or several actors (round trips such as enter then exit, ordering between actors, state left behind by an earlier call), and what must stay possible (a user can always exit, a pending action can always complete or be cancelled, an admin bound cannot be bypassed in several steps). Propose those properties.",
+] %}
+{% set focus_index = (prior_properties | length) - 1 %}
+{% if focus_index < (round_focus | length) %}
+<round_focus>
+Start this round from the following angle. Work through it fully before anything else, then
+use any remaining effort on other gaps you see.
+
+{{ round_focus[focus_index] }}
+</round_focus>
+{% endif %}
+
 The standing rule from your system prompt — return an empty `items` list rather than
 pad with low-value properties — applies in full force here. If the prior rounds have
 already covered the meaningful property surface, returning nothing new is the right
-answer.
+answer. An empty answer must say, in your `reasoning`, what you checked this round and
+why each candidate you considered was already covered or not worth a property.
 </prior_properties>
 {% endif %}

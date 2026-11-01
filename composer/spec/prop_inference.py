@@ -2,21 +2,29 @@
 Property generation agent: extracts security properties from application components.
 
 Parameterized by source availability via AnalysisInput tuple.
+
+Inference runs in rounds. Each round is a fresh agent run that sees every property the earlier
+rounds kept, with their reasoning, and is asked for what they missed; from the second round on
+it is also given one angle to start from (``shared/prior_properties.j2``). A light-model call
+then drops the round's restatements of earlier properties (:func:`_drop_restatements`). The loop
+stops at the first round that keeps nothing, at ``max_rounds``, or under budget pressure.
 """
 
+import logging
 from typing import Any, Callable, NotRequired, Sequence, Literal, TypedDict
 from pydantic import BaseModel, Field
 from dataclasses import dataclass
 
 
-from langchain_core.messages import AnyMessage
+from langchain_core.messages import AnyMessage, HumanMessage, SystemMessage
 
 from graphcore.graph import MessagesState, FlowInput, MessagePayloadType, RawMessageType, PromptInput
 
 from composer.input.files import Document
+from composer.llm.structured import with_structured_output
 from composer.llm.types import CacheLevel
 from composer.spec.gen_types import TypedTemplate
-from composer.spec.util import combine_digests
+from composer.spec.util import combine_digests, string_hash
 from composer.spec.context import WorkflowContext, CacheKey, ComponentGroup
 from composer.spec.key_family import KeyFamily
 from composer.spec.gen_types import TypedTemplate
@@ -29,6 +37,12 @@ from composer.io.conversation import ConversationContextProvider
 from composer.diagnostics.budget import budget_monitor, budget_pressure
 from composer.templates.loader import load_jinja_template
 from composer.spec.prop_refinement import user_property_refinement
+
+_log = logging.getLogger(__name__)
+
+#: How many inference rounds a component gets unless the caller says otherwise
+#: (``--max-bug-rounds``). Each productive round costs about as much as the first one.
+DEFAULT_MAX_BUG_ROUNDS = 5
 
 class _BugAnalysisCache(BaseModel):
     items: list[PropertyFormulation] = Field(description="The security properties you have extracted about the component. Do NOT include any properties " \
@@ -109,12 +123,33 @@ def render_evm_property_prompt(
 
 
 class _AgentRoundWithHistory(_AgentRoundResult):
+    """One round as cached. ``items`` holds only the properties that survived
+    :func:`_drop_restatements`; ``restated`` names the ones it dropped, so a replay
+    needs no further LLM call."""
     agent_conversation: list[AnyMessage]
+    restated: list[str] = Field(default_factory=list)
+
+
+#: Prepended to every round's prompt when the project already carries specifications written
+#: by its authors (an evaluate-mode run). The inference agent can read them with its source
+#: tools, so it is told how far to trust them.
+EXISTING_SPECS_NOTICE = (
+    "This project already has formal specifications (CVL specs and Prover confs, usually under "
+    "certora/) written by its authors, and your source tools can read them. Treat them as "
+    "unchecked work by someone else. They may be incomplete, and some rules may be wrong: a rule "
+    "may check something other than what its name says, or assume away the behaviour that "
+    "matters. Do not take your properties from them, and do not limit your list to what they "
+    "check. Your goal is a comprehensive set of the properties a correct implementation of this "
+    "component must satisfy. The list will be used to find what those specifications miss.\n\n"
+)
+
 
 def _bug_analysis_key(
     threat_model_digest: str | None,
     with_refinement: bool,
     extra_context_digest: str | None = None,
+    max_rounds: int | None = None,
+    existing_specs: bool = False,
 ) -> str:
     base_key = "bug_analysis"
     if with_refinement:
@@ -123,20 +158,34 @@ def _bug_analysis_key(
         base_key += "-tm-" + threat_model_digest
     if extra_context_digest is not None:
         base_key += "-xc-" + extra_context_digest
+    if existing_specs:
+        base_key += "-es"
+    if max_rounds is not None:
+        base_key += f"-r{max_rounds}"
     return base_key
 
 #: Parameterized on the *digests* of the documents that fed the prompt (not the
 #: documents) so a recorded digest — e.g. from a run's cache tags — can rebuild the key.
 #: Each input contributes a suffix only when present, so a run with neither document
-#: keeps the bare ``bug_analysis`` key.
+#: keeps the bare ``bug_analysis`` key. The driver always passes ``max_rounds``: the cached
+#: list is the union of up to that many rounds, so a run with a different limit must not
+#: replay it. ``None`` addresses records written before the limit was part of the key.
 BUG_ANALYSIS_KEY = KeyFamily(ComponentGroup, _BugAnalysisCache, _bug_analysis_key)
 
 class _AgentResult(_BugAnalysisCache):
     final_history: list[AnyMessage]
 
-def _agent_round_key(i: int) -> str:
-    return f"round-{i}"
+def _agent_round_key(i: int, prior: Sequence[_AgentRoundResult] = ()) -> str:
+    if not prior:
+        return f"round-{i}"
+    fed = [
+        string_hash("|".join([*(p.model_dump_json() for p in r.items), r.reasoning]))
+        for r in prior
+    ]
+    return f"round-{i}-{string_hash('|'.join(fed))}"
 
+#: One round, keyed by its index and by the earlier rounds' kept properties and reasoning,
+#: which is what its prompt is built from. Round 0 has no earlier rounds and keeps ``round-0``.
 AGENT_ROUND_KEY = KeyFamily(_AgentResult, _AgentRoundWithHistory, _agent_round_key)
 
 AGENT_RESULT_KEY = CacheKey[_BugAnalysisCache, _AgentResult]("agent_bug_analysis")
@@ -260,6 +309,69 @@ def get_initial_prompt_builder[U: FeatureUnit](
 
     return renderer
 
+class _Restatement(BaseModel):
+    title: str = Field(description="The title of the new property, copied exactly from <new_properties>.")
+    restates: str = Field(
+        description="The title of the earlier property it restates, copied exactly from <earlier_properties>."
+    )
+
+
+class _RoundRestatements(BaseModel):
+    restatements: list[_Restatement] = Field(
+        description="One entry for every new property that restates an earlier one. Empty if none does."
+    )
+
+
+class PropertyDedupPromptParams(TypedDict):
+    earlier: list[PropertyFormulation]
+    fresh: list[PropertyFormulation]
+
+
+PROPERTY_DEDUP_TEMPLATE = TypedTemplate[PropertyDedupPromptParams]("property_dedup_prompt.j2")
+
+
+async def _drop_restatements(
+    env: ServiceHost,
+    prev: Sequence[_AgentRoundResult],
+    fresh: list[PropertyFormulation],
+    thread_id: str,
+) -> tuple[list[PropertyFormulation], list[str]]:
+    """Split ``fresh`` into the properties that are new and the titles of those that restate a
+    property of ``prev``. This is what makes a round count as productive: the title validator
+    only stops exact repeats, and a round that rewords earlier properties would otherwise keep
+    the loop going to ``max_rounds``.
+
+    One structured call on the light model. An entry naming a title that is not in ``fresh``,
+    or an earlier property that does not exist, removes nothing: a wrong removal loses a property
+    for good, a missed one costs at most one more round. ``thread_id`` tags the call in the run's
+    usage record, which is otherwise unable to say which code path made it."""
+    earlier = [p for r in prev for p in r.items]
+    if not earlier or not fresh:
+        return fresh, []
+    prompt = PROPERTY_DEDUP_TEMPLATE.bind({
+        "earlier": earlier, "fresh": fresh,
+    }).render_to(load_jinja_template)
+    bound = with_structured_output(env.llm_lite(), _RoundRestatements)
+    result = await bound.ainvoke(
+        [SystemMessage(load_jinja_template("property_dedup_system.j2")), HumanMessage(prompt)],
+        config={"metadata": {"thread_id": thread_id}},
+    )
+    assert isinstance(result, _RoundRestatements)
+
+    fresh_titles = {p.title for p in fresh}
+    earlier_titles = {p.title for p in earlier}
+    dropped: set[str] = set()
+    for r in result.restatements:
+        if r.title in fresh_titles and r.restates in earlier_titles:
+            dropped.add(r.title)
+        else:
+            _log.warning(
+                "restatement check named unknown properties (%r restates %r); ignored",
+                r.title, r.restates,
+            )
+    return [p for p in fresh if p.title not in dropped], [p.title for p in fresh if p.title in dropped]
+
+
 async def _run_bug_round(
     env: ServiceHost,
     ctx: WorkflowContext[_AgentResult],
@@ -268,7 +380,7 @@ async def _run_bug_round(
     prev: list[_AgentRoundResult],
     system_prompt: str
 ) -> _AgentRoundWithHistory:
-    round_ctx = ctx.child(AGENT_ROUND_KEY(round))
+    round_ctx = ctx.child(AGENT_ROUND_KEY(round, prev))
     if (cached := await round_ctx.cache_get(_AgentRoundWithHistory)) is not None:
         return cached
 
@@ -313,7 +425,13 @@ async def _run_bug_round(
 
     result: _AgentRoundResult = r["result"]
 
-    to_ret = _AgentRoundWithHistory(items=result.items, agent_conversation=r["messages"], reasoning=result.reasoning)
+    kept, restated = await _drop_restatements(
+        env, prev, result.items, f"{round_ctx.thread_id}-dedup"
+    )
+    to_ret = _AgentRoundWithHistory(
+        items=kept, agent_conversation=r["messages"], reasoning=result.reasoning,
+        restated=restated,
+    )
 
     await round_ctx.cache_put(to_ret)
     return to_ret
@@ -349,10 +467,22 @@ async def _run_bug_analysis_inner[U: FeatureUnit](
         # its first monitor tick — don't bother launching it. Round 0 always
         # runs (the loop's invariants require at least one round's history).
         if i > 0 and budget_pressure():
+            _log.info(
+                "%s: property inference stopped before round %d/%d under budget pressure",
+                component.display_name, i + 1, max_rounds,
+            )
             break
         next_result = await _run_bug_round(
             env, agent_component_analysis, i, initial_prompt_builder, prev_rounds, system_prompt
         )
+        _log.info(
+            "%s: property inference round %d/%d found %d new propert(ies)%s",
+            component.display_name, i + 1, max_rounds, len(next_result.items),
+            f"; dropped {len(next_result.restated)} restating earlier ones"
+            if next_result.restated else "",
+        )
+        # A round that keeps nothing ends the loop, whether it proposed nothing or
+        # only restated earlier rounds.
         if len(next_result.items) == 0:
             assert last_round_convo is not None
             break
@@ -378,14 +508,20 @@ async def run_property_inference[U: FeatureUnit](
     threat_model: Document | None = None,
     extra_context: Sequence[Document] = (),
     refinement: ConversationContextProvider | None = None,
-    max_rounds: int = 3,
+    max_rounds: int = DEFAULT_MAX_BUG_ROUNDS,
     *,
     backend_guidance: str,
     system_template: TypedTemplate[PropertySystemPromptParams],
     render_initial: InitialPromptRenderer[U],
+    existing_specs: bool = False,
 ) -> list[PropertyFormulation]:
     """
-    Extract security properties for a component.
+    Extract security properties for a component, in up to ``max_rounds`` rounds (see the
+    module docstring for when the loop stops).
+
+    ``existing_specs`` says the project already carries specifications written by its authors
+    (an evaluate-mode run); every round is then told they may be incomplete or wrong
+    (:data:`EXISTING_SPECS_NOTICE`).
 
     ``backend_guidance`` is inlined verbatim into the property-analysis *system* prompt as the
     "what's expressible in your downstream verification tool" filter — the Certora Prover, foundry
@@ -403,6 +539,8 @@ async def run_property_inference[U: FeatureUnit](
         threat_model.to_digest() if threat_model is not None else None,
         refinement is not None,
         combine_digests([d.to_digest() for d in extra_context]),
+        max_rounds=max_rounds,
+        existing_specs=existing_specs,
     ))
     if (cached := await component_analysis.cache_get(_BugAnalysisCache)) is not None:
         return cached.items
@@ -410,6 +548,10 @@ async def run_property_inference[U: FeatureUnit](
     actual_extra_input = [
         *extra_input
     ]
+    if existing_specs:
+        actual_extra_input.append(PropertyGenerationInput(
+            "certora:existing-specs", "generic", "always", EXISTING_SPECS_NOTICE,
+        ))
     def to_cache_level(s: bool) -> CacheLevel:
         if s:
             return CacheLevel.SHORT
@@ -422,8 +564,9 @@ async def run_property_inference[U: FeatureUnit](
                 "In addition, a coworker has already written a 'threat model' for this application, which may include vulnerabilities/issues that "
                 "are common in this type of application. This threat model is written for the entire application (not just the component you are analyzing) "
                 "so some of the issues/vulnerabilities/attacks may not be relevant to your analysis. Do *NOT* overfit to this threat model; carefully "
-                "analyze what content of the provided threat model is worth considering vs out of scope. Further, this threat model is just a starting point, "
-                "you should ALSO look for threats *not* mentioned in this document.\n\n",
+                "analyze what content of the provided threat model is worth considering vs out of scope. Further, this threat model is just a starting point: "
+                "it may be incomplete, and some of it may be wrong. You should ALSO look for threats *not* mentioned in this document; the goal is a "
+                "comprehensive set of properties for the component.\n\n",
                 threat_model.to_dict(cache_level=to_cache_level(cache))
             ]
         ))

@@ -196,7 +196,12 @@ README's Phase 0–4:
   generates CVL summaries for ERC20s and external interfaces.
 - **Per-component property extraction** ([spec/prop_inference.py](composer/spec/prop_inference.py))
   — multi-round agent producing `PropertyFormulation`s (attack vectors, safety properties,
-  invariants), optionally refined interactively or against a threat model.
+  invariants), optionally refined interactively or against a threat model. Each round sees all
+  properties found so far and looks for the missing ones. From the second round on, a round
+  starts from one angle: standards, sibling entry points, outside state, or call sequences and
+  liveness. A light-model call then removes the round's restatements of earlier properties.
+  The loop stops at the first round that adds nothing, at `--max-bug-rounds` (default 5), or
+  under budget pressure.
 - **CVL generation** ([spec/cvl_generation.py](composer/spec/cvl_generation.py),
   [spec/source/author.py](composer/spec/source/author.py)) — the core feedback loop. The agent
   authors CVL with `put_cvl`/`edit_cvl` (type-checked on every write), runs the prover via a
