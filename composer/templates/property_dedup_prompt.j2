@@ -1,0 +1,13 @@
+<earlier_properties>
+{% for p in earlier %}
+- [{{ p.sort }}] `{{ p.title }}`: {{ p.description }}
+{% endfor %}
+</earlier_properties>
+
+<new_properties>
+{% for p in fresh %}
+- [{{ p.sort }}] `{{ p.title }}`: {{ p.description }}
+{% endfor %}
+</new_properties>
+
+List every new property that restates an earlier one.

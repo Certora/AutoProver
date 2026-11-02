@@ -56,6 +56,7 @@ from composer.rustapp.result import RustFormalResult
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH
 from composer.spec.context import SourceCode, SourceFields, WorkflowContext
+from composer.spec.prop_inference import DEFAULT_MAX_BUG_ROUNDS
 from composer.spec.service_host import ModelProvider, PureServiceHost, ServiceHost
 from composer.spec.source.design_doc_finder import (
     DESIGN_DOC_DISCOVERY_TASK_ID,
@@ -202,7 +203,7 @@ def build_arg_parser(app: RustApplication) -> argparse.ArgumentParser:
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
     parser.add_argument("--interactive", action="store_true", help="Interactively refine extracted properties")
-    parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
+    parser.add_argument("--max-bug-rounds", type=int, default=DEFAULT_MAX_BUG_ROUNDS, help=f"Max property-inference rounds per component; a round runs only if the previous one found a new property (default: {DEFAULT_MAX_BUG_ROUNDS})")
     _add_declared_args(parser, app.descriptor.args)
     return parser
 
