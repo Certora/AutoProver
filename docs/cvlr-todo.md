@@ -402,6 +402,201 @@ another) needs `verify_rules` to take a rule list, and two things fixed with it:
 agreed it can come in a later PR. Postponed on 2026-10-23 until after P3b2, which is already larger
 than planned.
 
+**U35. A confined run downloads the dependency graph up to three times.** Each step that reads the
+graph has its own cargo home, derived from its working directory (`sandbox_cargo_home`), and every
+one starts cold:
+
+1. Package selection (`select_package` in [entry.py](../composer/spec/cvlr/entry.py)) reads into a
+   `TemporaryDirectory` that is deleted right after.
+2. Preflight's metadata read, warm step and compile gate read into
+   `<project>/.certora_internal/sandbox/cargo`. It survives in the input checkout, so only a rerun
+   on the same checkout reuses it.
+3. The shared build tree (`pipeline.py`, `session.warm()`) reads into
+   `<run work dir>/build/.certora_internal/sandbox/cargo`, deleted with the work directory.
+
+On the lending benchmark that is about 1.5 GB and 7 minutes per read, so a run on a fresh checkout
+pays roughly 20 minutes before any unit is authored, and a resumed one pays reads 1 and 3 again.
+Two fixes, in order:
+
+* **One cargo home per run.** Create it before package selection and pass it to all three, as a
+  `CargoSession` parameter and the metadata reads' `cargo_home`, rather than deriving it from each
+  working directory. The confined build then needs it among its writable paths, since it no longer
+  sits under the build's working directory. The trust argument is unchanged: it is still one run's
+  private cache, written by that run's own builds, which can already write to read 2's home.
+* **A shared cross-run cache**, the optimization `sandbox_cargo_home`'s docstring defers
+  ([command-sandbox.md](./command-sandbox.md) §11 item 5). Seed each run's home with *copies*, not
+  hardlinks, of what cargo verifies: the `.crate` archives in `registry/cache` (checked against
+  `Cargo.lock`'s checksums) and the git object databases in `git/db`. Never share `registry/src` or
+  `git/checkouts`, the unpacked trees cargo trusts as they are, which is where a build script could
+  poison a later run. Fill the shared cache only from an unconfined fetch in a separate home, before
+  any confined build runs. Check first what cargo actually keeps in `git/db`: the benchmark's home
+  held 856 KB there against 665 MB of checkouts, and if that is typical the git sources are not in
+  the shareable part.
+
+U36 to U40 come from the second lending-benchmark run ([klend-benchmark.md](./klend-benchmark.md),
+run 2b). Each is general; none tells the author anything about that program.
+
+**~~U36. A finding's pre-state is not checked for reachability.~~** — **built (2026-10-30, not yet
+exercised by a run).** `expect_rule_failure` now requires a `pre_state` argument: how the program
+reaches the counterexample's starting state. The tool refuses a blank one, and the judge's briefing
+carries it with the reason. The author's "When a rule should fail" section and the judge's item 8
+both ask the reachability question. An author that drives a function
+below the instruction handler states a rule over a havoced pre-state, and a VIOLATED verdict is then
+reported as a finding when the pre-state is one the program never produces. All three findings of
+the benchmark's one delivered unit were of this kind. One started from a state that the only
+operation able to produce it also marks unusable, which the handler's checks then refuse. One assumed
+a holder for shares the program keeps in its own vault. One pinned a counter that other operations
+move. Before a VIOLATED rule may be marked a finding, the author should do one of two things. Either
+show the pre-state is reachable, by naming the operations that produce it and checking that the
+handler's guards admit it, or state the invariant that excludes it and treat the rule as needing that
+invariant as an assumption. The judge should ask the same question. U37 is what makes the second
+option provable rather than asserted.
+
+**~~U37. The author has no recipe for an inductive invariant.~~** — **built (2026-10-30, guidance
+only).** The author's system prompt has a section "State invariants: a base case and one step per
+writer". It lists the writers from the code, gives the base case, and generates one step rule per
+writer with a local `macro_rules!`, the shape hand-written specs use. It also points to cvlr-spec's
+`cvlr_invariant_rules!`. A step that fails from an unproduced pre-state means the invariant is
+strengthened, not marked. Since then the section has CVL's full sequence of remedies for a
+counterexample that starts from an impossible state: an invariant first, then a justification rule,
+and a bare `cvlr_assume!` stated as one only as a last resort. The base case and steps are listed in
+`property_rules`, and they are never marked expected-to-fail. The author also has an
+`invariant_guidance` tool (`cvlr_invariant_guidance.j2`). It is the counterpart of CVL's
+`structural_invariant_guidance`, adapted to state that arrives as accounts. It covers per-account and
+together-passed invariants only, per-element statements over fixed arrays, and fenced-off states
+that the invariant must carry as a flag. Judge item 2 now checks that every state assumption has one
+of the three remedies behind it. There is no corpus example yet. Every rule the benchmark run wrote
+was about one operation. A state invariant ("queued shares never exceed supply", "the vault holds at
+least what the reserve records") needs a base case over the initializer and one step rule per
+operation that writes the state: assume the invariant before, run the operation, assert it after.
+The step rules are where a pre-state is shown unreachable (U36), and they are the standard shape for
+solvency properties. A guidance section and an example in the corpus would do, with the author
+listing the writers of a field from the code before writing the steps. A macro that stamps out one
+rule per operation keeps the harness readable, and the per-rule verdicts say which operation breaks
+it.
+
+**U38. Logging and error formatting cost authors rounds and say nothing about properties.**
+Formatted `msg!` calls and error types whose `Display` goes through `format!` give the Prover
+allocations, external `fmt` calls, and pointer errors (`[3003]` unknown provenance, `[3308]` absolute
+address) on paths no property is about. On the benchmark one unit spent hours on a single rule this
+way. Offer the editor a recipe for a verification-only switch that makes the program's logging macros
+expand to nothing under the `certora` feature, and that routes error-message construction to a
+constant. It changes no state the program writes, so the soundness argument is short. It also shrinks
+what the Prover translates.
+
+*Measured 2026-10-30, and it does not make jobs faster.* We read the output archives of 7 of run 2b's
+jobs: 108 rules, 18 of them unfinished. Every rule had reached the solver, so translation was not
+the bottleneck. No rule's path-count hotspots included a formatting or logging function. The
+`[3003]` and `[3308]` errors did not occur in those jobs either. What formatting does cause is a
+warning on nearly every rule that `<LendingError as Display>::fmt` (and sometimes `alloc::fmt::format`)
+is "treated as external". That is a soundness caveat a reader has to discount by hand, not a cost.
+So U38 is still worth doing, as cleanup of verdict caveats and of the author rounds spent on
+pointer errors, but it is not the cause of U40.
+
+**U39. The run spends its budget first in, first out.** Formalization authors four units at a time
+in component order, from one shared pool. On both benchmark runs the first units took the whole pool
+and the units that mattered most started with about a dollar. Give each unit a share of the pool, or
+let a run say which units go first, or both. A share that a unit does not use can return to the pool
+when the unit finishes.
+
+**U40. Long Prover jobs set the pace of a run.** On the benchmark run, Prover time was 24 hours
+across 75 calls. Jobs of 20 to 30 minutes were common, 6 halted at the ceiling, and units spent most
+of their wall clock waiting. Find out what the long jobs are before moving `global_timeout`: which
+rules, and whether they are the wide-integer arithmetic, the loops, or the translation. A halted job's
+finished verdicts are not returned (U32), so each halt also discards the rules that did finish. That
+makes U32 worth doing for the Solana backend on its own.
+
+*Measured 2026-10-30: it is wide-integer division.* The data comes from 7 of run 2b's job output
+archives (`Reports/treeView`: the per-rule `rule_live_statistics_*.json` and the final
+`treeViewStatus_*.json`). The median job ran 26 minutes, and every job carried some rules to the
+ceiling. All rules were in the solving phase, not translation.
+
+* **Wide division.** Of the 18 rules that did not finish (timed out, still running at the halt, or
+  the solver not answering at the hard stop), 10 have `div_rem_u256_u128` / `div_rem_256by128` as
+  45 to 67% of their branching, at path counts of 2^109 to 2^221. That is the 256-by-128-bit
+  division under the program's `Fraction` fixed-point type. The six slowest rules that did finish,
+  at 12 to 22 minutes each, have the same profile.
+* **Nonlinear arithmetic.** Five of the other eight have nonlinear arithmetic, up to 40 operations
+  of degree 8.
+* **Loops.** Two are loop-heavy, with 28 loops.
+* **Unclear.** One shows no hotspot at all.
+
+Raising `global_timeout` would buy little on rules at 2^170 paths.
+
+*Tried 2026-10-30: characterizing the division makes it worse.* The test reused the borrowing unit
+of run 2b: its 14 rules and settings, and the job's own sources from its output archive. The unit's
+author had already replaced `uint`'s types with an exact loop-free stand-in. In the variant, that
+stand-in's `div_rem_256by128` became a pair of nondet `u128`s constrained by `r < d` and
+`q*d + r == n`, which is exact under the function's `n_hi < d` precondition. The variant was
+submitted next to two baselines, the job's own binary and a local rebuild of the same sources. The
+two baselines agreed to within noise. In the variant:
+
+* Path counts fell sharply (2^114 to 2^67, 2^159 to 2^88), and division's share of branching fell
+  from 43-65% to 6-16%.
+* But the expensive rules got slower. All 4 that had verified in 15 to 21 minutes timed out. The 6
+  that still finished are the cheap ones, under 4 minutes, and only one of them reaches the
+  division. That one went from about 3.5 to 2.5 minutes.
+
+Path count is not what the solver pays for here. A free quotient multiplied by a symbolic divisor
+is a harder query than the long division's branches. So "make the division cheaper" is the wrong
+lever. The candidate left is a *narrower fixed-point type* under the verification feature: a
+64-bit `Fraction` in place of the 128-bit one, with no 256-bit intermediate at all. It is not
+exact. It changes rounding, so it is a modeling decision that every affected verdict must state,
+and it cannot support a property about rounding or precision. It would be a new editor kind, with
+that caveat in its `why_sound`. Measure it the same way before building it.
+
+*Tried 2026-10-30: the narrow type is fast where it holds, but it is not a drop-in edit.* The test
+swapped in a 64-bit `Fraction` (14 fractional bits, in place of 60) under the unit's feature. To
+compile against this version of the program, it needed eight small coordinated edits: interest
+accrual and one ceiling conversion redone in `u128`, a missing method, two literals. Then:
+
+* **Unchanged harness.** The whole job took 10 minutes instead of 25, but 8 of the 14 rules came
+  back sanity-failed, which is vacuous. The harness encodes the 60-bit scale (`ONE_SF = 1 << 60`,
+  and a deposit near 2^80), the narrow type assumes every encoding fits in 64 bits, and the two
+  contradict each other. Stored `_sf` fields carry the program's encoding, so narrowing re-reads
+  every stored value.
+* **Harness constants rescaled to 14 bits.** Three more rules came back, each passing its vacuity
+  check. One went from 17 minutes to 3.5, and two that had timed out took 8 seconds each (on path
+  counts small enough to deserve a look before believing them). One cheap rule went from 3.5
+  minutes to 16 seconds. The 5 rules over the borrow path stayed vacuous, so the program still
+  encodes the 60-bit scale somewhere on that path.
+
+So the narrow type is a real lever, but only as a decision made at the start of a unit. The
+program's fixed-point encoding, the harness's constants and every stored field have to agree on
+it. It is not something an author can apply to rules already written, and it is not a cheap
+editor kind. The cheaper wins for U40 are U32 (a halted job keeps the verdicts that finished; here
+the halt would have kept 9 or 10 of 14) and smaller jobs, so that one slow rule does not hold the
+ceiling for the rest.
+
+*Prover flags are not the lever either (2026-10-30).* The same binary and rules were rerun under
+two other sets of Prover args:
+
+* Ours without `-unsatCoresForAllAsserts`.
+* A hand-tuned set: CFG-diamond removal, the optimistic join/overlap/memcpy/memcmp/memmove
+  options, aggressive global detection, and 6 slicer iterations.
+
+Neither changed what finishes. Each job still ran to the 25-minute ceiling. Without unsat cores,
+the expensive rules took the same time. The hand-tuned set made them 10 to 20% slower: 1169 s
+against 966 to 987 s, and 999 s against 880 to 888 s. It finished one more rule than the run 2b
+binary did, but the second baseline did too. One rule flips between verifying in about 21 minutes
+and timing out across identical submissions, so a difference of one rule is noise. Several of the
+optimistic options also carry memory-model assumptions that would have to be stated beside the
+verdicts. So the speed of a hand-written spec for this kind of program comes from how it is
+designed: the fixed-point type, stand-ins for whole subcomputations, and jobs of one to three
+rules. It does not come from flags.
+
+**U41. CVL has no reachability check before an expected failure either (deferred).** This is U36 for
+the CVL backend. It is noted here because U36 found it. CVL handles a counterexample from an
+impossible start state well: `property_generation_prompt.j2`'s remedy list, the
+`structural_invariant_guidance` tool, and the invariants guide §1. But its `expect_rule_failure`
+(`composer/spec/source/author.py`) takes only a `reason`. The prompt says to mark a rule when a
+counterexample "appears to point to a potential issue", and no judge item asks whether the program
+can be in the counterexample's starting state. The port has three parts: a required `pre_state` on
+that tool, the reachability question in the CVL judge's checklist (`property_judge_prompt.j2`), and
+a sentence in the remedy list. One cost: the recorded Counter tape
+(`composer/testing/ui_harness_autoprove_Counter.py`) calls `expect_rule_failure` with today's
+arguments, and it must be updated or re-recorded.
+
 ---
 
 ## Leads from the certora-cvlr-kb ledger

@@ -10,6 +10,7 @@ from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
 
 DRAFT = "#[rule] pub fn rule_a() {}\n#[rule] pub fn rule_b() {}\n"
+PRE_STATE = "any deposit followed by a fee change"
 
 
 def _state(**extra) -> dict:
@@ -48,12 +49,16 @@ def _complete(state: dict) -> bool:
     return check_completion(state, [stamper], tuning_history(state)) is None  # type: ignore[arg-type]
 
 
-def test_marking_a_rule_records_it_and_stamps_nothing():
-    out = ExpectRuleFailure(
-        state=_state(), tool_call_id="tc", rule_name="rule_b", reason="the program underflows"
+def _mark(state: dict, reason: str = "the program underflows", pre_state: str = PRE_STATE):
+    return ExpectRuleFailure(
+        state=state, tool_call_id="tc", rule_name="rule_b", reason=reason, pre_state=pre_state
     ).run()
 
-    assert out.update["expected_failures"] == {"rule_b": "the program underflows"}
+
+def test_marking_a_rule_records_it_and_stamps_nothing():
+    out = _mark(_state())
+
+    assert list(out.update["expected_failures"]) == ["rule_b"]
     assert "validations" not in out.update
     assert "verify_rules" in str(out.update["messages"][0].content)
 
@@ -62,9 +67,7 @@ def test_a_marking_added_after_a_green_run_leaves_its_stamp_stale():
     state = _stamped(_state())
     assert _complete(state)
 
-    out = ExpectRuleFailure(
-        state=state, tool_call_id="tc", rule_name="rule_b", reason="the program underflows"
-    ).run()
+    out = _mark(state)
 
     assert not _complete(_applied(state, out.update["expected_failures"]))
 
@@ -81,9 +84,27 @@ def test_withdrawing_a_marking_after_a_green_run_leaves_its_stamp_stale():
 
 
 def test_a_marking_needs_a_reason():
-    out = ExpectRuleFailure(state=_state(), tool_call_id="tc", rule_name="rule_b", reason=" ").run()
+    out = _mark(_state(), reason=" ")
 
     assert "expected_failures" not in out.update
+
+
+def test_a_marking_records_how_the_pre_state_is_reached():
+    """The judge weighs a marking as a claim of a defect, and a violation is one only from a state
+    the program can be in. The account of how it gets there travels with the reason."""
+    out = _mark(_state())
+
+    reason = out.update["expected_failures"]["rule_b"]
+    assert "the program underflows" in reason
+    assert PRE_STATE in reason
+
+
+def test_a_marking_without_a_reachable_pre_state_is_refused():
+    out = _mark(_stamped(_state()), pre_state="  ")
+
+    assert "expected_failures" not in out.update
+    assert "validations" not in out.update
+    assert "invariant" in str(out.update["messages"][0].content)
 
 
 def test_withdrawing_a_marking_that_is_not_there_changes_nothing():

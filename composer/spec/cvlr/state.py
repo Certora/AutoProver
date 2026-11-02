@@ -33,6 +33,7 @@ mapping as given.
 import dataclasses
 from collections.abc import Collection
 from pathlib import Path
+from textwrap import indent
 from typing import Annotated, NotRequired
 
 from langgraph.graph import MessagesState
@@ -280,7 +281,7 @@ class HarnessAssumptions:
             return ["No rule is marked as expected to fail."]
         return [
             "Rules marked as expected to fail:",
-            *(f"  {rule}\n    {reason}" for rule, reason in self.expected_failures),
+            *(f"  {rule}\n{indent(reason, '    ')}" for rule, reason in self.expected_failures),
         ]
 
     def _conditions(self) -> list[str]:

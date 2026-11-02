@@ -91,6 +91,7 @@ from composer.spec.cvlr.state import (
 )
 from composer.spec.cvlr.vacuity import vacuity_analyzer
 from composer.spec.cvlr.author_tools import ExpectRuleFailure, ExpectRulePassage
+from composer.spec.guidance import CvlrInvariantGuidance
 from composer.spec.cvlr.verify import HarnessTarget, VerifyDeps, gate_tools
 from composer.kb.kb_context import with_cvlr_context
 from composer.spec.gen_types import TypedTemplate
@@ -758,6 +759,7 @@ async def batch_cvlr_generation(
                 ),
                 ExpectRuleFailure.as_tool("expect_rule_failure"),
                 ExpectRulePassage.as_tool("expect_rule_passage"),
+                CvlrInvariantGuidance.as_tool("invariant_guidance"),
                 *gate_tools(
                     target,
                     verify,

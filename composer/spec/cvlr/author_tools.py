@@ -193,6 +193,12 @@ class ExpectRuleFailure(
     reason: str = Field(
         description="Why the failure is a genuine defect in the program rather than in the rule"
     )
+    pre_state: str = Field(
+        description=(
+            "How the program reaches the counterexample's starting state: the operations that "
+            "produce it, and why the guards of the handler that runs this code admit it"
+        )
+    )
 
     @override
     def run(self) -> Command:
@@ -202,11 +208,20 @@ class ExpectRuleFailure(
                 self.tool_call_id,
                 "A non-empty reason is required when marking a rule as expected to fail.",
             )
+        if not self.pre_state.strip():
+            return tool_state_update(
+                self.tool_call_id,
+                "A violation is a defect only from a state the program can be in. Say how the "
+                "program reaches the counterexample's pre-state, or, if an invariant excludes "
+                "it, assume that invariant in the rule instead of marking it.",
+            )
         return tool_state_update(
             self.tool_call_id,
             f"Recorded: {self.rule_name} is expected to fail. The prover stamp is invalidated, so "
             "re-run `verify_rules`.",
-            expected_failures={CheckName(self.rule_name): self.reason},
+            expected_failures={
+                CheckName(self.rule_name): f"{self.reason}\nPre-state reached by: {self.pre_state}"
+            },
         )
 
 
