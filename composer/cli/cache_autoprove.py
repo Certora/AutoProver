@@ -43,7 +43,7 @@ from composer.spec.source.harness import (
 )
 from composer.pipeline.cli import autoprover_version, root_cache_key, user_ns
 from composer.pipeline.keys import (
-    AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
+    AGENT_RESULT_KEY, BUG_ANALYSIS_KEY,
     COMMON_SYSTEM_CACHE_KEY, COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY,
     PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
 )
@@ -64,6 +64,7 @@ from composer.spec.source.keys import (
 from composer.spec.source.summarizer import _SummaryCache
 from composer.spec.prop_inference import (
     DEFAULT_MAX_BUG_ROUNDS, _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
+    recorded_round_key,
 )
 from composer.spec.cvl_generation import GeneratedCVL, _LastAttemptCache
 from composer.spec.system_model import (
@@ -265,7 +266,7 @@ async def _build_component_nodes(
                 while True:
                     i = len(prior)
                     round_node = await leaf(
-                        agent_ctx, AGENT_ROUND_KEY(i, prior),
+                        agent_ctx, recorded_round_key(i, prior, tags.max_bug_rounds),
                         f"Round {i + 1}", _AgentRoundWithHistory,
                     )
                     if round_node.value is None:

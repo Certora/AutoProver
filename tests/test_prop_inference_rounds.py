@@ -26,7 +26,7 @@ from composer.spec.context import CacheKey, WorkflowContext
 from composer.spec.prop_inference import (
     AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY, DEFAULT_MAX_BUG_ROUNDS,
     EXISTING_SPECS_NOTICE, PROPERTY_SYSTEM_TEMPLATE, _AgentRoundResult, _AgentRoundWithHistory,
-    _Restatement, _RoundRestatements,
+    _Restatement, _RoundRestatements, recorded_round_key,
 )
 from composer.spec.types import PropertyFormulation
 from composer.templates.loader import load_jinja_template
@@ -508,3 +508,29 @@ async def test_cache_walker_rebuilds_the_keys_from_the_run_tags() -> None:
 async def test_inputs_path_round_limit_accepts_none(given: str, expected: int | None) -> None:
     from composer.cli.cache_autoprove import _max_bug_rounds_arg
     assert _max_bug_rounds_arg(given) == expected
+
+
+@pytest.mark.parametrize("explorer", ["composer.cli.cache_autoprove", "composer.cli.cache_natspec"])
+async def test_explorers_find_every_round_of_a_run_without_a_round_limit(explorer: str) -> None:
+    import importlib
+    # Both explorers look rounds up through this helper.
+    assert importlib.import_module(explorer).recorded_round_key is recorded_round_key
+
+    agent = _ctx().child(CacheKey("bug_analysis")).child(AGENT_RESULT_KEY)
+    rounds = [_round("a"), _round("b"), _round()]
+    for i, r in enumerate(rounds):
+        stored = _AgentRoundWithHistory(items=r.items, reasoning=r.reasoning, agent_conversation=[])
+        await agent.child(AGENT_ROUND_KEY(i)).cache_put(stored)
+
+    async def walk(max_rounds: int | None) -> int:
+        prior: list[_AgentRoundWithHistory] = []
+        while (got := await agent.child(
+            recorded_round_key(len(prior), prior, max_rounds),
+        ).cache_get(_AgentRoundWithHistory)) is not None:
+            prior.append(got)
+        return len(prior)
+
+    # A run recorded without a round limit keyed its rounds by index alone.
+    assert await walk(None) == 3
+    # A run with a recorded limit keys later rounds by the rounds before them.
+    assert await walk(4) == 1

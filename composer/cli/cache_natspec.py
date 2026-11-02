@@ -42,7 +42,7 @@ from composer.spec.natspec.models import (
 )
 from composer.spec.prop_inference import (
     _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
-    BUG_ANALYSIS_KEY, AGENT_RESULT_KEY, AGENT_ROUND_KEY,
+    BUG_ANALYSIS_KEY, AGENT_RESULT_KEY, recorded_round_key,
 )
 from composer.spec.cvl_generation import (
     _LastAttemptCache, CVL_JUDGE_KEY, LAST_ATTEMPT_KEY,
@@ -160,7 +160,7 @@ async def build_component_tree(
                 while True:
                     i = len(prior)
                     round_node = await leaf(
-                        agent_ctx, AGENT_ROUND_KEY(i, prior),
+                        agent_ctx, recorded_round_key(i, prior, max_bug_rounds),
                         f"Round {i + 1}", _AgentRoundWithHistory,
                     )
                     if round_node.value is None:

@@ -188,6 +188,14 @@ def _agent_round_key(i: int, prior: Sequence[_AgentRoundResult] = ()) -> str:
 #: which is what its prompt is built from. Round 0 has no earlier rounds and keeps ``round-0``.
 AGENT_ROUND_KEY = KeyFamily(_AgentResult, _AgentRoundWithHistory, _agent_round_key)
 
+
+def recorded_round_key(
+    i: int, prior: Sequence[_AgentRoundResult], max_rounds: int | None,
+) -> CacheKey[_AgentResult, _AgentRoundWithHistory]:
+    """The key a run stored round ``i`` under. ``max_rounds`` is the run's recorded round limit;
+    a run from before the limit was recorded (``None``) keyed every round by its index alone."""
+    return AGENT_ROUND_KEY(i, prior if max_rounds is not None else ())
+
 AGENT_RESULT_KEY = CacheKey[_BugAnalysisCache, _AgentResult]("agent_bug_analysis")
 
 DESCRIPTION = "Property extraction"
@@ -336,15 +344,8 @@ async def _drop_restatements(
     fresh: list[PropertyFormulation],
     thread_id: str,
 ) -> tuple[list[PropertyFormulation], list[str]]:
-    """Split ``fresh`` into the properties that are new and the titles of those that restate a
-    property of ``prev``. This is what makes a round count as productive: the title validator
-    only stops exact repeats, and a round that rewords earlier properties would otherwise keep
-    the loop going to ``max_rounds``.
-
-    One structured call on the light model. An entry naming a title that is not in ``fresh``,
-    or an earlier property that does not exist, removes nothing: a wrong removal loses a property
-    for good, a missed one costs at most one more round. ``thread_id`` tags the call in the run's
-    usage record, which is otherwise unable to say which code path made it."""
+    """Remove semantic restatements of earlier properties. Ignore unknown titles and retain all
+    candidates if the check fails; tag usage with ``thread_id``."""
     earlier = [p for r in prev for p in r.items]
     if not earlier or not fresh:
         return fresh, []
