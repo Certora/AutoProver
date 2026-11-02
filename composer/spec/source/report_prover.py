@@ -6,7 +6,6 @@ Translates ProverOutputUtility's per-rule `CheckResult`s into the report's backe
 """
 import asyncio
 import logging
-import re
 
 from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import CheckResult, NodeStatus
@@ -27,11 +26,6 @@ _NODE_TO_OUTCOME: dict[NodeStatus, Outcome] = {
     NodeStatus.RUNNING: Outcome.UNKNOWN,
     NodeStatus.PENDING: Outcome.UNKNOWN,
 }
-
-
-def _numbered(name: str) -> tuple[str | int, ...]:
-    """Sorts ``UnsatCoreTAC-r-2.txt`` before ``UnsatCoreTAC-r-10.txt``."""
-    return tuple(int(part) if part.isdigit() else part for part in re.split(r"(\d+)", name))
 
 
 def fetch_run_verdicts(
@@ -99,15 +93,12 @@ def fetch_unsat_cores(api: ProverOutputAPI, link: str, rule: str) -> tuple[str, 
     Blocking: call it off the event loop (``asyncio.to_thread``).
     """
     job = _output_link(link) or link
-    names = sorted(
-        {
-            name
-            for check, files in api.unsat_core_map(job).items()
-            if check == rule or check.startswith(f"{rule}-")
-            for name in files
-        },
-        key=_numbered,
-    )
+    names = [
+        name
+        for check, files in api.unsat_core_map(job).items()
+        if check == rule or check.startswith(f"{rule}-")
+        for name in files
+    ]
     return tuple(api.fetch_output_file(job, name) for name in names)
 
 

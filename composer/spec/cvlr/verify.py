@@ -478,7 +478,6 @@ async def _stage_and_submit(
     state: CvlrGenerationState,
     draft: str,
     *,
-    accounting: Callable[[BuildPermit], _RunAccounting],
     tool_call_id: str,
     choose: Callable[[set[str]], Submission | str],
 ) -> CvlrOutcome | str:
@@ -499,9 +498,6 @@ async def _stage_and_submit(
 
     The cloud job is not covered. A sibling that stages during it compiles
     behind its own feature.
-
-    ``accounting`` builds the run's callbacks from the permit, which they
-    release when the link arrives.
     """
     async with deps.target.build_slot() as permit:
         staged = await permit.stage(draft, state["summaries"], state["vfs"])
@@ -525,7 +521,7 @@ async def _stage_and_submit(
             prepared,
             prover_opts=deps.prover_opts,
             cex=RuleStatusReport(),
-            callbacks=accounting(permit),
+            callbacks=_RunAccounting(permit),
             tool_call_id=tool_call_id,
         )
 
@@ -585,7 +581,6 @@ class VerifyRules(
                 deps,
                 self.state,
                 draft,
-                accounting=_RunAccounting,
                 tool_call_id=self.tool_call_id,
                 choose=choose,
             )
@@ -700,18 +695,6 @@ def _build_failure(rejected: BuildRejected) -> str:
     return f"The chain build failed, so nothing was submitted:\n{said}"
 
 
-class _DiagnosticAccounting(_RunAccounting):
-    """Prover bookkeeping for a diagnostic run: its time is counted, its link is not recorded.
-
-    The link recorded for a task is the one its report points at, and that has to stay the run the
-    author's draft was stamped by rather than a rerun made to explain one of its rules.
-    """
-
-    @override
-    def _record_link(self, link: str) -> None:
-        pass
-
-
 @dataclass(frozen=True)
 class VacuityDeps:
     """What ``explain_vacuity`` needs beyond the gate's own dependencies."""
@@ -773,7 +756,6 @@ class ExplainVacuity(
                 verify,
                 self.state,
                 draft,
-                accounting=_DiagnosticAccounting,
                 tool_call_id=self.tool_call_id,
                 choose=choose,
             )

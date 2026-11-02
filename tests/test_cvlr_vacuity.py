@@ -179,14 +179,6 @@ def test_a_job_status_link_is_handed_over_as_its_output_view():
     assert api.jobs == ["https://prover.certora.com/output/37632/c1734c04?anonymousKey=k"]
 
 
-def test_a_rule_s_cores_are_read_in_numeric_order():
-    api = _FakeResults(
-        {"r": ["UnsatCoreTAC-r-10.txt", "UnsatCoreTAC-r-2.txt"]},
-        {"UnsatCoreTAC-r-10.txt": "ten", "UnsatCoreTAC-r-2.txt": "two"},
-    )
-    assert fetch_unsat_cores(api, "https://x/output/1/abc", "r") == ("two", "ten")  # type: ignore[arg-type]
-
-
 # ---------------------------------------------------------------------------------------------
 # the tool
 
