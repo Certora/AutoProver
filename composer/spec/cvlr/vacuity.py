@@ -2,10 +2,14 @@
 
 The CVLR counterpart of :mod:`sanity_analyzer`, which does this for CVL: an unsat core in, a
 structured account of why the rule's assertion is unreachable out, produced by an agent reading the
-core against the source. What differs is where the core comes from and what it is a core *of*. On
-Solana the prover writes no core for the vacuity check itself, only for a rule's assertion. So the
-core comes from rerunning the rule with the vacuity check off, under which a vacuous rule verifies,
-and it is the core of that proof (:class:`~composer.spec.cvlr.conf.CollectUnsatCore`).
+core against the source. What differs is where the core comes from and what it is a core *of*. The
+Prover writes a core for whatever check its solver proves, the vacuity check included, but a Solana
+vacuity check need not reach the solver: where every path to its ``satisfy`` runs through a loop the
+bound cannot finish, the presolver reduces the program to a single no-op, and nothing is left to
+take a core of. So the core comes from rerunning the rule with the vacuity check off, under which a
+vacuous rule verifies, and it is the core of that proof
+(:class:`~composer.spec.cvlr.conf.CollectUnsatCore`): of the rule's assertion, not of the
+``satisfy`` after it.
 
 That makes one fact about the core decidable without an agent, and it is the most useful one:
 whether the proof needed the rule's own assertion (:func:`core_finding`). If it did not, the
