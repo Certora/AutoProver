@@ -17,7 +17,7 @@ from composer.spec.source.prover import (
 )
 from composer.prover.ptypes import RulePath
 from composer.spec.source.spec_buffers import (
-    NamedBuffer, buffer_state_digest, check_buffer_completion,
+    NamedBuffer, buffer_prover_digest, buffer_state_digest, check_buffer_completion,
 )
 
 from .conftest import ProverMock
@@ -158,7 +158,7 @@ def _put_shared(cvl: str):
 def _prover_complete(st: StateWithSkips) -> str | None:
     return check_buffer_completion(
         st["buffers"], st["validations"], ["prover"], skipped=[], version_history=[],
-        config=st["config"],
+        config=st["config"], rule_skips=st["rule_skips"].keys(),
     )
 
 
@@ -188,7 +188,9 @@ class TestBufferSubmitCollect:
         ).run()
 
         def digest(n: str) -> str:
-            return buffer_state_digest(st["buffers"], n, version_history=[], config=st["config"])
+            return buffer_prover_digest(
+                st["buffers"], n, version_history=[], config=st["config"], rule_skips=[]
+            )
 
         assert st["validations"].get("prover:easy") == digest("easy")
         assert st["validations"].get("prover:hard") == digest("hard")
@@ -206,8 +208,8 @@ class TestBufferSubmitCollect:
         ).run()
         easy_runs = [c for c in certora_prover.calls if "easy" in str(c.conf.get("verify", ""))]
         assert len(easy_runs) == 1, f"expected one prover run for easy, got {len(easy_runs)}"
-        assert st["validations"].get("prover:easy") == buffer_state_digest(
-            st["buffers"], "easy", version_history=[], config=st["config"]
+        assert st["validations"].get("prover:easy") == buffer_prover_digest(
+            st["buffers"], "easy", version_history=[], config=st["config"], rule_skips=[]
         )
 
     async def test_rule_stripe_unions_to_completion(self, certora_prover: ProverMock):
@@ -435,6 +437,9 @@ class TestBufferSubmitCollect:
         def fdig(n: str) -> str:
             return buffer_state_digest(buffers, n, version_history=[], include_claim=True)
 
+        def sdig(n: str) -> str:
+            return buffer_prover_digest(buffers, n, version_history=[], rule_skips=[])
+
         def _run(buf: str, declared: list[str]) -> ProverRunLog:
             return ProverRunLog(
                 tool_call_id="t", prover_results=[], rules=SelectRules(tuple(declared)),
@@ -445,8 +450,8 @@ class TestBufferSubmitCollect:
         state = {
             "buffers": buffers, "vfs": {}, "curr_spec": None, "skipped": [],
             "validations": {
-                "prover:easy": pdig("easy"), "feedback:easy": fdig("easy"),
-                "prover:hard": pdig("hard"), "feedback:hard": fdig("hard"),
+                "prover:easy": sdig("easy"), "feedback:easy": fdig("easy"),
+                "prover:hard": sdig("hard"), "feedback:hard": fdig("hard"),
             },
             "required_validations": ["prover", "feedback"],
             "version_history": [], "messages": [], "property_rules": [], "rule_skips": {},
@@ -492,6 +497,9 @@ class TestBufferSubmitCollect:
         def fdig(n: str) -> str:
             return buffer_state_digest(buffers, n, version_history=[], include_claim=True)
 
+        def sdig(n: str) -> str:
+            return buffer_prover_digest(buffers, n, version_history=[], rule_skips=[])
+
         def _run(buf: str, declared: list[str]) -> ProverRunLog:
             return ProverRunLog(
                 tool_call_id="t", prover_results=[], rules=SelectRules(tuple(declared)),
@@ -502,8 +510,8 @@ class TestBufferSubmitCollect:
         state = {
             "buffers": buffers, "vfs": {}, "curr_spec": None, "skipped": [],
             "validations": {
-                "prover:easy": pdig("easy"), "feedback:easy": fdig("easy"),
-                "prover:hard": pdig("hard"), "feedback:hard": fdig("hard"),
+                "prover:easy": sdig("easy"), "feedback:easy": fdig("easy"),
+                "prover:hard": sdig("hard"), "feedback:hard": fdig("hard"),
             },
             "required_validations": ["prover", "feedback"],
             "version_history": [], "messages": [], "property_rules": [], "rule_skips": {},

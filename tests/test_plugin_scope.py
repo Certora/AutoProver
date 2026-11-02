@@ -17,7 +17,7 @@ from composer.pipeline.plugin_api import (
 )
 from composer.pipeline import plugins as plugins_mod
 from composer.pipeline.plugins import (
-    _applies, applicable_plugin_manifest, load_plugins, manifest_digest,
+    applies_to, applicable_plugin_manifest, load_plugins, manifest_digest,
 )
 from composer.spec.system_model import ContractComponentInstance, FeatureUnit
 from composer.spec.solana.model import SolanaComponentInstance
@@ -96,23 +96,23 @@ def _install(monkeypatch, *scoped: tuple[str, PluginScope[Any]]) -> dict[str, _L
 
 
 # ---------------------------------------------------------------------------
-# _applies
+# applies_to
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("unit_type", [ContractComponentInstance, SolanaComponentInstance])
 def test_agnostic_scope_applies_everywhere(unit_type):
-    assert _applies(AnyEcosystem(), unit_type)
+    assert applies_to(AnyEcosystem(), unit_type)
 
 
 def test_ecosystem_scope_applies_only_to_its_own_unit():
     evm = ForEcosystem(ContractComponentInstance)
     solana = ForEcosystem(SolanaComponentInstance)
 
-    assert _applies(evm, ContractComponentInstance)
-    assert not _applies(evm, SolanaComponentInstance)
-    assert _applies(solana, SolanaComponentInstance)
-    assert not _applies(solana, ContractComponentInstance)
+    assert applies_to(evm, ContractComponentInstance)
+    assert not applies_to(evm, SolanaComponentInstance)
+    assert applies_to(solana, SolanaComponentInstance)
+    assert not applies_to(solana, ContractComponentInstance)
 
 
 def test_feature_unit_is_not_runtime_checkable():

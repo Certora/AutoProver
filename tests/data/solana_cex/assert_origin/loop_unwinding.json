@@ -1,0 +1,141 @@
+{
+  "treeViewPath": "rule_loop_unwinds-Assertions-Unwinding condition in a loop. We recommend to run with `--optimistic_loop`, or increase `--loop_iter` to a value higher than 2. Please consult our documentation to be aware of the consequences on soundness when setting this flag.",
+  "graph_link": "Report-rule_loop_unwinds-Assertions-example1.html",
+  "jumpToDefinition": null,
+  "assertMessage": "Unwinding condition in a loop. We recommend to run with `--optimistic_loop`, or increase `--loop_iter` to a value higher than 2. Please consult our documentation to be aware of the consequences on soundness when setting this flag.",
+  "assertOrigin": "loopUnwinding",
+  "valueRepresentations": [
+    {
+      "name": "PRETTY",
+      "example": "MAX_UINT8"
+    },
+    {
+      "name": "DEC",
+      "example": "255"
+    },
+    {
+      "name": "HEX",
+      "example": "0xff"
+    }
+  ],
+  "callResolution": [],
+  "callResolutionWarnings": [],
+  "callTrace": {
+    "message": {
+      "text": "rule_loop_unwinds()",
+      "arguments": []
+    },
+    "status": "",
+    "childrenList": [
+      {
+        "message": {
+          "text": "Global State",
+          "arguments": []
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": null,
+        "storageId": null
+      },
+      {
+        "message": {
+          "text": "CVT_nondet_u64: '{0}'",
+          "arguments": [
+            {
+              "value": "4",
+              "values": [
+                "4",
+                "4",
+                "0x4"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-nondet-0.4.1/src/scalars.rs",
+          "start": {
+            "line": 59,
+            "col": 22
+          },
+          "end": {
+            "line": 60,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "CVT_nondet_u64: '{0}'",
+          "arguments": [
+            {
+              "value": "0",
+              "values": [
+                "0",
+                "0",
+                "0x0"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-nondet-0.4.1/src/scalars.rs",
+          "start": {
+            "line": 59,
+            "col": 22
+          },
+          "end": {
+            "line": 60,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "unknown loop source code",
+          "arguments": []
+        },
+        "status": "",
+        "childrenList": [
+          {
+            "message": {
+              "text": "Loop Iteration 1",
+              "arguments": []
+            },
+            "status": "",
+            "childrenList": [],
+            "jumpToDefinition": null
+          },
+          {
+            "message": {
+              "text": "Loop Iteration 2",
+              "arguments": []
+            },
+            "status": "",
+            "childrenList": [],
+            "jumpToDefinition": null
+          },
+          {
+            "message": {
+              "text": "Assert 'loop has terminated' failed",
+              "arguments": []
+            },
+            "status": "",
+            "childrenList": [],
+            "jumpToDefinition": null
+          }
+        ],
+        "jumpToDefinition": null
+      }
+    ],
+    "jumpToDefinition": null
+  },
+  "variables": []
+}

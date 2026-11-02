@@ -173,7 +173,20 @@ def lift_harnessed(
         contract_to_harness.setdefault(c.harness_definition.harness_of, []).append(
             HarnessDefinition(name=c.solidity_identifier, path=c.path)
         )
+    return _lift(s, contract_to_harness)
 
+
+def lift_unharnessed(s: SourceApplication) -> HarnessedApplication:
+    """The harnessed view of ``s`` with no harnesses: what ``lift_harnessed`` yields when
+    harness creation generated none. A run that skips harness creation (an external run mode,
+    which checks the project's own confs) uses it, so its components key the same caches as a
+    run whose harness creation found nothing to harness."""
+    return _lift(s, {})
+
+
+def _lift(
+    s: SourceApplication, contract_to_harness: dict[SolidityIdentifier, list[HarnessDefinition]],
+) -> HarnessedApplication:
     comp: list[SourceExternalActor | HarnessedExplicitContract] = []
     for c in s.components:
         if not isinstance(c, SourceExplicitContract):

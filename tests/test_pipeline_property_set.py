@@ -18,6 +18,7 @@ from pydantic import BaseModel
 import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM, main_instance
+from composer.pipeline.modes import ModeSupport
 from composer.pipeline.property_set import PropertySet, PropertySetComponent
 from composer.pipeline.run_mode import RunMode
 from composer.spec.source.harness import (
@@ -28,6 +29,7 @@ from composer.spec.system_model import (
     SourceExplicitContract, SourceExternalActor,
 )
 
+from tests.test_evaluate_mode import _EntryPoint, _Impl, _install, _loader_for
 from tests.test_pipeline_staged_formalizer import (
     _Backend, _Cache, _Env, _FeatCtx, _Formalizer, _Prepared, _Run, _Store, _Unit, _prop,
 )
@@ -49,10 +51,13 @@ ANALYZED = _Model(application_type="vault", components=list(UNITS))
 class _RecStore(_Store):
     def __init__(self):
         self.property_set: PropertySet | None = None
+        self.reports: list = []
 
     def write_property_set(self, property_set, **_kw):
         self.property_set = property_set
         return "property_set.json"
+
+    def write_report(self, report): self.reports.append(report)
 
 
 class _ReportingFormalizer(_Formalizer):
@@ -65,10 +70,15 @@ class _RecPrepared(_Prepared):
     def __init__(self, formalizer):
         super().__init__(formalizer)
         self.prepared_formalization = False
+        self.prepared_external_mode = False
 
     async def prepare_formalization(self, run):
         self.prepared_formalization = True
         return await super().prepare_formalization(run)
+
+    async def prepare_external_mode(self, run, *, build):
+        self.prepared_external_mode = True
+        return ModeSupport()
 
 
 class _RecBackend(_Backend):
@@ -218,15 +228,70 @@ async def test_a_prioritized_set_is_not_re_ranked(monkeypatch, tmp_path):
     [
         (RunMode.COMPREHENSIVE, RunMode.PRIORITIZED),
         (RunMode.PRIORITIZED, RunMode.COMPREHENSIVE),
+        (RunMode.PRIORITIZED, RunMode.EVALUATE),
+        (RunMode.EVALUATE, RunMode.PRIORITIZED),
     ],
-    ids=["comprehensive-into-prioritized", "prioritized-into-comprehensive"],
+    ids=[
+        "comprehensive-into-prioritized", "prioritized-into-comprehensive",
+        "prioritized-into-evaluate", "evaluate-into-prioritized",
+    ],
 )
 async def test_a_set_from_another_run_mode_is_rejected(monkeypatch, tmp_path, written, loaded):
     _, ps = await _recorded(monkeypatch, tmp_path)
+    _install(monkeypatch, _EntryPoint("evaluate", _loader_for(_Impl(), [])))
     with pytest.raises(ValueError, match=f"written by a {written.value} run"):
         await _drive(
             monkeypatch, predefined=ps.model_copy(update={"run_mode": written}), run_mode=loaded,
         )
+
+
+async def test_an_evaluate_run_records_the_set_it_hands_to_the_mode(monkeypatch):
+    impl = _Impl()
+    _install(monkeypatch, _EntryPoint("evaluate", _loader_for(impl, [])))
+
+    d = await _drive(monkeypatch, run_mode=RunMode.EVALUATE)
+
+    ps = d.backend.artifact_store.property_set
+    assert ps is not None and ps.run_mode is RunMode.EVALUATE
+    [ctx] = impl.seen
+    assert [(c.name, [p.title for p in c.properties]) for c in ps.property_components] == [
+        (b.feat.display_name, [p.title for p in b.props]) for b in ctx.batches
+    ]
+    assert not d.prepared.prepared_formalization
+
+
+@pytest.mark.parametrize(
+    "written", [RunMode.COMPREHENSIVE, RunMode.EVALUATE], ids=["comprehensive", "evaluate"],
+)
+async def test_an_evaluate_run_hands_a_predefined_set_to_the_mode(monkeypatch, tmp_path, written):
+    _, ps = await _recorded(monkeypatch, tmp_path)
+    impl = _Impl()
+    _install(monkeypatch, _EntryPoint("evaluate", _loader_for(impl, [])))
+
+    d = await _drive(
+        monkeypatch, predefined=ps.model_copy(update={"run_mode": written}),
+        run_mode=RunMode.EVALUATE,
+    )
+
+    [ctx] = impl.seen
+    assert [(b.feat.display_name, [p.title for p in b.props]) for b in ctx.batches] == [
+        ("deposits", ["a", "b"]), ("admin", ["c"]),
+    ]
+    assert list(ctx.extraction_failures) == []
+    assert d.prepared.prepared_external_mode
+
+
+async def test_an_evaluate_run_stopped_after_the_properties_never_reaches_the_mode(monkeypatch):
+    impl = _Impl()
+    _install(monkeypatch, _EntryPoint("evaluate", _loader_for(impl, [])))
+
+    d = await _drive(monkeypatch, run_mode=RunMode.EVALUATE, stop_after_properties=True)
+
+    assert d.backend.artifact_store.property_set is not None
+    assert impl.seen == []
+    assert not d.prepared.prepared_external_mode and not d.prepared.prepared_formalization
+    assert d.backend.artifact_store.reports == []
+    assert d.result is not None and (d.result.n_components, d.result.n_properties) == (2, 3)
 
 
 @pytest.mark.parametrize("predefined", [False, True], ids=["inferred", "predefined"])
@@ -264,7 +329,7 @@ async def test_a_set_that_does_not_match_the_units_fails_before_the_setup_starts
         ps.property_components[0].model_copy(update={"name": "gone"}), *ps.property_components[1:],
     ]})
     d = _Drive()
-    with pytest.raises(ValueError, match="'gone' matches 0 units"):
+    with pytest.raises(ValueError, match="'gone' matches no unit"):
         await _drive(monkeypatch, predefined=renamed, drive=d)
     await asyncio.sleep(0.01)  # an orphaned setup task would get to run here
     assert not d.prepared.prepared_formalization
@@ -303,9 +368,9 @@ def test_match_units_pairs_in_file_order():
 @pytest.mark.parametrize(
     "components, units, match",
     [
-        ([("gone", 0)], _units(), "matches 0 units"),
+        ([("gone", 0)], _units(), "matches no unit"),
         ([("admin", 0)], _units(), "unit index"),
-        ([("admin", 1)], [_Unit("admin", 1), _Unit("admin", 2)], "matches 2 units"),
+        ([("admin", 1)], [_Unit("admin", 1), _Unit("admin", 2)], "matches several units"),
     ],
     ids=["missing", "wrong-index", "ambiguous"],
 )

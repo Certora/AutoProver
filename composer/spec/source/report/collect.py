@@ -179,6 +179,7 @@ async def collect[R: ReportableResult](
     inputs: list[ReportComponentInput[R]],
     *,
     fetch_verdicts: VerdictFetcher[R],
+    keep_orphans: bool = False,
 ) -> tuple[
     list[FormalizedProperty], list[RuleVerdict], list[SkippedClaim], list[GaveUpComponent],
     list[CurtailedComponent], int,
@@ -189,7 +190,9 @@ async def collect[R: ReportableResult](
     dropped_orphan_count)``. Rules are identified by ``(unit_file, name)``: a name is only unique
     within a spec, so two components that independently author a rule of the same name stay
     distinct, while one definition seen through several runs collapses to one entry. Orphan units — reported by the backend but referenced by no property —
-    are dropped and counted. Verdicts are fetched concurrently via the backend `fetch_verdicts`
+    are dropped and counted, unless ``keep_orphans`` is set: a run that checks rules it did not
+    write (the project's own specs) keeps them in ``rules`` with no property pointing at them, and
+    the count is 0. Verdicts are fetched concurrently via the backend `fetch_verdicts`
     hook, for delivered inputs only: a curtailed component's verification state is unreliable by
     construction, so nothing is fetched for it.
     """
@@ -259,8 +262,8 @@ async def collect[R: ReportableResult](
             rules_by_key[ref] = RuleVerdict(name=ref[1], spec_file=ref[0])
 
     rules = sorted(
-        (rv for key, rv in rules_by_key.items() if key in referenced),
+        (rv for key, rv in rules_by_key.items() if keep_orphans or key in referenced),
         key=lambda r: r.ref,
     )
-    dropped_orphans = sum(1 for key in rules_by_key if key not in referenced)
+    dropped_orphans = 0 if keep_orphans else sum(1 for key in rules_by_key if key not in referenced)
     return properties, rules, skipped, gave_up, curtailed, dropped_orphans

@@ -98,6 +98,27 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         target_path.write_text(artifact.content)
         return target_path.relative_to(self._project_root)
 
+    def write_deliverable(self, relpath: str | Path, content: bytes | str) -> Path:
+        """Write a file the run delivers to ``{deliverable}/{relpath}`` and return its
+        project-relative path (what a report records).
+
+        For a writer outside the store's own bundles (an external run mode's copied specs and
+        confs, for one). ``relpath`` must stay inside the deliverable directory: an absolute path
+        or one that climbs out with ``..`` raises ``ValueError``. An existing file is replaced,
+        with a warning, as a leftover of an earlier run in the same project."""
+        rel = Path(relpath)
+        if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+            raise ValueError(f"deliverable path {relpath!r} must be relative and stay inside the deliverable directory")
+        target = self._deliverable_dir() / rel
+        if target.exists():
+            _log.warning("deliverable %s already exists; replacing it", target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content)
+        return target.relative_to(self._project_root)
+
     def _deliverable_dir(self) -> Path:
         """Absolute base dir (under the project root) for human-facing deliverables."""
         return ensure_dir(under_project(self._project_root, self.store_conf["deliverable_dir"]))

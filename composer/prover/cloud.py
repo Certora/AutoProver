@@ -24,6 +24,14 @@ from prover_output_utility.exceptions import (
 )
 from prover_output_utility.models import JobStatus, convert_job_status
 
+from composer.prover.results import (
+    ALERT_REPORT,
+    AlertReport,
+    FetchedResults,
+    UnreadableAlertReport,
+    parse_alert_report,
+)
+
 logger = logging.getLogger("composer.spec")
 
 
@@ -199,11 +207,30 @@ async def _fetch_results(job_id: str, dest: Path) -> None:
             logger.warning(
                 "Fetching results for completed job %s failed (attempt %d/%d): %s. "
                 "Re-fetching the finished job in %.0fs (not re-proving).",
-                job_id[:8], attempt, _FETCH_MAX_ATTEMPTS, exc, backoff,
+                job_id, attempt, _FETCH_MAX_ATTEMPTS, exc, backoff,
             )
             for child in dest.iterdir():
                 shutil.rmtree(child) if child.is_dir() else child.unlink()
             await asyncio.sleep(backoff)
+
+
+async def _fetch_alert_report(job_id: str) -> AlertReport | UnreadableAlertReport:
+    """The job's alert report (:func:`composer.prover.results.parse_alert_report`).
+
+    A job with no alerts has no report. A fetch that fails otherwise does not fail the run: the
+    verdicts stand without the report.
+    """
+    try:
+        text = await asyncio.to_thread(
+            _results_api().fetch_output_file, job_id, ALERT_REPORT.name
+        )
+    except JobNotFoundError:
+        logger.info("Cloud job %s has no alert report", job_id)
+        return AlertReport()
+    except Exception as exc:  # noqa: BLE001 — a missing report does not fail the run
+        logger.warning("Cloud job %s: fetching the alert report failed (%s)", job_id, exc)
+        return UnreadableAlertReport()
+    return parse_alert_report(text)
 
 
 @asynccontextmanager
@@ -212,12 +239,11 @@ async def cloud_results(
     *,
     poll_timeout: float,
     poll_callback: Callable[[str, str], Awaitable[None]] | None = None,
-) -> AsyncIterator[tuple[Path, int | None]]:
-    """Async context manager: poll cloud job, download results, yield (path, runtime_ms),
-    clean up.
+) -> AsyncIterator[FetchedResults]:
+    """Async context manager: poll cloud job, download results, yield them, clean up.
 
     Parses the cloud link, polls until completion, downloads and extracts the results
-    archive, then yields ``(results_root, runtime_ms)`` where ``runtime_ms`` is the prover's
+    archive and the alert report, then yields them. ``runtime_ms`` is the prover's
     queue-free execution time from the job's ``startTime``→``finishTime`` (``None`` if
     unavailable). The temporary directory is cleaned up on exit.
     """
@@ -226,9 +252,9 @@ async def cloud_results(
     logger.info("Cloud job submitted: %s/%s", cloud_job.user_id, cloud_job.job_id)
 
     async def on_status(status: str) -> None:
-        logger.info("Cloud job %s status: %s", cloud_job.job_id[:8], status)
+        logger.info("Cloud job %s status: %s", cloud_job.job_id, status)
         if poll_callback:
-            await poll_callback(status, f"Cloud job {cloud_job.job_id[:8]}: {status}")
+            await poll_callback(status, f"Cloud job {cloud_job.job_id}: {status}")
 
     try:
         job_data = await poll_job(cloud_job, timeout=poll_timeout, on_status=on_status)
@@ -250,4 +276,5 @@ async def cloud_results(
         # jobs measured here these two subtrees are ~3% of the archive. POU writes
         # them in the same layout the archive had, so the parse is unchanged.
         await _fetch_results(cloud_job.job_id, dest)
-        yield (dest, runtime_ms)
+        alerts = await _fetch_alert_report(cloud_job.job_id)
+        yield FetchedResults(dest, runtime_ms, alerts)

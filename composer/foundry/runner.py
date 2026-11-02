@@ -48,9 +48,9 @@ from graphcore.tools.schemas import (
 
 from composer.ui.tool_display import tool_display
 
-from composer.authoring.state import make_validation_stamper
 from composer.spec.types import CheckName
 from composer.foundry.state import (
+    FORGE_TEST_STAMPER,
     FORGE_TEST_VALIDATION_KEY,
     FoundryGenerationState,
 )
@@ -251,13 +251,12 @@ class ForgeTestTool(
         test_names = [r.name for r in results]
 
         if clean and not seeded:
-            stamper = make_validation_stamper(FORGE_TEST_VALIDATION_KEY)
             return tool_state_update(
                 tool_call_id=self.tool_call_id,
                 content=(
                     f"All tests passed (publish gate stamped).\n\n{summary}"
                 ),
-                validations=stamper(self.state),
+                validations=FORGE_TEST_STAMPER(self.state),
                 last_test_names=test_names,
             )
 

@@ -69,9 +69,9 @@ from composer.ui.tool_display import (
 )
 
 from composer.foundry.runner import get_forge_test_tool, infer_test_dir
-from composer.authoring.state import make_validation_stamper
 from composer.foundry.state import (
     FEEDBACK,
+    FEEDBACK_STAMPER,
     FORGE_TEST_VALIDATION_KEY,
     FOUNDRY_JUDGE_KEY,
     FoundryGenerationInput,
@@ -200,8 +200,7 @@ class ExpectTestFailure(WithAsyncImplementation[Command], WithInjectedId):
 
     @override
     async def run(self) -> Command:
-        # The merge treats an empty reason as "remove the marking" (see
-        # _merge_expected_failures), so an empty reason must not get through.
+        # An empty reason removes the marking, so it must not be stored as one.
         if not self.reason.strip():
             return tool_state_update(
                 self.tool_call_id,
@@ -228,7 +227,7 @@ class ExpectTestPassage(WithAsyncImplementation[Command], WithInjectedId):
 
     @override
     async def run(self) -> Command:
-        # Empty reason = remove the marking (see _merge_expected_failures).
+        # An empty reason removes the marking.
         return tool_state_update(
             tool_call_id=self.tool_call_id,
             content="Success",
@@ -666,7 +665,7 @@ async def batch_foundry_test_generation(
     judge_ctx = ctx.child(FOUNDRY_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
         thunk=_build_feedback_thunk(judge_ctx, env, props, component),
-        stamper=make_validation_stamper(FEEDBACK),
+        stamper=FEEDBACK_STAMPER,
     )
 
     builder = (

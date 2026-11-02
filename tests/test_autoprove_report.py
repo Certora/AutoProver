@@ -39,15 +39,15 @@ from composer.spec.source.report.grouping import (
 )
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
+    AutoProverReport, ConfCoverage, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
-    PropertyGroup, RuleVerdict, SeverityTier, SkippedClaim,
+    PropertyCoverage, PropertyGroup, RuleFeedback, RuleVerdict, SeverityTier, SkippedClaim,
+    SpecCoverageScore,
 )
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import RuleEvidence
 from composer.spec.source.report.findings import FindingDraft, build_findings
 from composer.spec.source.cex_capture import CexAnalysisStore
-from composer.diagnostics.timing import RunSummary
 
 
 # ---------------------------------------------------------------------------
@@ -328,6 +328,23 @@ async def test_collect_drops_and_counts_orphan_rules():
         [_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)], fetch_verdicts=fetch)
     assert [r.name for r in rules] == ["r1"]
     assert dropped == 1
+
+
+@pytest.mark.asyncio
+async def test_collect_keeps_orphan_rules_when_asked():
+    """A run over specs it did not write keeps every rule the prover reported, claimed or not."""
+    gen = _gen({"p1": ["r1"]})
+    fetch = _fetcher({"L1": [
+        _fake_check("r1", NodeStatus.VERIFIED),
+        _fake_check("users_own_rule", NodeStatus.VIOLATED),
+    ]})
+    props, rules, _skipped, _gave_up, _curtailed, dropped = await collect(
+        [_input("C", "autospec_C.spec", [_prop("p1", "d1")], gen)],
+        fetch_verdicts=fetch, keep_orphans=True,
+    )
+    assert sorted(r.name for r in rules) == ["r1", "users_own_rule"]
+    assert dropped == 0
+    assert [ref for p in props for ref in p.rule_refs] == [("autospec_C.spec", "r1")]
 
 
 @pytest.mark.asyncio
@@ -1208,17 +1225,16 @@ def _capture(events: list | None = None):
     from langgraph.store.memory import InMemoryStore
     from composer.spec.source.prover import _SpecCallbacks
     store = CexAnalysisStore(store=InMemoryStore(), namespace=("cex_analyses", "t"))
-    summary = SimpleNamespace(add_prover_call=lambda _elapsed: None)
-    cb = _SpecCallbacks((events if events is not None else []).append, "tc1",
-                        cast(RunSummary, summary), {}, analysis_store=store)
+    cb = _SpecCallbacks((events if events is not None else []).append, "tc1", {},
+                        analysis_store=store)
     return store, cb
 
 
 def _violated(rule: str, method: str | None = None, cex: str = "<cex/>"):
-    from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+    from composer.prover.ptypes import Counterexample, RulePath, RuleResult, UserAssertion
     return RuleResult(
         path=RulePath(rule=rule, method=method),
-        counterexample=Counterexample(trace=cex),
+        counterexample=Counterexample(trace=cex, origin=UserAssertion()),
         status="VIOLATED",
     )
 
@@ -1239,6 +1255,30 @@ async def test_spec_callbacks_captures_cex_analysis():
 
 
 @pytest.mark.asyncio
+async def test_spec_callbacks_account_for_the_run_and_still_emit_its_events():
+    """The accounting and the stream events are separate classes in one ``super()`` chain. Each
+    event has to reach both."""
+    from composer.diagnostics.timing import RunSummary, install_run_summary, set_current_task_id
+
+    summary = RunSummary()
+    install_run_summary(summary)
+    events: list = []
+    _, cb = _capture(events)
+    with set_current_task_id("t"):
+        await cb.on_prover_run(["certoraRun"])
+        await cb.on_prover_link("https://prover.certora.com/output/1/2")
+        await cb.on_prover_runtime(4200)
+        await cb.on_prover_result({})
+    summary.record_phase(task_id="t", label="t", phase="formalization", wall_s=1.0, queue_wait_s=0.0)
+
+    assert [e["type"] for e in events] == ["prover_run", "prover_link", "prover_result"]
+    assert events[0]["config"] == {}
+    assert summary.prover_total_calls == 1
+    assert summary.phases[0].final_link == "https://prover.certora.com/output/1/2"
+    assert summary.phases[0].prover_reported_ms == 4200
+
+
+@pytest.mark.asyncio
 async def test_parametric_instantiations_are_all_kept_and_purged_when_stale():
     """A parametric rule is analyzed once per binding: every instantiation survives (keying by rule
     alone would overwrite all but one), re-analysis replaces just that binding, and a fresh run on the
@@ -1256,3 +1296,134 @@ async def test_parametric_instantiations_are_all_kept_and_purged_when_stale():
     await cb.on_prover_result({"r": _violated("r", "foo")})
     await cb.on_analysis_complete(_violated("r", "foo"), "foo still breaks")
     assert [(r.label, r.analysis) for r in await store.for_rule("r")] == [("foo", "foo still breaks")]
+
+
+
+# ---------------------------------------------------------------------------
+# Schema 3.2: rule feedback, conf coverage, coverage scores, property coverage
+# ---------------------------------------------------------------------------
+
+
+def _evaluate_report() -> AutoProverReport:
+    """A report as an evaluate run writes it: a property judged against the rules, a rule no
+    property claims, a remark on a rule, conf coverage and a score."""
+    p1 = _fp("C", "p_pay", [("c.spec", "revert_char")], desc="must accept ETH when value > 0")
+    p1 = p1.model_copy(update={"coverage": PropertyCoverage(
+        status="partial", reason="only the single-step case is checked",
+    )})
+    p2 = _fp("C", "p_cap", [], desc="supply never exceeds the cap").model_copy(update={
+        "coverage": PropertyCoverage(
+            status="uncovered", reason="no rule bounds the supply", added_by_evaluator=True,
+        ),
+    })
+    return _mini_report().model_copy(update={
+        "run_mode": "evaluate",
+        "properties": [p1, p2],
+        "rules": [
+            *_mini_report().rules,
+            RuleVerdict(name="users_own_rule", spec_file="c.spec", outcome=Outcome.TIMEOUT),
+        ],
+        "groups": [PropertyGroup(slug="deposit-openness", title="Deposit is open",
+                                 description="d", status=GroupStatus.GOOD,
+                                 members=[("C", "p_pay"), ("C", "p_cap")])],
+        "rule_feedback": [RuleFeedback(
+            rule="revert_char", spec_file="c.spec", conf="certora/confs/c.conf",
+            severity="warning", kind="tolerance-accepts-behaviour",
+            explanation="the rule allows a loss of up to 1e6 wei with no stated source for the bound",
+            suggested_fix="state the strict property and keep the tolerance in a separate rule",
+        )],
+        "conf_coverage": [ConfCoverage(
+            spec="certora/specs/c.spec", confs=["certora/confs/c.conf"],
+            rules_unchecked_before_completion=["users_own_rule"],
+            methods_excluded={"revert_char": ["withdraw(uint256)"]},
+            completion_conf="certora/confs/c-evaluate-completion.conf", complete=True,
+        )],
+        "coverage_scores": [SpecCoverageScore(
+            name="static_coverage", score=0.625, views={"scene": 0.5, "main_contract": 0.75},
+        )],
+    })
+
+
+def test_schema_3_2_round_trips():
+    report = _evaluate_report()
+    assert report.schema_version == "3.2"
+    reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
+    assert reloaded == report
+    # The orphan survives the round trip: a rule with no property pointing at it.
+    referenced = {ref for p in reloaded.properties for ref in p.rule_refs}
+    assert [r.name for r in reloaded.rules if r.ref not in referenced] == ["users_own_rule"]
+    assert reloaded.properties[1].coverage is not None
+    assert reloaded.properties[1].coverage.added_by_evaluator
+
+
+@pytest.mark.parametrize("version", ["3.0", "3.1"])
+def test_older_reports_still_load_and_render(version):
+    # Written before the 3.2 fields existed: none of them is present in the JSON.
+    data = _mini_report().model_dump(mode="json")
+    for key in ("rule_feedback", "conf_coverage", "coverage_scores"):
+        del data[key]
+    for prop in data["properties"]:
+        del prop["coverage"]
+    data["schema_version"] = version
+
+    old = AutoProverReport.model_validate(data)
+    assert old.schema_version == version
+    assert old.rule_feedback == [] and old.conf_coverage == [] and old.coverage_scores == []
+    assert all(p.coverage is None for p in old.properties)
+
+    h = render_html(old)
+    assert "Formalization gaps" in h
+    assert "Rule feedback" not in h and "Spec coverage" not in h and "Unclaimed" not in h
+    assert "Property coverage" not in h
+
+
+def test_render_html_shows_rule_feedback_inside_the_gaps_section():
+    h = render_html(_evaluate_report())
+    gaps = h.index("<h2>Formalization gaps</h2>")
+    feedback = h.index("Rule feedback (1)")
+    assert gaps < feedback
+    # Still inside the gaps section: no other section starts between the heading and the table.
+    assert "<section" not in h[gaps:feedback]
+    assert "tolerance-accepts-behaviour" in h
+    assert "no stated source for the bound" in h
+    assert "keep the tolerance in a separate rule" in h
+    assert "certora/confs/c.conf" in h
+    assert 'class="badge badge-warn">warning<' in h
+
+
+def test_render_html_lists_rules_no_property_claims():
+    h = render_html(_evaluate_report())
+    assert "Unclaimed CVL rules (1)" in h
+    assert "users_own_rule" in h
+
+
+def test_render_html_shows_conf_coverage_and_scores():
+    h = render_html(_evaluate_report())
+    assert "<h2>Spec coverage</h2>" in h
+    assert "static_coverage" in h and "0.62" in h
+    assert "main_contract: 0.75" in h and "scene: 0.50" in h
+    assert "certora/confs/c-evaluate-completion.conf" in h
+    assert "withdraw(uint256)" in h
+    assert ">Complete<" in h
+
+
+def test_render_html_shows_property_coverage_in_the_group():
+    h = render_html(_evaluate_report())
+    group = h.index('id="deposit-openness"')
+    table = h.index("<h3>Property coverage</h3>")
+    gaps = h.index("<h2>Formalization gaps</h2>")
+    # Inside the group's section, after its rule table.
+    assert group < table < gaps
+    assert "<section" not in h[group + 1:table]
+    section = h[table:gaps]
+    assert 'class="badge badge-warn">Partially covered<' in section
+    assert "only the single-step case is checked" in section
+    assert 'class="badge badge-bad">Uncovered<' in section
+    assert "no rule bounds the supply" in section
+    # Only the property the evaluator added carries the tag.
+    assert section.count("added by evaluator") == 1
+    assert section.index("supply never exceeds the cap") < section.index("added by evaluator")
+
+
+def test_render_html_without_property_coverage_has_no_coverage_table():
+    assert "Property coverage" not in render_html(_mini_report())

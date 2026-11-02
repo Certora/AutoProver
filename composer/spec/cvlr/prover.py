@@ -147,8 +147,13 @@ async def write_submission(session: CargoSession, submission: Submission, *, int
 
 @dataclass(frozen=True)
 class Prepared:
-    """A built ``.so`` and the conf that will verify it. Nothing has been sent to the cloud."""
+    """A built ``.so`` and the conf that will verify it. Nothing has been sent to the cloud.
 
+    ``session`` is the one that built the ``.so`` and wrote the conf. The
+    prover reruns the build in it.
+    """
+
+    session: CargoSession
     build: SbfRun
     conf_path: Path
 
@@ -172,11 +177,10 @@ async def prepare_submission(
     build = await build_for_submission(session, submission)
     if not isinstance(build.verdict, Built):
         return BuildRejected(build)
-    return Prepared(build, await write_submission(session, submission, into=into))
+    return Prepared(session, build, await write_submission(session, submission, into=into))
 
 
 async def run_submission(
-    session: CargoSession,
     prepared: Prepared,
     *,
     prover_opts: ProverOptions,
@@ -190,7 +194,7 @@ async def run_submission(
     conf key it does not recognize.
     """
     result = await run_prover(
-        session.workdir,
+        prepared.session.workdir,
         [str(prepared.conf_path)],
         tool_call_id,
         prover_opts,
@@ -220,7 +224,6 @@ async def submit(
     if isinstance(prepared, BuildRejected):
         return prepared
     return await run_submission(
-        session,
         prepared,
         prover_opts=prover_opts,
         callbacks=callbacks,

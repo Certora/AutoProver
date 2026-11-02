@@ -9,8 +9,8 @@ from contextlib import asynccontextmanager
 from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 
 from composer.diagnostics.timing import RunSummary
-from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
-from composer.input.parsing import add_extra_context_args, add_property_set_args, add_protocol_args
+from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, PropertySetOptions, RAGDBOptions
+from composer.input.parsing import add_extra_context_args, add_protocol_args
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.pipeline.core import CorePipelineResult
 
@@ -44,7 +44,7 @@ _logger = logging.getLogger(__name__)
 # Args
 # ---------------------------------------------------------------------------
 
-class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
+class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, PropertySetOptions, Protocol):
     project_root: str
     main_contract: str
     system_doc: str | None
@@ -62,8 +62,6 @@ class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
     budget_total: float | None
     time_budget: float | None
     run_mode: str | None
-    predefined_properties: str | None
-    stop_after_properties: bool
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +89,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--interactive", action="store_true", help="Interactively refine the security properties after extraction")
     parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'threat' model (text or pdf) with which to seed the property extraction process")
     add_extra_context_args(parser)
-    add_property_set_args(parser)
+    add_protocol_args(parser, PropertySetOptions)
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
     # One budget, two spellings: the file shapes spend across phases, the scalar
     # sets the pool alone. argparse reports taking both, and renders the choice in
@@ -105,7 +103,9 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
         help="How much of the inferred property set to pursue. 'comprehensive' (the default) "
              "formalizes every property of every component. 'prioritized' ranks them all, then "
              "spends the run on the highest-contribution property and the properties it rests "
-             "on. Also settable as AUTOPROVER_RUN_MODE; this flag wins.",
+             "on. 'evaluate' infers the properties, formalizes none, and hands them to an "
+             "installed mode implementation that measures the project's own specs against them. "
+             "Also settable as AUTOPROVER_RUN_MODE; this flag wins.",
     )
 
     args = cast(AutoProveArgs, parser.parse_args())

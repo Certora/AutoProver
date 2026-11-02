@@ -25,6 +25,12 @@ result-type-keyed cache, and (since the report is backend-agnostic) building + p
 property-keyed report. Everything backend-specific — the harnessed lift, the autosetup/summaries
 pre-work, the formalizer itself, per-unit verdicts — is contributed through the three phase
 objects, and never inspected by the driver.
+
+A run in an external mode (``evaluate``; see :mod:`composer.pipeline.modes`) takes the chain only
+as far as ``PreparedSystem`` and extraction. It never calls ``prepare_formalization``; it calls
+``PreparedSystem.prepare_external_mode`` (the project build) instead, and skips the build when
+the implementation declares ``needs_project_build = False``. The mode implementation receives the
+extracted batches and the build (or ``None``), and returns the report, which the driver writes.
 """
 
 import asyncio
@@ -78,11 +84,11 @@ from composer.diagnostics.budget import (
     BudgetExceeded, BudgetPressureAbort, total_budget, named_budget_or_nop, time_budget,
 )
 
-from .run_mode import RunMode, run_mode_name
+from .run_mode import EXTERNAL_MODES, RunMode, run_mode_name
 from .ptypes import (
     DEFAULT_MAX_CPU_TASKS,
     BackendJob, BackendResult, ComponentOutcome, CorePhases, CorePipelineResult,
-    Curtailed,  Delivered, RunBudget,
+    Curtailed,  Delivered, ExtractedBatch, ExtractionFailure, RunBudget,
     FinalProperties, GaveUp, PersistedPluginArtifact, PipelineRun, PluginArtifact,
     RegisteredArtifacts, SystemAnalysisSpec
 )
@@ -91,6 +97,7 @@ from .plugin_api import (
     PluginToolContext, ProvidedTools,
 )
 from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
+from .modes import ModeContext, ModeSupport, RunModeImpl, load_run_mode
 from .property_set import PropertySet, PropertySetComponent
 
 _log = logging.getLogger(__name__)
@@ -265,6 +272,14 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         never mentions staging at all."""
         ...
 
+    async def prepare_external_mode(self, run: PipelineRun, *, build: bool) -> ModeSupport:
+        """Prepare backend support for an external mode, alongside extraction.
+
+        With build=False, skip the project build but still provide prover options.
+        The default implementation returns empty support.
+        """
+        return ModeSupport()
+
 
 class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifier, U: FeatureUnit, Main, App: BaseApplication, Pre](Protocol):
     @property
@@ -305,18 +320,9 @@ class PipelineBackend[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentifi
 
 
 # ---- the per-unit batch -------------------------------------------------------
-@dataclass
-class _Batch[U: FeatureUnit](BackendJob[U]):
-    feat_ctx: WorkflowContext[ComponentGroup]
-
-
-class ExtractionFailure[U: FeatureUnit](NamedTuple):
-    """A component whose property extraction raised, and what took it down."""
-    unit: U
-    error: BaseException
-
-    def describe(self) -> str:
-        return f"{self.unit.display_name}: {self.error}"
+#: The driver's name for :class:`~composer.pipeline.ptypes.ExtractedBatch`, which lives in ``ptypes``
+#: so that :mod:`composer.pipeline.modes` can hand it to a mode without importing the driver.
+_Batch = ExtractedBatch
 
 
 class ExtractionResult[U: FeatureUnit](NamedTuple):
@@ -478,11 +484,16 @@ async def _run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: Artifact
 ) -> CorePipelineResult[FormT]:
     # Only the plugins whose hooks accept this ecosystem's unit are loaded (and only those pay
     # their ``initialize`` cost); the driver below can hand them its units unconditionally.
-    async with load_plugins(run, ecosystem.unit_type) as plugins:
+    # An external mode's implementation is entered here too, and only for a run in that mode.
+    async with (
+        load_plugins(run, ecosystem.unit_type) as plugins,
+        load_run_mode(run.run_mode, ecosystem.unit_type) as mode_impl,
+    ):
         return await run_pipeline_inner(
             backend, run, plugins, interactive=interactive, threat_model=threat_model,
             extra_context=extra_context, max_bug_rounds=max_bug_rounds, ecosystem=ecosystem,
             predefined=predefined, stop_after_properties=stop_after_properties,
+            mode_impl=mode_impl,
         )
 
 # ---- the driver --------------------------------------------------------------
@@ -498,16 +509,24 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     ecosystem: Ecosystem[App, Main, U],
     predefined: PropertySet | None = None,
     stop_after_properties: bool = False,
+    mode_impl: RunModeImpl[U, Any] | None = None,
 ) -> CorePipelineResult[FormT]:
     """``predefined`` replaces system analysis and property extraction with a recorded
     :class:`PropertySet`; ``stop_after_properties`` ends the run once the property set is final
-    and written, before any formalization or report."""
+    and written, before any formalization, mode hand-off or report. ``mode_impl`` is the
+    implementation of an external run mode (see :mod:`composer.pipeline.modes`); required
+    exactly when ``run.run_mode`` is one."""
     spec, phases = backend.analysis_spec, backend.core_phases
     source = run.source
 
     assert ecosystem.supports_greenfield or run.env.sort != "greenfield", (
         f"ecosystem {ecosystem.name!r} has no greenfield prompts; got sort='greenfield'"
     )
+    if (run.run_mode in EXTERNAL_MODES) != (mode_impl is not None):
+        raise ValueError(
+            f"run mode {run.run_mode.value!r} "
+            + ("needs a mode implementation" if mode_impl is None else "takes no mode implementation")
+        )
     if predefined is not None:
         if interactive:
             raise ValueError("a predefined property set cannot be refined interactively")
@@ -520,7 +539,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 f"property set is for contract {predefined.contract_name!r}, "
                 f"not {source.contract_name!r}"
             )
-        if predefined.run_mode is not run.run_mode:
+        if not predefined.loadable_in(run.run_mode):
             raise ValueError(
                 f"property set was written by a {predefined.run_mode.value} run, "
                 f"not {run.run_mode.value}"
@@ -593,14 +612,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     async def _prepare_formalization() -> Formalizer[FormT, U] | StagedFormalizer[FormT, U]:
         with named_budget_or_nop("formalization_preparation"):
             return await prepared.prepare_formalization(run)
-    staged_task = (
-        None if stop_after_properties else asyncio.create_task(_prepare_formalization())
-    )
 
-    if loaded is not None:
-        batches, extraction_failures = loaded
-    else:
-        batches, extraction_failures = await _extract_all(
+    async def _extract() -> ExtractionResult[U]:
+        return await _extract_all(
             backend.analysis_spec.properties_key,
             prepared.main,
             backend.backend_guidance,
@@ -613,6 +627,71 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             ecosystem,
             extraction_plugins,
         )
+
+    def _record_property_set(batches: Sequence[_Batch[U]]) -> None:
+        """Write the run's property set, unless there are no batches."""
+        if not batches:
+            return
+        backend.artifact_store.write_property_set(PropertySet(
+            ecosystem=ecosystem.name,
+            contract_name=source.contract_name,
+            run_mode=run.run_mode,
+            system_model=analyzed.model_dump(mode="json"),
+            property_components=[
+                PropertySetComponent(
+                    name=b.feat.display_name, unit_index=b.feat.unit_index, properties=b.props,
+                )
+                for b in batches
+            ],
+        ))
+
+    # External modes prepare backend support instead of formalization.
+    # Modes that build their own confs can skip the shared project build.
+    # Run alongside extraction; failure in either task cancels the other.
+    # A run that stops after the properties never reaches the mode, so it takes the common path
+    # below.
+    if mode_impl is not None and not stop_after_properties:
+        async def _prepare_external_mode() -> ModeSupport:
+            with named_budget_or_nop("formalization_preparation"):
+                return await prepared.prepare_external_mode(
+                    run, build=mode_impl.needs_project_build,
+                )
+
+        mode_failures: list[ExtractionFailure[U]] = []
+        if loaded is not None:
+            support, mode_batches = await _prepare_external_mode(), loaded
+        else:
+            async with asyncio.TaskGroup() as tg:
+                support_task = tg.create_task(_prepare_external_mode())
+                extract_task = tg.create_task(_extract())
+            support = support_task.result()
+            mode_batches, mode_failures = extract_task.result()
+        # Recorded before the mode runs, so a failing mode still leaves the set behind.
+        _record_property_set(mode_batches)
+        return await _hand_off_to_mode(
+            mode_impl, backend.artifact_store, run,
+            ModeContext(
+                run=run, main=prepared.main,
+                batches=mode_batches, extraction_failures=mode_failures,
+                threat_model=threat_model, extra_context=extra_context,
+                artifact_store=backend.artifact_store,
+                phase=phases.get("external_mode", phases["formalization"]),
+                project_build=support.build,
+                prover_options=support.prover_options,
+                active_plugins=plugin_manager.plugin_manifest,
+            ),
+        )
+
+    staged_task = (
+        None if stop_after_properties else asyncio.create_task(_prepare_formalization())
+    )
+
+    extraction_failures: list[ExtractionFailure[U]] = []
+    if loaded is not None:
+        # A predefined set replaces extraction, so no component can have failed it.
+        batches = loaded
+    else:
+        batches, extraction_failures = await _extract()
     # 3b. Prioritized runs formalize one property, not every component's. This is the first
     #     point where every component's candidates exist together — inference never sees more
     #     than the unit it was given, and the per-component plugin hook cannot compare across
@@ -638,21 +717,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 batches, run, phases["extraction"], threat_model, extra_context,
             )
 
-    # 3c. Record the final property set before anything can fail on the formalization side.
-    if batches:
-        backend.artifact_store.write_property_set(PropertySet(
-            ecosystem=ecosystem.name,
-            contract_name=source.contract_name,
-            run_mode=run.run_mode,
-            system_model=analyzed.model_dump(mode="json"),
-            property_components=[
-                PropertySetComponent(
-                    name=b.feat.display_name, unit_index=b.feat.unit_index, properties=b.props,
-                )
-                for b in batches
-            ],
-        ))
-    if staged_task is None:
+    # 3c. Record the final property set.
+    _record_property_set(batches)
+    if stop_after_properties:
         _require_batches(batches, extraction_failures)
         return CorePipelineResult(
             len(batches), sum(len(b.props) for b in batches), [],
@@ -660,6 +727,8 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             run.run_mode, len(deprioritized),
         )
 
+    # Only None under stop_after_properties, which returned above.
+    assert staged_task is not None
     staged = await staged_task
     _require_batches(batches, extraction_failures)
 
@@ -858,6 +927,42 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         _log.warning("report phase failed (continuing)", exc_info=True)
 
     return _tally(outcomes + lost_at_extraction, run.run_mode, len(deprioritized))
+
+
+async def _hand_off_to_mode[P: enum.Enum, H, U: FeatureUnit, FormT: BackendResult](
+    impl: RunModeImpl[U, Any],
+    store: ArtifactStore[Any, FormT],
+    run: PipelineRun[P, H],
+    ctx: ModeContext[P, H, U, Any],
+) -> CorePipelineResult[FormT]:
+    """Run an external mode and persist its report.
+
+    The mode's spend is charged to the formalization cap: it takes the place of formalization in
+    the run. The driver stamps the run's mode and active-plugin list onto the report, the way it does
+    for a report it builds itself, so the provenance cannot disagree with the run. A failed project
+    build is listed among the run's failures, ahead of the mode's own. Unlike the
+    report a formalizing run builds, this one is the run's whole deliverable, so a failure to
+    produce or write it fails the run."""
+    with named_budget_or_nop("formalization"):
+        result = await impl.run(ctx)
+    report = result.report.model_copy(update={
+        "run_mode": run.run_mode.value, "active_plugins": ctx.active_plugins,
+    })
+    store.write_report(report)
+    build_failures = (
+        [f"project build: {ctx.project_build.error or 'failed'}"]
+        if ctx.project_build is not None and not ctx.project_build.succeeded else []
+    )
+    failures = [
+        *build_failures,
+        *(f.describe() for f in ctx.extraction_failures),
+        *result.failures,
+    ]
+    return CorePipelineResult(
+        len(ctx.batches) + len(ctx.extraction_failures),
+        sum(len(b.props) for b in ctx.batches),
+        [], failures, run.run_mode, mode_succeeded=result.succeeded,
+    )
 
 
 #: The driver-owned task id for the ranking step. Backend-agnostic, like the per-unit
@@ -1059,16 +1164,13 @@ async def _load_batches[P: enum.Enum, H, Main, U: FeatureUnit](
     ecosystem: Ecosystem[Any, Main, U],
     plugins: PluginPhaseManager[P, U],
     predefined: PropertySet,
-) -> ExtractionResult[U]:
-    """The extraction phase's result, read from a predefined property set."""
+) -> list[_Batch[U]]:
+    """The extraction phase's batches, read from a predefined property set."""
     prop_ctx = run.ctx.child(PROPERTIES_KEY(prop_key))
-    return ExtractionResult(
-        [
-            _Batch(feat, props, await _component_ctx(prop_ctx, feat, plugins))
-            for feat, props in predefined.match_units(list(ecosystem.units(main)))
-        ],
-        [],
-    )
+    return [
+        _Batch(feat, props, await _component_ctx(prop_ctx, feat, plugins))
+        for feat, props in predefined.match_units(list(ecosystem.units(main)))
+    ]
 
 
 async def _component_ctx[P: enum.Enum, U: FeatureUnit](
