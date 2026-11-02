@@ -1,5 +1,6 @@
 """Unit tests for CompilationWorkaroundManager detectors and retry-loop guards."""
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -13,6 +14,8 @@ from certora_autosetup.utils.compilation_workarounds import (
     UnimplementedContractError,
     UnsatisfiableSolcPinError,
 )
+from certora_autosetup.utils import solc_version_resolver
+from certora_autosetup.utils.solc_version_resolver import assign_evm_versions
 from certora_autosetup.utils.types import ContractHandle
 
 
@@ -920,6 +923,45 @@ def test_solc_fallback_fires_when_pin_is_in_compiler_map(
     # The uniform fallback map collapses back to a scalar on exit.
     assert compilation_config["solc"] == "solc8.30"
     assert "compiler_map" not in compilation_config
+
+
+def test_solc_fallback_fills_the_evm_map_entry_of_the_contract_it_moves(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # Setup cannot read the default EVM version of a compiler that is not
+    # installed, so the map it writes has no entry for that contract. certoraRun
+    # reports the missing compiler first; after the fallback, the map must cover
+    # the contract or certoraRun rejects the conf.
+    defaults = {"solc8.24": "shanghai"}
+    monkeypatch.setattr(solc_version_resolver, "solc_default_evm_version", defaults.get)
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.solc_default_evm_version", defaults.get
+    )
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.24", "0.8.24")])
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    config = {"compiler_map": {"Foo": "solc8.24", "Bar": "solc9.99"}}
+    assign_evm_versions(config, contracts, {"Foo": "cancun"})
+    assert config["solc_evm_version_map"] == {"Foo": "cancun"}
+
+    success, updated, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        ["attribute/flag 'compiler_map': Solidity executable solc9.99 not found in path\n"],
+        contracts,
+        extra_config=config,
+    )
+    assert success is True
+    assert fake_run.calls == 2
+    assert compilation_config["solc_evm_version_map"] == {"Foo": "cancun", "Bar": "shanghai"}
+    assert updated["solc_evm_version_map"] == {"Foo": "cancun", "Bar": "shanghai"}
+    assert json.loads((tmp_path / "test.conf").read_text())["solc_evm_version_map"] == {
+        "Foo": "cancun",
+        "Bar": "shanghai",
+    }
 
 
 def _write_pragma(tmp_path, contract: str, pragma: str) -> ContractHandle:

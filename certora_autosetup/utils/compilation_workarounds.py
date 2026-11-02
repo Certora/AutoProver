@@ -14,7 +14,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
 
 from certora_autosetup.utils.constants import DEFAULT_SOLC_VERSION, SolcConvention
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
@@ -1526,7 +1526,19 @@ class CompilationWorkaroundManager:
         # The prover requires the map to cover every file. Without a declared
         # version there is nothing seeded for the other contracts, so each one
         # gets the EVM version its own compiler would have used anyway.
-        cmap = updated_config_dict["compiler_map"]  # seeded for every contract
+        self._fill_default_evm_versions(emap, updated_config_dict["compiler_map"], contracts)
+        compilation_config.update(updated_config_dict)
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _fill_default_evm_versions(
+        self, emap: Dict[str, str], cmap: Mapping[str, str], contracts: List[ContractHandle]
+    ) -> None:
+        """Give each contract missing from ``emap`` the default EVM version of its
+        compiler in ``cmap``, which is seeded for every contract."""
         for c in contracts:
             if c.contract_name in emap:
                 continue
@@ -1540,12 +1552,6 @@ class CompilationWorkaroundManager:
                 )
                 continue
             emap[c.contract_name] = default_evm
-        compilation_config.update(updated_config_dict)
-
-        with open(config_file, "w") as f:
-            json.dump(compilation_config, f, indent=2)
-
-        return updated_config_dict
 
     def _apply_invalid_evm_version_workaround_to_config(
         self,
@@ -1749,9 +1755,10 @@ class CompilationWorkaroundManager:
         updated_config_dict: Dict,
         compilation_config: Dict,
         config_file: Path,
-        _contracts: List[ContractHandle],
+        contracts: List[ContractHandle],
     ) -> Dict:
-        """Substitute a missing versioned solc binary per the plan."""
+        """Substitute a missing versioned solc binary per the plan, and give the
+        moved contracts an entry in ``solc_evm_version_map`` when the conf has one."""
         # solc is seeded into compiler_map up front (see _seed_compile_maps), so
         # replace the bad binary there — every entry pinned to it — rather than
         # setting the scalar solc, which can't coexist with compiler_map. A
@@ -1763,6 +1770,12 @@ class CompilationWorkaroundManager:
         for name, replacement in plan.compliant.items():
             self.log(f"Falling back from '{plan.failed_solc}' to '{replacement}' for {name}", "WARNING")
             cmap[name] = replacement
+        # A contract whose compiler could not run has no entry in an EVM map
+        # filled with compiler defaults. Its new compiler supplies one.
+        emap = updated_config_dict.get("solc_evm_version_map")
+        if emap is not None:
+            self._fill_default_evm_versions(emap, cmap, contracts)
+            compilation_config["solc_evm_version_map"] = emap
 
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)

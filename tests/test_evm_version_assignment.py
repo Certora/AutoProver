@@ -106,7 +106,9 @@ def test_one_value_for_every_contract_is_the_scalar(solc_defaults) -> None:
     assert "solc_evm_version_map" not in config
 
 
-def test_a_compiler_that_cannot_run_leaves_its_contract_out(solc_defaults) -> None:
+def test_a_compiler_that_cannot_run_leaves_its_contract_for_the_fallback(solc_defaults) -> None:
+    # The compiler fallback fills Bar in once it picks a compiler that runs; see
+    # test_solc_fallback_fills_the_evm_map_entry_of_the_contract_it_moves.
     config = {"compiler_map": {"Foo": "solc8.24", "Bar": "solc9.99"}}
     assign_evm_versions(config, [FOO, BAR], {"Foo": "cancun"})
     # Never collapsed to a scalar: the map does not cover Bar.

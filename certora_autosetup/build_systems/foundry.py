@@ -469,13 +469,10 @@ class FoundryRestrictionManager:
         # per-path via_ir is intentionally not applied: viaIR inlines internal functions,
         # which might prevent CVL internal summaries from being applied.
 
-        # Per-path evm_version (and min/max_evm_version) is not read here. The
-        # build artifacts record the EVM version forge chose for each contract,
-        # and SetupProver._precompute_from_foundry_artifacts copies it into the
-        # conf. The PROFILE-level evm_version is emitted as scalar
-        # solc_evm_version by _apply_common_solc_settings, for builds that have
-        # no artifacts, and dropped by the invalid_evm_version workaround if a
-        # solc rejects it.
+        # Artifact metadata supplies per-contract EVM versions (see
+        # SetupProver._precompute_from_foundry_artifacts). Without artifacts the
+        # conf has the profile's evm_version, which the invalid_evm_version
+        # workaround drops if a solc rejects it.
 
         # ---------------- solc_optimize map ----------------
         restricted_optimize = self._optimize_map(contracts)
