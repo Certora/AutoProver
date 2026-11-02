@@ -33,7 +33,9 @@ AutoProver's files are rewritten whenever they differ from what the scaffold wou
 starting configuration reaches the build. Nothing else under ``src/certora/`` is touched.
 
 The project's files are edited, never replaced. Each edit is planned only when what it adds is
-missing, so a second run changes nothing. A manifest is edited as a TOML document
+missing, so a second run changes nothing. A source file only gains lines: the harness declaration
+at its end, and on Soroban a token client's twin under the feature
+(:mod:`composer.spec.cvlr.soroban_tokens`). A manifest is edited as a TOML document
 (:class:`~composer.cargo.manifest.ManifestEditor`): keys go into the tables that already hold
 them, and everything the scaffold does not add comes back as it was, comments included.
 
@@ -66,7 +68,7 @@ from composer.cargo.manifest import (
 from composer.cargo.metadata import CratePackage, GitSource, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
-from composer.spec.cvlr import forks, soroban_types
+from composer.spec.cvlr import forks, soroban_tokens, soroban_types
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
 from composer.spec.cvlr.reference import (
     ChainReference,
@@ -136,6 +138,20 @@ class AppendSection:
 
 
 @dataclass(frozen=True)
+class EditSource:
+    """Lines added inside one of the project's source files.
+
+    :func:`apply` writes ``edited`` only over ``original``. A file changed since planning is
+    :class:`ScaffoldStale`.
+    """
+
+    path: Path
+    original: str
+    edited: str
+    why: str
+
+
+@dataclass(frozen=True)
 class Addition:
     """One thing the plan adds to a manifest, and why."""
 
@@ -155,7 +171,7 @@ class EditManifest:
     additions: tuple[Addition, ...]
 
 
-type Change = Write | AppendSection | EditManifest
+type Change = Write | AppendSection | EditSource | EditManifest
 
 
 @dataclass(frozen=True)
@@ -183,6 +199,8 @@ class ScaffoldPlan:
     #: How this target spells platform paths. Computed once, with the plan, so a later compose of
     #: the same tuning files uses the same spelling.
     dialect: PathDialect = PathDialect()
+    #: What the scaffold saw and left alone, that a reader of the results should know about.
+    notes: tuple[str, ...] = ()
 
     def describe(self) -> str:
         lines = [f"CVLR scaffold for {self.package}:"]
@@ -192,15 +210,19 @@ class ScaffoldPlan:
                     lines.append(f"  write {path} — {why}")
                 case AppendSection(path=path, why=why):
                     lines.append(f"  extend {path} — {why}")
+                case EditSource(path=path, why=why):
+                    lines.append(f"  edit {path} — {why}")
                 case EditManifest(path=path, additions=additions):
                     lines += [f"  edit {path} {a.edit.describe()} — {a.why}" for a in additions]
         lines += [f"  ok {note}" for note in self.satisfied]
+        lines += [f"  note {note}" for note in self.notes]
         lines += [f"  BLOCKED {b.path}: {b.problem} — {b.resolution}" for b in self.blocked]
         return "\n".join(lines)
 
 
 class ScaffoldStale(RuntimeError):
-    """A manifest the plan edits gained, after planning, something the plan adds."""
+    """A manifest the plan edits gained, after planning, something the plan adds, or a source file
+    the plan edits changed."""
 
 
 class ScaffoldBlocked(RuntimeError):
@@ -239,6 +261,13 @@ class ChainScaffold:
     no_std: bool
     #: Whether the harness gets :data:`SOROBAN_NONDET`, arbitrary values of the Soroban SDK's types.
     nondet_helpers: bool = False
+    #: Whether a token client the contract calls is pointed at :data:`SOROBAN_TOKEN_MODEL`. Off in
+    #: every policy here and turned on per run (``--token-model``), until the Soroban Prover reads
+    #: the model's ``#[contracttype]`` keys reliably: a contract that publishes an event loses
+    #: their digests on a prover without the EVMVerifier fix on ``cnandi/soroban-event-key-digest``,
+    #: and Phoenix's soroban-sdk 22 build loses them without one. Two reads of one balance then
+    #: disagree, and a balance rule fails on a counterexample that is not real.
+    token_model: bool = False
 
 
 SOLANA_SCAFFOLD = ChainScaffold(chain="solana", tuning_files=True, no_std=False)
@@ -248,6 +277,9 @@ SOROBAN_SCAFFOLD = ChainScaffold(
 
 #: The harness module holding the Soroban SDK's arbitrary values (``harness_files/``).
 SOROBAN_NONDET = "soroban_nondet"
+#: The harness module holding the in-process token model (``harness_files/``), written only for a
+#: contract whose token client the scaffold points at it (:mod:`composer.spec.cvlr.soroban_tokens`).
+SOROBAN_TOKEN_MODEL = soroban_tokens.TOKEN_MODEL
 
 _SCAFFOLDS = {s.chain: s for s in (SOLANA_SCAFFOLD, SOROBAN_SCAFFOLD)}
 
@@ -281,11 +313,21 @@ def _soroban_nondet_source(reference: ChainReference) -> str:
     return source
 
 
+def _soroban_token_model_source(reference: ChainReference) -> str:
+    """:data:`SOROBAN_TOKEN_MODEL`'s source for ``reference``'s SDK generation. From soroban-sdk
+    23 a transfer's recipient is a ``MuxedAddress``, so the model accepts one only from there."""
+    source = _harness_source(Path(f"{SOROBAN_TOKEN_MODEL}.rs"))
+    if int(_generation(reference.platform.witnesses[0].line)) >= 23:
+        source += _harness_source(Path(f"{SOROBAN_TOKEN_MODEL}_muxed.rs"))
+    return source
+
+
 def _harness_files(
     dialect: PathDialect,
     *,
     tuning_files: bool = True,
     nondet_helpers: str | None = None,
+    token_model: str | None = None,
 ) -> tuple[Write, ...]:
     """AutoProver's files, with paths relative to the package root.
 
@@ -306,6 +348,15 @@ def _harness_files(
                 path=HARNESS_DIR / f"{SOROBAN_NONDET}.rs",
                 contents=nondet_helpers,
                 why="arbitrary values of the Soroban SDK's types",
+            ),
+        )
+    if token_model is not None:
+        root += f"pub mod {SOROBAN_TOKEN_MODEL};\n"
+        helpers += (
+            Write(
+                path=HARNESS_DIR / f"{SOROBAN_TOKEN_MODEL}.rs",
+                contents=token_model,
+                why="the tokens the contract calls, modelled in-process",
             ),
         )
     return (
@@ -408,6 +459,7 @@ class _PlanBuilder:
         self._additions: dict[Path, list[Addition]] = {}
         self._changes: list[Change] = []
         self._satisfied: list[str] = []
+        self._notes: list[str] = []
         self._blocked: list[Blocked] = []
 
     def read(self, relative: Path) -> Manifest:
@@ -424,6 +476,9 @@ class _PlanBuilder:
     def add_satisfied(self, note: str) -> None:
         self._satisfied.append(note)
 
+    def add_note(self, note: str) -> None:
+        self._notes.append(note)
+
     def add_blocked(self, blocked: Blocked) -> None:
         self._blocked.append(blocked)
 
@@ -438,6 +493,7 @@ class _PlanBuilder:
             satisfied=tuple(self._satisfied),
             blocked=tuple(self._blocked),
             dialect=dialect,
+            notes=tuple(self._notes),
         )
 
 
@@ -972,6 +1028,41 @@ def _plan_package_manifest(
         )
 
 
+def _plan_token_model(package: CratePackage, relative: Path, plan: _PlanBuilder) -> bool:
+    """Point the package's token clients at :data:`SOROBAN_TOKEN_MODEL`
+    (:mod:`composer.spec.cvlr.soroban_tokens`). Returns whether the package has one, and so needs
+    the model.
+
+    Planned before anything appends to the same files: an :class:`EditSource` applies only over
+    the text it was planned from.
+    """
+    edits = soroban_tokens.plan_token_edits(package.root, skip=package.root / HARNESS_DIR)
+
+    def rel(path: Path) -> Path:
+        return relative / path.relative_to(package.root)
+
+    for site in edits.sites:
+        if site.done:
+            plan.add_satisfied(
+                f"{rel(site.path)}:{site.line} already points `{site.name}` at the token model"
+            )
+    for path, (original, edited) in edits.edited.items():
+        names = ", ".join(
+            f"`{s.name}`" for s in edits.sites if s.path == path and not s.done
+        )
+        plan.add_change(
+            EditSource(
+                path=rel(path),
+                original=original,
+                edited=edited,
+                why=f"under the feature, {names} is the in-process token model",
+            )
+        )
+    for note in edits.notes:
+        plan.add_note(f"{rel(note.path)}:{note.line}: {note.text}")
+    return bool(edits.sites)
+
+
 def _plan_harness(
     package: CratePackage,
     relative: Path,
@@ -979,9 +1070,14 @@ def _plan_harness(
     reference: ChainReference,
     chain: ChainScaffold,
     plan: _PlanBuilder,
+    *,
+    token_model: bool = False,
 ) -> None:
     helpers = _soroban_nondet_source(reference) if chain.nondet_helpers else None
-    for file in _harness_files(dialect, tuning_files=chain.tuning_files, nondet_helpers=helpers):
+    model = _soroban_token_model_source(reference) if token_model else None
+    for file in _harness_files(
+        dialect, tuning_files=chain.tuning_files, nondet_helpers=helpers, token_model=model
+    ):
         on_disk = package.root / file.path
         if on_disk.is_file() and on_disk.read_text() == file.contents:
             plan.add_satisfied(f"{relative / file.path} is current")
@@ -1181,7 +1277,8 @@ def plan_scaffold(
     dialect = dialect_for(workspace, reference)
 
     _plan_workspace_manifest(reference, chain, plan)
-    _plan_harness(package, relative, dialect, reference, chain, plan)
+    token_model = chain.token_model and _plan_token_model(package, relative, plan)
+    _plan_harness(package, relative, dialect, reference, chain, plan, token_model=token_model)
     if chain.nondet_helpers:
         _plan_nondet_impls(package, relative, reference, plan)
     _plan_gitignore(workspace, plan)
@@ -1245,6 +1342,10 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
                 existing = target.read_text() if target.is_file() else ""
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(existing + contents)
+            case EditSource(original=original, edited=edited):
+                if not target.is_file() or target.read_text() != original:
+                    raise ScaffoldStale(f"{change.path} changed after the scaffold was planned")
+                target.write_text(edited)
             case EditManifest(additions=additions):
                 edited = ManifestEditor.read(target)
                 for addition in additions:

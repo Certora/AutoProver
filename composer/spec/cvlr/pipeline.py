@@ -635,6 +635,9 @@ class CvlrBackend[App: BaseApplication, Main, U: FeatureUnit]:
     #: The package to verify. ``None`` lets preflight pick it when there is only one candidate; a
     #: workspace with several is refused rather than guessed at.
     package: str | None = None
+    #: Whether preflight points a Soroban contract's token clients at the in-process model
+    #: (:attr:`~composer.spec.cvlr.scaffold.ChainScaffold.token_model`). Off by default.
+    token_model: bool = False
 
     core_phases = CorePhases(
         {
@@ -672,6 +675,7 @@ class CvlrBackend[App: BaseApplication, Main, U: FeatureUnit]:
             reference=self.reference,
             sandbox=self.sandbox,
             chain=self.chain.tag,
+            token_model=self.token_model,
         )
 
         async def gate() -> None:

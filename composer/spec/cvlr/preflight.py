@@ -16,7 +16,7 @@ and a CVLR pin that does not match the platform generation the project is alread
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from composer.cargo.features import CargoFeature
@@ -222,6 +222,7 @@ async def prepare_workspace(
     sandbox: SandboxConfig,
     package: str | None = None,
     chain: str = "solana",
+    token_model: bool = False,
 ) -> CvlrPreflight:
     """Scaffold ``project_root`` and report what a run needs to know about it.
 
@@ -241,7 +242,12 @@ async def prepare_workspace(
     workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     member = _pick_package(workspace, package)
 
-    plan = plan_scaffold(workspace, member, reference, scaffold_for(chain))
+    # The Soroban token model is per run, off unless asked for
+    # (:attr:`~composer.spec.cvlr.scaffold.ChainScaffold.token_model`).
+    policy = scaffold_for(chain)
+    if token_model:
+        policy = replace(policy, token_model=True)
+    plan = plan_scaffold(workspace, member, reference, policy)
     _log.info("%s", plan.describe())
     try:
         applied = apply(plan, workspace.root)

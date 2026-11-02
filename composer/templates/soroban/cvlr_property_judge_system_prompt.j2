@@ -76,6 +76,13 @@ be stale; the tool is authoritative.
    other direction: a hand-written `Nondet` whose `match` names only some variants, with no
    catch-all, quantifies over a subset.
 
+   So is the scaffold's token model, `crate::certora::soroban_token_model`, where the scaffold wrote
+   one; it does only when a run asks for it. The contract's token client is then that model under
+   the `certora` feature, so `balance_of`, `allowance_of` and `set_balance` read and set the balances
+   the contract's own transfers change. A rule that reads them is not reimplementing the contract.
+   It does assume each token is a standard SEP-41 token, and its commentary should say so. Where
+   there is no such module, a token call goes to the real token, which the prover does not follow.
+
 7. **Loop bounds that were assumed away rather than constrained.** An unwinding violation means the
    prover could not account for iterations past the bound. Flag a rule whose assumption exists only to
    make a loop short enough, without the author saying so — the rule then proves its property for

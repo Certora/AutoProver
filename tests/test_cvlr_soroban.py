@@ -8,6 +8,7 @@ import json
 import subprocess
 import sys
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,6 +47,8 @@ from composer.spec.cvlr.scaffold import (
     ENVS_DIR,
     SOROBAN_NONDET,
     SOROBAN_SCAFFOLD,
+    SOROBAN_TOKEN_MODEL,
+    ScaffoldStale,
     Write,
     apply,
     plan_scaffold,
@@ -370,9 +373,9 @@ def _planned_files(plan) -> set[str]:
     return {c.path.as_posix() for c in plan.changes if isinstance(c, Write)}
 
 
-def _scaffolded(tmp_path: Path, reference=SOROBAN_V22, **kw) -> dict:
+def _scaffolded(tmp_path: Path, reference=SOROBAN_V22, policy=SOROBAN_SCAFFOLD, **kw) -> dict:
     workspace, package = _project(tmp_path, **kw)
-    plan = plan_scaffold(workspace, package, reference, SOROBAN_SCAFFOLD)
+    plan = plan_scaffold(workspace, package, reference, policy)
     assert not plan.blocked, plan.blocked
     assert apply(plan, workspace.root)
     return tomllib.loads((tmp_path / "Cargo.toml").read_text())
@@ -412,6 +415,107 @@ def test_the_muxed_address_helper_is_written_only_where_the_sdk_has_the_type(
 
 def test_the_solana_harness_gets_no_soroban_helpers():
     assert not scaffold_for("solana").nondet_helpers
+
+
+TOKEN_CONTRACT = """\
+use soroban_sdk::{contract, contractimpl, token, Address, Env};
+
+#[contract]
+pub struct Vault;
+
+#[contractimpl]
+impl Vault {
+    pub fn pay(e: Env, token: Address, to: Address, amount: i128) {
+        token::Client::new(&e, &token).transfer(&e.current_contract_address(), &to, &amount);
+    }
+}
+"""
+
+
+#: The scaffold with the token model turned on, as ``--token-model`` does.
+WITH_TOKEN_MODEL = replace(SOROBAN_SCAFFOLD, token_model=True)
+
+
+def _token_project(tmp_path: Path) -> None:
+    (tmp_path / "src").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "src" / "lib.rs").write_text(TOKEN_CONTRACT)
+
+
+def test_the_token_model_is_off_unless_a_run_asks_for_it(tmp_path):
+    assert not SOROBAN_SCAFFOLD.token_model
+    _token_project(tmp_path)
+    _scaffolded(tmp_path)
+    harness = tmp_path / "src" / "certora"
+    assert SOROBAN_TOKEN_MODEL not in (harness / "mod.rs").read_text()
+    assert not (harness / f"{SOROBAN_TOKEN_MODEL}.rs").exists()
+    # The contract keeps calling the real token: nothing is added above its import.
+    assert (tmp_path / "src" / "lib.rs").read_text().startswith(TOKEN_CONTRACT)
+
+
+def test_only_the_soroban_cli_offers_the_token_model_and_it_defaults_off():
+    assert entry.build_parser("soroban").parse_args(["root", "src/lib.rs:Vault"]).token_model is False
+    assert entry.build_parser("soroban").parse_args(
+        ["root", "src/lib.rs:Vault", "--token-model"]
+    ).token_model is True
+    assert entry.build_parser("solana").parse_args(["root", "src/lib.rs:vault"]).token_model is False
+    with pytest.raises(SystemExit):
+        entry.build_parser("solana").parse_args(["root", "src/lib.rs:vault", "--token-model"])
+
+
+@pytest.mark.parametrize(
+    ("reference", "sdk", "muxed"), [(SOROBAN_V22, "22.0.8", False), (SOROBAN_V25, "25.1.1", True)]
+)
+def test_a_contract_calling_a_token_gets_the_token_model(tmp_path, reference, sdk, muxed):
+    _token_project(tmp_path)
+    _scaffolded(tmp_path, reference=reference, policy=WITH_TOKEN_MODEL, sdk_version=sdk)
+    harness = tmp_path / "src" / "certora"
+    assert f"pub mod {SOROBAN_TOKEN_MODEL};" in (harness / "mod.rs").read_text()
+    model = (harness / f"{SOROBAN_TOKEN_MODEL}.rs").read_text()
+    for name in ("balance_of", "set_balance", "allowance_of"):
+        assert f"pub fn {name}" in model, name
+    assert ("impl Recipient for MuxedAddress" in model) is muxed
+    lib = (tmp_path / "src" / "lib.rs").read_text()
+    assert "use crate::certora::soroban_token_model as token;" in lib
+    # The original import stays, gated off; nothing the contract had is gone.
+    assert 'not(feature = "certora"))]' in lib
+    assert all(line in lib for line in TOKEN_CONTRACT.splitlines())
+
+
+def test_a_contract_calling_no_token_gets_no_token_model(tmp_path):
+    _scaffolded(tmp_path, policy=WITH_TOKEN_MODEL)
+    harness = tmp_path / "src" / "certora"
+    assert SOROBAN_TOKEN_MODEL not in (harness / "mod.rs").read_text()
+    assert not (harness / f"{SOROBAN_TOKEN_MODEL}.rs").exists()
+
+
+def test_the_token_model_scaffold_is_idempotent(tmp_path):
+    _token_project(tmp_path)
+    _scaffolded(tmp_path, policy=WITH_TOKEN_MODEL)
+    workspace, package = _project(tmp_path)
+    again = plan_scaffold(workspace, package, SOROBAN_V22, WITH_TOKEN_MODEL)
+    assert again.changes == ()
+    assert any("already points `token` at the token model" in s for s in again.satisfied)
+
+
+def test_a_source_changed_after_planning_stops_the_token_edit(tmp_path):
+    _token_project(tmp_path)
+    workspace, package = _project(tmp_path)
+    plan = plan_scaffold(workspace, package, SOROBAN_V22, WITH_TOKEN_MODEL)
+    (tmp_path / "src" / "lib.rs").write_text(TOKEN_CONTRACT + "\n// edited meanwhile\n")
+    with pytest.raises(ScaffoldStale):
+        apply(plan, workspace.root)
+
+
+def test_a_token_call_the_scaffold_cannot_redirect_is_a_note_in_the_plan(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "lib.rs").write_text(
+        TOKEN_CONTRACT.replace("token::Client::new", "soroban_sdk::token::Client::new")
+    )
+    workspace, package = _project(tmp_path)
+    plan = plan_scaffold(workspace, package, SOROBAN_V22, WITH_TOKEN_MODEL)
+    [note] = plan.notes
+    assert note.startswith("src/lib.rs:9: `soroban_sdk::token::Client`")
+    assert f"  note {note}" in plan.describe()
 
 
 def test_soroban_scaffold_declares_the_releases_and_reads_them_from_the_branch_commit(tmp_path):
@@ -502,11 +606,11 @@ def test_scaffold_for_knows_both_chains_and_refuses_others():
 # The backend and CLI, reached through the chain value
 
 
-def _prompts(chain, component=None):
+def _prompts(chain, component=None, package_root=Path("/nonexistent")):
     props = [PropertyFormulation(title="p", sort="invariant", description="supply is conserved")]
     bound = chain.prompts(
         component, props, program="token", module="unit_a", cvlr_versions="cvlr 0.6.2",
-        caveats=(), conf=soroban_tunable_conf(TunableConf()), package_root=Path("/nonexistent"),
+        caveats=(), conf=soroban_tunable_conf(TunableConf()), package_root=package_root,
     )
     return {
         name: " ".join(getattr(bound, name).render_to(load_jinja_template).split())
@@ -537,6 +641,23 @@ def test_the_soroban_prompts_teach_the_scaffolds_arbitrary_values():
     assert "soroban_nondet" in prompts["judge_system"]
     # cvlr's own rule forms write a section the Soroban prover does not read.
     assert "cvlr_rules!" in prompts["author_system"]
+
+
+def test_the_soroban_author_reads_balances_through_the_token_model_only_when_there_is_one(tmp_path):
+    without = _prompts(SOROBAN_CVLR)["author_system"]
+    assert "does not follow a call into another contract" in without
+    assert "cannot be proven here" in without
+    assert "balance_of" not in without
+
+    _token_project(tmp_path)
+    _scaffolded(tmp_path, policy=WITH_TOKEN_MODEL)
+    prompts = _prompts(SOROBAN_CVLR, package_root=tmp_path)
+    author = prompts["author_system"]
+    assert "the scaffold made `token` in `src/lib.rs` name `crate::certora::soroban_token_model`" in author
+    assert "soroban_token_model::balance_of(&e, &token, &holder)" in author
+    assert "cannot be proven here" not in author
+    # The judge must not reject the model's helpers as the author reimplementing the contract.
+    assert "soroban_token_model" in prompts["judge_system"]
 
 
 def test_the_soroban_author_is_steered_off_the_assert_false_rejection_form():

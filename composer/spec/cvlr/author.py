@@ -79,6 +79,8 @@ from composer.spec.cvlr.anchor_surface import read_surface
 from composer.spec.cvlr.editor import EditingJudgeHost, ProgramEditing, editor_tools
 from composer.spec.cvlr.example import WorkedExample, worked_example
 from composer.spec.cvlr.harness import GeneratedHarness
+from composer.spec.cvlr.scaffold import HARNESS_DIR
+from composer.spec.cvlr.soroban_tokens import modelled
 from composer.spec.cvlr.state import (
     CVLR_JUDGE_KEY,
     FEEDBACK,
@@ -615,10 +617,16 @@ class SorobanCvlrPropertyGenParams(TypedDict):
 
 class SorobanCvlrAuthorSystemParams(CvlrVersionParams):
     """The Soroban author's system prompt. No ``example``: the worked example is rendered from an
-    Anchor surface, and there is no ``#[contractimpl]`` surface reader yet."""
+    Anchor surface, and there is no ``#[contractimpl]`` surface reader yet.
+
+    ``token_model`` names the token clients the scaffold pointed at the in-process model
+    (:mod:`composer.spec.cvlr.soroban_tokens`), each as the module the contract names and the file
+    that names it. Empty when the contract calls no token the scaffold recognized.
+    """
 
     module: str
     conf: dict
+    token_model: list[str]
 
 
 _SorobanJudgeTemplate = TypedTemplate[_SorobanCvlrJudgeParams]("soroban/cvlr_feedback_prompt.j2")
@@ -733,6 +741,10 @@ def soroban_prompts(
                 "cvlr_versions": cvlr_versions,
                 "caveats": list(caveats),
                 "conf": conf,
+                "token_model": [
+                    f"`{site.name}` in `{site.path.relative_to(package_root).as_posix()}`"
+                    for site in modelled(package_root, package_root / HARNESS_DIR)
+                ],
             }
         ),
         author_task=_SorobanPropertyGenTemplate.bind(

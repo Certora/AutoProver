@@ -113,6 +113,7 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     time_budget: float | None
     extra_context: list[str] | None
     threat_model: str | None
+    token_model: bool
 
 
 @dataclasses.dataclass(frozen=True)
@@ -222,6 +223,16 @@ def build_parser(chain: ChainTag = "solana") -> argparse.ArgumentParser:
     budget_group.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
+    if chain == "soroban":
+        parser.add_argument(
+            "--token-model", action="store_true",
+            help="Point the contract's SEP-41 token clients at an in-process token model under the "
+                 "`certora` feature, so a rule can read the balances a transfer moves. Off by "
+                 "default: the Soroban Prover does not yet read the model's storage keys reliably "
+                 "in a contract that publishes events, or in some soroban-sdk 22 builds, and a "
+                 "balance rule there fails on a counterexample that is not real.",
+        )
+    parser.set_defaults(token_model=False)
     add_extra_context_args(parser)
     return parser
 
@@ -501,6 +512,7 @@ async def cvlr_executor[App: BaseApplication, Main, U: FeatureUnit](
                     store=staged.conns.store, namespace=("cvlr_cex", thread_id)
                 ),
                 package=selected.name,
+                token_model=args.token_model,
                 work_dir=work_dir,
                 reference=selected.reference.withholding(*args.withhold_crate),
                 editing=EditingServices(
