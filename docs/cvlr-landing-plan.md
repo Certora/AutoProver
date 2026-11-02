@@ -49,8 +49,9 @@ munge vocabulary left to land; see [P3a](#p3a--the-working-copy-and-what-may-be-
 brought into step: `eric/solana-staging` merged `feature/solana` (`068ab6d4`) and then master after
 #268 (`5e2f7470`), and `feature/solana` fast-forwarded to it. Since then the two sync only by merge.
 On 2026-10-30 `eric/solana-staging` merged master after #280 (`42f0507c`), porting the branch's later
-work onto #280's design; see [P3b2b](#p3b2b--what-a-verdict-means). The next PR is **P1b**, SDK 3
-targets: a follow-up to master that the merge of `eric/solanaProver` made necessary. P3b2 was split
+work onto #280's design; see [P3b2b](#p3b2b--what-a-verdict-means). The next PR is **P3b3**, the
+vacuity diagnostic, on `eric/cvlr-vacuity`. **P1b**, SDK 3 targets, a follow-up to master that the
+merge of `eric/solanaProver` made necessary, lands just ahead of C7b, its first reader. P3b2 was split
 in two on 2026-10-23, after its rebase onto master. P3b had grown to about +3,250 code and +1,530 tests, and on
 2026-10-16 it was split into three: P3b1, submitting a generated draft; P3b2, the rest of what a
 verdict depends on; and P3b3, the vacuity diagnostic. See [P3b](#p3b--a-generated-harness-and-what-its-verdict-means).
@@ -267,8 +268,9 @@ it is not.
 | **P3b3** Why a rule passed vacuously | ≈ +630 | +299 | Rerun a rule reported vacuous with its unsat core collected, decide whether that proof needed the rule's own assertion, and have an analyst read the core against the harness and the program. |
 | **K1** A knowledge bundle, its second instance, and the CVLR recipes | +1,220 | +170 | Hold two corpora behind one context mechanism instead of a fork of it, carry the run-invariant CVLR fact the author's prompt would otherwise restate, and index the recipes an author retrieves when stuck. |
 | **P4** The Anchor surface and the worked example | +831 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
-| **C7b** The CVLR API corpus | +1,580 | +700, and 19,751 of fixtures | Generate the CVLR API reference from the pinned crates' rustdoc, ingest it as `cvlr_api_kb`, and search it with three tools that say they outrank the manual. |
 | **P5** The munge editor | ≈ +1,460 | ≈ +470 | Ask an agent to edit the program as text in the unit's own overlay, gated on the unit's feature, and have a second one accept or reject it; the judge sees the edits and the report gives one patch per unit. |
+| **P1b** SDK 3 targets, a follow-up to master | < +904 | < +1,031, and 48 of fixtures | Point preflight at a workspace on the split `solana-*` 3.x crates and it picks that platform generation, scaffolds the `cvlr-solana` release for it, and builds with platform-tools v1.53 under one host toolchain. The sizes are those of its files on the branch, which also hold later slices' hunks. See [What the merge and later work carry](#what-the-merge-and-later-work-carry). |
+| **C7b** The CVLR API corpus | +1,580 | +700, and 19,751 of fixtures | Generate the CVLR API reference from the pinned crates' rustdoc, ingest it as `cvlr_api_kb`, and search it with three tools that say they outrank the manual. |
 | **P6** The authoring loop | ≈ +2,150 | ≈ +2,250 | Give the author a program and get CVLR rules, judged, with a research sub-agent over both CVLR corpora behind the author and the judge. |
 | **P7** The backend, the pipeline and the CLI | +1,300 | +1,600 | `console-solana` / `tui-solana` on a real target. |
 
@@ -773,8 +775,9 @@ together are a capability someone can run today: `populate_cvlr_rag.sh` builds t
 tools answer from it. `test_cvlr_api_docs.py` drives the producer over trimmed payloads from a real
 rustdoc run. The tool half of `test_cvlr_research.py` drives the tools against a corpus the
 producer built. The agent that holds those tools arrives in P6, so this PR has to land before P6.
-Nothing else orders it: its only imports from `composer/spec/cvlr/` are `crates.CVLR_PREFIX` and
-`reference.reference_for`, and both are on master already. Like K1, it can move anywhere ahead of P6.
+It also has to follow **P1b**. It builds one corpus per platform generation, so it imports
+`reference.generations` and `reference.GitCommit`, which P1b lands, beside `crates.CVLR_PREFIX` and
+`reference.reference_for`, which are on master already.
 
 **The fixtures are most of its size.** `tests/data/cvlr_rustdoc/` is 19,751 lines of JSON in five
 files. They are trimmed from a real run rather than written by hand, because a hand-written payload
@@ -882,8 +885,11 @@ split `solana-*` 3.x crates and it picks that platform generation, scaffolds `cv
 for it (0.5.1 for `solana-program` 2.x), and builds with platform-tools v1.53 under one host
 toolchain rather than the target's `rust-toolchain.toml`. Its files are P1's and P2's, all merged,
 and master's tests reach them through `preflight.select`, the scaffold and the end-to-end test, so
-it is a follow-up rather than a slice of its own capability. It goes ahead of P3b: every later
-slice is cut from a branch that has it, and their tests assume it. It carries one pin its
+it is a follow-up rather than a slice of its own capability. It lands as late as its first
+reader allows, which is C7b: `cvlr_api_docs.py` builds a corpus per platform generation
+(`generations`, `GitCommit`), and `test_cvlr_research.py` reads both. P6
+(`test_cvlr_loop_bound.py` reads `PLATFORM_TOOLS_ROOT`) and P7 (`entry.py`, `pipeline.py`) read it
+too. P3b3, K1, P4 and P5 read none of it, and pass on master without it. It carries one pin its
 description must name: `prover_version: master` until the Prover releases the sound-math fixes
 ([cvlr-todo.md](./cvlr-todo.md) U25).
 
@@ -914,15 +920,16 @@ changes the schema bumps it once, from whatever master has.
 
 ### Order, and what is forced
 
-**~~P1~~ → ~~P2~~ → ~~P3a1~~ → ~~P3b1~~ → ~~P3b2a~~ → ~~P3b2b~~ → P1b → P3b3 → K1 → P4 → C7b → P5 → P6 → P7**
+**~~P1~~ → ~~P2~~ → ~~P3a1~~ → ~~P3b1~~ → ~~P3b2a~~ → ~~P3b2b~~ → P3b3 → K1 → P4 → P5 → P1b → C7b → P6 → P7**
 
 P3b3 has slack too: it needed only P3b2b, which has merged, and only P6 needs it, so it can land
 anywhere before P6.
 
-K1, P4 and C7b are the three with slack. K1 needs nothing in `composer/spec/cvlr/` at all, and C7b
-needs only what P1 merged, so either could go first today. P4 carries `rust_source` itself and needs K1,
-whose bundle its worked-example test renders. C7b has to be ahead of P6, which reads it.
-Everything else is the DAG.
+K1, P4 and C7b are the three with slack. K1 needs nothing in `composer/spec/cvlr/` at all. P4
+carries `rust_source` itself and needs K1, whose bundle its worked-example test renders. C7b has to
+be ahead of P6, which reads it, and behind P1b, whose platform generations it builds a corpus for.
+P1b is placed as late as that allows: no slice before C7b reads it, so C7b moved behind P5 to make
+room. Everything else is the DAG.
 
 Checked rather than assumed: the only modules outside `composer/spec/cvlr/` that import from it are
 the two Solana CLI entry points, the tape driver and the env refresher — all of them CVLR-specific
