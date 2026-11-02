@@ -34,7 +34,7 @@ def _no_backoff_wait(monkeypatch):
 
 
 def _fetch(fake: _FakeAPI, dest: Path, monkeypatch) -> None:
-    monkeypatch.setattr(cloud, "_results_api", lambda: fake)
+    monkeypatch.setattr(cloud, "results_api", lambda: fake)
     asyncio.run(cloud._fetch_results("deadbeefcafebabe", dest))
 
 
@@ -66,7 +66,7 @@ class _PermanentFailAPI:
 
 def test_permanent_error_is_not_retried(tmp_path, monkeypatch):
     fake = _PermanentFailAPI()
-    monkeypatch.setattr(cloud, "_results_api", lambda: fake)
+    monkeypatch.setattr(cloud, "results_api", lambda: fake)
     with pytest.raises(JobNotFoundError):
         asyncio.run(cloud._fetch_results("deadbeefcafebabe", tmp_path))
     assert fake.calls == 1  # surfaced at once — no backoff spent re-failing identically

@@ -6,6 +6,7 @@ Translates ProverOutputUtility's per-rule `CheckResult`s into the report's backe
 """
 import asyncio
 import logging
+import re
 
 from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import CheckResult, NodeStatus
@@ -26,6 +27,25 @@ _NODE_TO_OUTCOME: dict[NodeStatus, Outcome] = {
     NodeStatus.RUNNING: Outcome.UNKNOWN,
     NodeStatus.PENDING: Outcome.UNKNOWN,
 }
+
+
+#: The Solana Prover's report link. ``prover_output_utility`` recognizes ``/output/<user>/<job>``
+#: and ``/job/<job>`` and has no ``jobStatus`` branch, so it raises rather than returning an id.
+#: ``fetch_run_verdicts`` sidesteps that by rewriting the link to its ``/output/`` view; a call that
+#: takes the link as given goes through :func:`job_input`.
+_JOB_STATUS_LINK = re.compile(r"/jobStatus/\d+/(?P<job>[0-9A-Za-z]+)")
+
+
+def job_input(link: str) -> str:
+    """What to hand POU for ``link``.
+
+    POU accepts a job URL *or* a bare job id, and the id is the currency that always works: when a
+    link's shape is one its URL parser does not know, handing over the id it would have extracted
+    gets the same answer. Anything unrecognized here passes through untouched, so links POU already
+    parses keep going through POU's own extraction rather than this regex.
+    """
+    found = _JOB_STATUS_LINK.search(link)
+    return found.group("job") if found else link
 
 
 def fetch_run_verdicts(
@@ -80,6 +100,27 @@ def fetch_covering_verdicts(
             # never overwrites it.
             verdicts.setdefault(name, v)
     return verdicts
+
+
+def fetch_unsat_cores(api: ProverOutputAPI, link: str, rule: str) -> tuple[str, ...]:
+    """The text of every unsat core the run at ``link`` wrote for ``rule``'s checks.
+
+    Only a run with ``coverage_info`` on writes any. The job's ``unsat_core_map.json`` keys a core by
+    check — the rule itself, or a sub-check such as ``<rule>-Assertions`` — so a rule's cores are
+    those under its own name or a name it prefixes with ``-``, which no rule name can contain.
+
+    Blocking: call it off the event loop (``asyncio.to_thread``).
+    """
+    job = job_input(link)
+    names = sorted(
+        {
+            name
+            for check, files in api.unsat_core_map(job).items()
+            if check == rule or check.startswith(f"{rule}-")
+            for name in files
+        }
+    )
+    return tuple(api.fetch_output_file(job, name) for name in names)
 
 
 def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[GeneratedCVL]:

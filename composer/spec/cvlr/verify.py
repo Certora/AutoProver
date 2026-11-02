@@ -5,7 +5,9 @@
 and stamps the draft when every one of them is accounted for. A rule marked
 as an expected failure is left out of that check. A build that fails
 reports the compiler error and submits nothing
-(:class:`~composer.spec.cvlr.prover.BuildRejected`).
+(:class:`~composer.spec.cvlr.prover.BuildRejected`). ``explain_vacuity``
+reruns one rule ``verify_rules`` reported vacuous for its unsat core, and
+stamps nothing.
 """
 
 import asyncio
@@ -18,6 +20,8 @@ from typing import AsyncIterator, Mapping, TypedDict, override
 
 from elftools.common.exceptions import ELFError
 from langchain_core.tools import BaseTool
+from prover_output_utility import ProverOutputAPI
+from pydantic import Field
 
 from graphcore.graph import tool_return, tool_state_update
 from graphcore.tools.schemas import (
@@ -32,6 +36,7 @@ from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
 from composer.cargo.symbols import SymbolsUnavailable, nearest, prover_function_names, unmatched
+from composer.prover.cloud import results_api
 from composer.prover.core import (
     CexHandler,
     CexProgressCallbacks,
@@ -41,7 +46,7 @@ from composer.prover.accounting import RunAccounting
 from composer.prover.ptypes import GeneratedKind, IncompleteCheck, RuleResult, StatusCodes
 from composer.prover.results import AlertReport, UnreadableAlertReport
 from composer.prover.conf import SelectRules
-from composer.spec.cvlr.conf import DEFAULT_FEATURE
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, CollectUnsatCore, tunable_conf
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Checked,
@@ -66,7 +71,9 @@ from composer.spec.cvlr.state import (
 )
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.cvlr.vacuity import VacuityAnalyzer, core_finding
 from composer.spec.gen_types import TypedTemplate
+from composer.spec.source.report_prover import fetch_unsat_cores
 from composer.spec.types import CheckName
 from composer.templates.loader import load_jinja_template
 from composer.ui.tool_display import tool_display
@@ -471,6 +478,7 @@ async def _stage_and_submit(
     state: CvlrGenerationState,
     draft: str,
     *,
+    accounting: Callable[[BuildPermit], _RunAccounting],
     tool_call_id: str,
     choose: Callable[[set[str]], Submission | str],
 ) -> CvlrOutcome | str:
@@ -491,6 +499,9 @@ async def _stage_and_submit(
 
     The cloud job is not covered. A sibling that stages during it compiles
     behind its own feature.
+
+    ``accounting`` builds the run's callbacks from the permit, which they
+    release when the link arrives.
     """
     async with deps.target.build_slot() as permit:
         staged = await permit.stage(draft, state["summaries"], state["vfs"])
@@ -514,7 +525,7 @@ async def _stage_and_submit(
             prepared,
             prover_opts=deps.prover_opts,
             cex=RuleStatusReport(),
-            callbacks=_RunAccounting(permit),
+            callbacks=accounting(permit),
             tool_call_id=tool_call_id,
         )
 
@@ -574,6 +585,7 @@ class VerifyRules(
                 deps,
                 self.state,
                 draft,
+                accounting=_RunAccounting,
                 tool_call_id=self.tool_call_id,
                 choose=choose,
             )
@@ -688,8 +700,134 @@ class VerifyRules(
                 )
 
 
-def gate_tools(deps: VerifyDeps) -> list[BaseTool]:
-    """The tools that compile a draft, change what a run checks, and submit it.
+class _DiagnosticAccounting(_RunAccounting):
+    """Prover bookkeeping for a diagnostic run: its time is counted, its link is not recorded.
+
+    The link recorded for a task is the one its report points at, and that has to stay the run the
+    author's draft was stamped by rather than a rerun made to explain one of its rules.
+    """
+
+    @override
+    def _record_link(self, link: str) -> None:
+        pass
+
+
+@dataclass(frozen=True)
+class VacuityDeps:
+    """What ``explain_vacuity`` needs beyond the gate's own dependencies."""
+
+    verify: VerifyDeps
+    analyzer: VacuityAnalyzer
+    #: Deferred because constructing the client logs in.
+    results: Callable[[], ProverOutputAPI]
+
+
+@tool_display(lambda p: f"Explaining why `{p['rule']}` is vacuous", "Vacuity")
+class ExplainVacuity(
+    WithInjectedState[CvlrGenerationState],
+    WithInjectedId,
+    WithAsyncDependencies[str, VacuityDeps],
+):
+    """Explain why a rule ``verify_rules`` reported vacuous (``SANITY_FAILED``).
+
+    Reruns that one rule of your current draft with the vacuity check off and unsat cores on — about
+    as long as an ordinary run — and has an analyst read the core against your harness and the
+    program. The answer starts with the one question that decides what to do next: whether the
+    rule's own assertion is in the core.
+
+    * **Not in the core**: the constraints in it contradict each other with no help from the
+      assertion — your assumptions, the handler, or a model's own assumptions — and the analysis
+      names them.
+    * **In the core**: the proof needed the assertion, so the assumptions are not what makes the rule
+      vacuous, and weakening them will not help. Look at how the assertion or its precondition is
+      stated.
+
+    Use it on a rule that came back ``SANITY_FAILED``, before changing the rule. It stamps nothing.
+    """
+
+    rule: str = Field(description="The rule reported SANITY_FAILED, as your draft declares it.")
+
+    @override
+    async def run(self) -> str:
+        draft = self.state["curr_spec"]
+        if draft is None:
+            return "No harness written yet — put a draft first."
+        with self.tool_deps() as deps:
+            verify = deps.verify
+            submission = replace(
+                verify.submission_for(self.state, (self.rule,)),
+                purpose=CollectUnsatCore(),
+                # Its own conf file: the unit's is part of the deliverable.
+                stem=f"{verify.submission.stem}_unsat_core",
+            )
+
+            def choose(names: set[str]) -> Submission | str:
+                # The `.so` just built, not a list stored from an earlier run.
+                # A draft edited since that run is not judged against its names.
+                if self.rule not in names:
+                    listed = ", ".join(sorted(names)) or "none"
+                    return f"The build listed no rule `{self.rule}`. It listed: {listed}."
+                return submission
+
+            outcome = await _stage_and_submit(
+                verify,
+                self.state,
+                draft,
+                accounting=_DiagnosticAccounting,
+                tool_call_id=self.tool_call_id,
+                choose=choose,
+            )
+            match outcome:
+                case str():
+                    return outcome
+                case BuildRejected():
+                    return (
+                        "The chain build failed, so nothing was submitted. Run verify_rules to see "
+                        "the compiler's diagnostics."
+                    )
+                case SubmissionFailed(reason=reason):
+                    return f"The diagnostic run did not produce results: {reason}"
+                case Checked(report=report):
+                    pass
+            unproved = sorted(
+                {
+                    f"{path.rule}: {status}"
+                    for path, status in report.raw_rule_status.items()
+                    if path.rule == self.rule and status != "VERIFIED"
+                }
+            )
+            if unproved:
+                return (
+                    f"With the vacuity check off, `{self.rule}` did not verify "
+                    f"({'; '.join(unproved)}), so there is no proof and no unsat core to read. "
+                    "Run verify_rules and read what it reports for the rule."
+                )
+            cores = await asyncio.to_thread(
+                fetch_unsat_cores, deps.results(), report.link, self.rule
+            )
+            if not cores:
+                return (
+                    f"`{self.rule}` verified with the vacuity check off, but the run wrote no unsat "
+                    f"core for it, so there is nothing to analyze. The run: {report.link}"
+                )
+            core = cores[0]
+            finding = core_finding(core)
+            analysis = await deps.analyzer.explain(
+                rule=self.rule,
+                finding=finding,
+                core=core,
+                harness=draft,
+                conf=tunable_conf(self.state["prover_settings"]),
+                vfs=self.state["vfs"],
+                within_tool=self.tool_call_id,
+            )
+            return "\n\n".join(
+                [finding.summary(), analysis.format(), f"The diagnostic run: {report.link}"]
+            )
+
+
+def gate_tools(deps: VerifyDeps, analyzer: VacuityAnalyzer) -> list[BaseTool]:
+    """The tools that compile a draft, change what a run checks, submit it, and explain a vacuous rule.
 
     ``cargo_check`` and ``summarize_for_prover`` are bound to ``deps.target``,
     the target ``verify_rules`` submits. No tool here edits the program.
@@ -697,6 +835,7 @@ def gate_tools(deps: VerifyDeps) -> list[BaseTool]:
     return [
         CargoCheck.bind(deps.target).as_tool("cargo_check"),
         VerifyRules.bind(deps).as_tool("verify_rules"),
+        ExplainVacuity.bind(VacuityDeps(deps, analyzer, results_api)).as_tool("explain_vacuity"),
         SummarizeForProver.bind(deps.target.tuning).as_tool("summarize_for_prover"),
         AdjustProverConfig.as_tool("adjust_prover_config"),
     ]

@@ -4,43 +4,7 @@ when analyzing a CVL rule (or invariant) that failed verification due to vacuity
 the SMT encoding and then mapped to the TAC program commands: assumes,
 assignments, and assertions.
 
-## **Understanding the Unsat Core Structure**
-
-The unsat core (UC) is provided in a structured text format with the following sections:
-
-### **TAC Blocks and Commands**
-Each TAC block is presented with:
-- **Block header**: `BlockID call:FunctionName` (e.g., `18_0_0_1_0_0 call:Bank.withdraw`)
-- **Commands in the block**: Each command shows:
-  1. **UC Classification**: `[in UC]` or `[context]` - **THIS IS THE MOST CRUCIAL INFORMATION**
-  2. **Command number**: Sequential number within the block
-  3. **Command type and content**: The actual TAC command (e.g., `ASSERT`, `ASSUME`, `B125:bool := Lt(...)`)
-  4. **Source mapping** (optional): Location in `.spec` or `.sol` files in brackets
-  5. **Meta information**: Additional context under the command (e.g., `cvl.exp`, `tac.transfers.balance`)
-
-### **Key Insights**
-- **`[in UC]` commands**: These are the problematic constraints causing unsatisfiability
-- **`[context]` commands**: Provide context and help map TAC commands to source code
-- **Annotation commands** not in UC often contextualize the UC commands and reveal prover settings (linking, dispatching)
-- **Block relationships**: Show execution flow and control dependencies
-
-### **CFG Info Section**
-At the end, you will find info about edges between TAC blocks, in this format:
-  CFG INFO:
-    Edges(compacted to UC blocks):
-      TARGET <- {SOURCE1,SOURCE2}
-      TARGET <- {SOURCE3}
-
-  Key Points:
-  1. Each line shows: one TARGET block and the set of SOURCE blocks that have a
-  direct edge to TARGET in the UC-compacted graph
-  2. the UC-compacted graph originates from the original CFG graph by removing intermediate non-UC blocks
-  3. the set of edges **is not** a transitive closure; it shows only the direct
-  neighbours in the compacted graph
-
-  Example:
-  520_0_0_125_0_4484 <- {753_0_0_125_0_0,755_0_0_125_0_0}
-  = Block 520... has direct incoming edges from blocks 753... and 755... in the compacted graph
+{% include "unsat_core_format.j2" %}
 
 ## **Additional Resources Available**
 
@@ -51,19 +15,7 @@ You have access to:
 
 ## **Your Analysis Approach**
 
-### 1. **Identify the Problematic Constraints**
-- Focus on commands marked `[in UC]` - these are the unsatisfiable constraints
-- Examine the sequence and relationships between `[in UC]` commands
-- Use surrounding `[context]` commands for context and source mapping
-
-### 2. **Trace Execution Flows**
-- Follow the CFG edges to understand how execution reaches the unsat core
-- Identify the critical path through blocks containing `[in UC]` commands
-- The "latest" (w.r.t. the graph structure) commands forms a cut in the graph,
-blocking all execution traces, and corresponding paths, that lead to the rule
-assertion(s). Hence, this cut represents the "borderline" where the "execution"
-of the program & rule gets stuck.
-- Use surrounding `[context]` commands for context and source mapping
+{% include "unsat_core_reading_steps.j2" %}
 
 ### 3. **Map to Source Code**
 - Use source mappings in brackets (e.g., `(Bank.spec:71:5)`) and the `[context]`

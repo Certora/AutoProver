@@ -34,8 +34,12 @@ class RunAccounting(ProverCallbacks):
 
     @override
     async def on_prover_link(self, link: str) -> None:
-        get_run_summary().record_prover_link(link)
+        self._record_link(link)
         await super().on_prover_link(link)
+
+    def _record_link(self, link: str) -> None:
+        """Record ``link`` as the active task's. A run whose link is not the task's overrides this."""
+        get_run_summary().record_prover_link(link)
 
     @override
     async def on_prover_runtime(self, ms: int) -> None:

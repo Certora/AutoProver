@@ -120,6 +120,25 @@ DEFAULT_FEATURE = CargoFeature("certora")
 
 
 @dataclass(frozen=True)
+class CheckVerdicts:
+    """An ordinary submission: every rule's verdict, with vacuity checked."""
+
+
+@dataclass(frozen=True)
+class CollectUnsatCore:
+    """A diagnostic submission for a rule reported vacuous: the vacuity check off, unsat cores on.
+
+    With ``rule_sanity`` off, a vacuous rule verifies, and ``coverage_info`` makes the prover write
+    the core that proof rests on (``Reports/UnsatCoreTAC-<rule>-<n>.txt``). ``basic`` rather than the
+    ``advanced`` CVL's sanity reruns use: on a Solana rule ``basic`` took the same 25s as the
+    ordinary run, and ``advanced`` had not finished after 25 minutes.
+    """
+
+
+type ConfPurpose = CheckVerdicts | CollectUnsatCore
+
+
+@dataclass(frozen=True)
 class RunOverlay:
     """What one submission adds to the conf its :class:`TunableConf` describes.
 
@@ -134,6 +153,7 @@ class RunOverlay:
     #: Empty leaves the key unset, so the package's ``[package.metadata.certora]`` declaration
     #: still applies.
     summaries: tuple[Path, ...] = ()
+    purpose: ConfPurpose = CheckVerdicts()
 
 
 def solana_conf(tunable: TunableConf, run: RunOverlay) -> Conf:
@@ -145,4 +165,10 @@ def solana_conf(tunable: TunableConf, run: RunOverlay) -> Conf:
     }
     if run.summaries:
         conf["solana_summaries"] = [str(s) for s in run.summaries]
+    match run.purpose:
+        case CheckVerdicts():
+            pass
+        case CollectUnsatCore():
+            conf["rule_sanity"] = "none"
+            conf["coverage_info"] = "basic"
     return run.rules.apply_to(conf)

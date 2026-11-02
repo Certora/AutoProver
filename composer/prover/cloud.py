@@ -161,7 +161,7 @@ def _job_runtime_ms(job_data: dict) -> int | None:
 
 
 @lru_cache(maxsize=1)
-def _results_api() -> ProverOutputAPI:
+def results_api() -> ProverOutputAPI:
     """Client for reading job results. Cached because constructing one logs in.
 
     ``enable_cache=False``: each job's documents are read once, and building
@@ -195,7 +195,7 @@ async def _fetch_results(job_id: str, dest: Path) -> None:
     for attempt in range(1, _FETCH_MAX_ATTEMPTS + 1):
         try:
             await asyncio.to_thread(
-                _results_api().fetch_sources_and_treeview_files, job_id, dest
+                results_api().fetch_sources_and_treeview_files, job_id, dest
             )
             return
         # ``requests`` failures that escape POU's wrapping are OSErrors (RequestException is an
@@ -222,7 +222,7 @@ async def _fetch_alert_report(job_id: str) -> AlertReport | UnreadableAlertRepor
     """
     try:
         text = await asyncio.to_thread(
-            _results_api().fetch_output_file, job_id, ALERT_REPORT.name
+            results_api().fetch_output_file, job_id, ALERT_REPORT.name
         )
     except JobNotFoundError:
         logger.info("Cloud job %s has no alert report", job_id)
