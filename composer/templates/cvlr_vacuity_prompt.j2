@@ -4,7 +4,40 @@ comes from rerunning the rule with the vacuity check off and unsat cores on, so 
 the core is what that proof needed. It was extracted from the SMT encoding and then mapped to the TAC
 program commands: assumes, assignments, and assertions.
 
-{% include "unsat_core_format.j2" %}
+## **Understanding the Unsat Core Structure**
+
+The unsat core (UC) is a text dump. It opens with `= UNSAT CORE: <rule>`, then lists TAC blocks,
+then the edges between them.
+
+### **TAC Blocks and Commands**
+Each block opens with a header line, `=== <BlockID> (call:<function>)` — for example
+`=== 142_1_0_0_0_0 (call:main)` — followed by one line per command:
+
+  `[in UC] 66: ASSERT B548:bool [assertion failed] (standard_deposits.rs:149:1)`
+
+1. **UC classification**: `[in UC]` or `[context]` — **THIS IS THE MOST CRUCIAL INFORMATION**.
+   `[in UC]` commands are the constraints the proof rests on; `[context]` commands are not in the
+   core and are shown to help map the others to source.
+   A `[context]` command is shown only when it is one of the five commands before an `[in UC]`
+   command in the same block, so a command missing from the dump says nothing.
+2. **Command number** within the block.
+3. **The TAC command**: an assignment `R…:bv256 := …`, an `ASSUME`, an `ASSERT`, or an `Annotation`.
+   An `ASSERT` carries its message in brackets: `[assertion failed]` for a `cvlr_assert!`, and
+   `Cannot overflow: …` or `Unwinding condition in a loop…` for a check the Prover added itself.
+4. **Source location** (optional): `(file.rs:line:col)`.
+5. **Meta information** (optional), indented under the command, e.g. `[cmd] tac.assert.id: 100001`.
+   `[cmd] cvl.user.defined.assert` marks an `ASSERT` as one the rule wrote.
+
+A `[context]` command longer than 200 characters is cut in the middle with `...truncated...`.
+
+### **CFG Edges Section**
+At the end, a section in this format gives the edges between the blocks shown:
+
+  CFG Edges (compacted to UC blocks):
+    TARGET <- {SOURCE1,SOURCE2}
+
+Each line names one target block and the blocks with a direct edge to it in the graph compacted to
+UC blocks: blocks with nothing in the core are removed, and the edges are not a transitive closure.
 
 ## **Reading a Solana core back to Rust**
 
@@ -17,8 +50,9 @@ block chain, so the Rust is recovered from annotations rather than from block na
 - `snippet.cmd := CexPrintValues(displayMessage=<name>, symbols=[R…])` is a `clog!` in the rule, and
   names the register holding that value: use it to tell which register is which of the rule's
   variables.
-- `snippet.cmd := Assert(…)` and `ASSERT … (file.rs:line:col)` are the rule's `cvlr_assert!`, with
-  its source location.
+- An `ASSERT … (file.rs:line:col)` with `[cmd] cvl.user.defined.assert` under it is the rule's
+  `cvlr_assert!`, with its source location. The `snippet.cmd := Assert(…)` before an `ASSERT` names
+  its symbol for the call trace, and the Prover writes one for some of its own asserts too.
 - `snippet.cmd := ExternalCall(displayMessage=CVT_nondet_u64, …)` marks a `nondet()` value; the
   `ASSUME` on its bounds next to it is the prover's, not the rule's.
 - `Select(M…:bytemap 0x…)` reads memory: account data, the stack, or the heap, at that address.
@@ -31,7 +65,18 @@ prover conf the rule ran under.
 
 ## **Your Analysis Approach**
 
-{% include "unsat_core_reading_steps.j2" %}
+### 1. **Identify the Constraints in the Core**
+- Focus on commands marked `[in UC]`, and on how they relate to each other
+- Use the surrounding `[context]` commands for context and source mapping
+
+### 2. **Trace Execution Flows**
+- Follow the CFG edges to see how execution reaches the blocks with `[in UC]` commands
+- When the rule's assertion is not in the core, the latest `[in UC]` commands (with respect to the
+  graph) form a cut that blocks every path to the assertion: that cut is where the execution of the
+  program and rule gets stuck, and it is what to explain
+- When the rule's assertion is in the core, there is no such cut: the core is the assertion and what
+  it reads. Trace it to confirm the path to the assertion is live, then look after the assertion, as
+  you were told
 
 ### 3. **Map to Source Code**
 - Use the annotations above to place each `[in UC]` command in a Rust function

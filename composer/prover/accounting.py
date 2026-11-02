@@ -38,7 +38,11 @@ class RunAccounting(ProverCallbacks):
         await super().on_prover_link(link)
 
     def _record_link(self, link: str) -> None:
-        """Record ``link`` as the active task's. A run whose link is not the task's overrides this."""
+        """Record ``link`` as the active task's.
+
+        A run whose link must not become the task's overrides this to record nothing, so the task
+        keeps pointing at the run it was judged by.
+        """
         get_run_summary().record_prover_link(link)
 
     @override

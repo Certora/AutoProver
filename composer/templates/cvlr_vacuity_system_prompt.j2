@@ -30,14 +30,12 @@ you are told the answer:
   Then the cause is after the assertion, where the core cannot see. The vacuity check is a separate
   program whose `satisfy` sits at the very end of the rule function, after its locals are dropped. A
   harness that lets its nondet account array drop — `Box::new(cvlr_deserialize_nondet_accounts())`
-  with no `core::mem::forget(accounts);` before the rule returns — puts a 16-iteration loop between the
-  assertion and the satisfy, and with `loop_iter: 2` no path finishes it. That is the cause measured
-  on this backend: every rule found vacuous with its assertion in the core had that loop in its
-  vacuity check, and one, vacuous in four submissions, verified with that one line added. Check the
-  harness for it first, and recommend it when it is missing. Any
-  other code between the assertion and the end of the rule is the next place to look. Do not explain
-  the vacuity by how the assertion is written: nothing in the core can show that, and every such
-  explanation measured so far was wrong.
+  with no `core::mem::forget(accounts);` before the rule returns — puts a loop over the array's 16
+  accounts between the assertion and the satisfy. Compare it with the `loop_iter` in the conf you are
+  given: under a smaller bound no path finishes it. That is the cause found on this backend whenever
+  the assertion was in the core, so check the harness for it first, and recommend the `forget` when it
+  is missing. Any other code between the assertion and the end of the rule is the next place to look.
+  Do not explain the vacuity by how the assertion is written: nothing in the core can show that.
 - **The assertion is not in the core.** The constraints marked `[in UC]` are unsatisfiable without
   it, so they cut off every path to the assertion. Find them, and say which side each comes from.
 

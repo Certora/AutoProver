@@ -71,7 +71,7 @@ from composer.spec.cvlr.state import (
 )
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
-from composer.spec.cvlr.vacuity import VacuityAnalyzer, core_finding
+from composer.spec.cvlr.vacuity import VacuityAnalyzer, rule_core
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.source.report_prover import fetch_unsat_cores
 from composer.spec.types import CheckName
@@ -635,16 +635,8 @@ class VerifyRules(
     ) -> Command | str:
         expected = self.state["expected_failures"]
         match outcome:
-            case BuildRejected(build=build):
-                said = (
-                    build.verdict.diagnostics
-                    if isinstance(build.verdict, CompileFailed)
-                    else "no diagnostics were captured"
-                )
-                return tool_return(
-                    self.tool_call_id,
-                    f"The chain build failed, so nothing was submitted:\n{said}",
-                )
+            case BuildRejected():
+                return tool_return(self.tool_call_id, _build_failure(outcome))
             case SubmissionFailed(build=build, reason=reason):
                 said = [f"The prover run did not produce results: {reason}"]
                 if (inert := await self._inert_summaries(build)) is not None:
@@ -700,6 +692,14 @@ class VerifyRules(
                 )
 
 
+def _build_failure(rejected: BuildRejected) -> str:
+    verdict = rejected.build.verdict
+    said = (
+        verdict.diagnostics if isinstance(verdict, CompileFailed) else "no diagnostics were captured"
+    )
+    return f"The chain build failed, so nothing was submitted:\n{said}"
+
+
 class _DiagnosticAccounting(_RunAccounting):
     """Prover bookkeeping for a diagnostic run: its time is counted, its link is not recorded.
 
@@ -739,13 +739,13 @@ class ExplainVacuity(
       assertion — your assumptions, the handler, or a model's own assumptions — and the analysis
       names them.
     * **In the core**: the proof needed the assertion, so the assumptions are not what makes the rule
-      vacuous, and weakening them will not help. Look at how the assertion or its precondition is
-      stated.
+      vacuous, and weakening them will not help. Look at the code between the assertion and the end
+      of the rule, first for a nondet account array dropped without ``core::mem::forget(accounts);``.
 
     Use it on a rule that came back ``SANITY_FAILED``, before changing the rule. It stamps nothing.
     """
 
-    rule: str = Field(description="The rule reported SANITY_FAILED, as your draft declares it.")
+    rule: str = Field(description="The name of the rule's `#[rule]` function in your draft.")
 
     @override
     async def run(self) -> str:
@@ -781,48 +781,56 @@ class ExplainVacuity(
                 case str():
                     return outcome
                 case BuildRejected():
-                    return (
-                        "The chain build failed, so nothing was submitted. Run verify_rules to see "
-                        "the compiler's diagnostics."
-                    )
+                    return _build_failure(outcome)
                 case SubmissionFailed(reason=reason):
                     return f"The diagnostic run did not produce results: {reason}"
                 case Checked(report=report):
                     pass
-            unproved = sorted(
-                {
-                    f"{path.rule}: {status}"
-                    for path, status in report.raw_rule_status.items()
-                    if path.rule == self.rule and status != "VERIFIED"
-                }
-            )
-            if unproved:
-                return (
-                    f"With the vacuity check off, `{self.rule}` did not verify "
-                    f"({'; '.join(unproved)}), so there is no proof and no unsat core to read. "
-                    "Run verify_rules and read what it reports for the rule."
-                )
+            match report.rule_outcomes().get(self.rule):
+                case None:
+                    return (
+                        f"The diagnostic run's report does not name `{self.rule}`, so there is no "
+                        f"verdict for it and no unsat core to read. The run: {report.link}"
+                    )
+                case "VERIFIED":
+                    pass
+                case status:
+                    return (
+                        f"With the vacuity check off, `{self.rule}` did not verify ({status}), so "
+                        "there is no proof and no unsat core to read. Run verify_rules and read "
+                        "what it reports for the rule."
+                    )
             cores = await asyncio.to_thread(
                 fetch_unsat_cores, deps.results(), report.link, self.rule
             )
-            if not cores:
+            chosen = rule_core(cores)
+            if chosen is None:
                 return (
                     f"`{self.rule}` verified with the vacuity check off, but the run wrote no unsat "
                     f"core for it, so there is nothing to analyze. The run: {report.link}"
                 )
-            core = cores[0]
-            finding = core_finding(core)
+            finding = chosen.finding
             analysis = await deps.analyzer.explain(
                 rule=self.rule,
                 finding=finding,
-                core=core,
+                core=chosen.core,
                 harness=draft,
                 conf=tunable_conf(self.state["prover_settings"]),
                 vfs=self.state["vfs"],
                 within_tool=self.tool_call_id,
             )
+            unread = (
+                [f"The run wrote {chosen.unread} other unsat core(s) for the rule, not read here."]
+                if chosen.unread
+                else []
+            )
             return "\n\n".join(
-                [finding.summary(), analysis.format(), f"The diagnostic run: {report.link}"]
+                [
+                    finding.summary(),
+                    analysis.format(),
+                    *unread,
+                    f"The diagnostic run: {report.link}",
+                ]
             )
 
 

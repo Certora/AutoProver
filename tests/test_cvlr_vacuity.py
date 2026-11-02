@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from composer.cargo.sbf import Built, SbfRun
+from composer.cargo.session import CompileFailed
 from composer.prover.conf import SelectRules
 from composer.prover.core import ProverReport
 from composer.prover.ptypes import RulePath
@@ -30,11 +31,21 @@ from composer.spec.cvlr.vacuity import (
     AssertionNotInCore,
     VacuityAnalysis,
     core_finding,
+    rule_core,
 )
 from composer.spec.source.report_prover import fetch_unsat_cores
 from composer.templates.loader import load_jinja_template
 
-_CORE = (Path(__file__).parent / "data" / "cvlr_unsat_core" / "assertion_in_core.txt").read_text()
+#: Captured from a Prover older than 8.20.0, which added the meta that marks the rule's assertion
+#: (EVMVerifier #8656); it is inserted where 8.20.0's printer writes it.
+_CORE = (
+    (Path(__file__).parent / "data" / "cvlr_unsat_core" / "assertion_in_core.txt")
+    .read_text()
+    .replace(
+        "  [cmd] tac.assert.id: 100001",
+        "  [cmd] cvl.user.defined.assert: NoValue\n  [cmd] tac.assert.id: 100001",
+    )
+)
 
 _DRAFT = """
 use cvlr::prelude::*;
@@ -52,10 +63,6 @@ fn rule_other() { cvlr_assert!(true); }
 
 
 def test_an_unsat_core_run_turns_the_vacuity_check_off_and_cores_on():
-    """With the check on, a vacuous rule is SANITY_FAILED and the prover writes no core for it; off,
-    it verifies, and `coverage_info` makes the prover write the core of that proof. `basic`, not the
-    `advanced` CVL's reruns use: on a Solana rule `advanced` ran over 25 minutes where `basic` took
-    the ordinary 25s."""
     conf = solana_conf(
         TunableConf(), RunOverlay(build_script=Path("/w/b.py"), purpose=CollectUnsatCore())
     )
@@ -90,13 +97,43 @@ def test_a_core_without_the_assertion_is_recognized():
     assert isinstance(core_finding(without), AssertionNotInCore)
 
 
-def test_an_assertion_named_only_in_an_annotation_is_not_the_assertion():
-    """`snippet.cmd := Assert(…)` annotations name the assertion without being it."""
-    only_annotation = "\n".join(
-        line for line in _CORE.splitlines() if not line.startswith("[in UC] 66: ASSERT")
-    )
-    assert "Assert(displayMessage=assert" in only_annotation
-    assert isinstance(core_finding(only_annotation), AssertionNotInCore)
+def test_an_assertion_without_the_user_meta_is_not_the_rule_s():
+    """A Prover-inserted assert (an unresolved CPI) has the rule's `snippet.cmd := Assert` annotation
+    too. Only the meta tells them apart."""
+    unmarked = _CORE.replace("  [cmd] cvl.user.defined.assert: NoValue\n", "")
+    assert "Assert(displayMessage=assert" in unmarked and "[in UC] 66: ASSERT" in unmarked
+    assert isinstance(core_finding(unmarked), AssertionNotInCore)
+
+
+#: A check the Prover added itself, in the core with the rule's own assertion out of it.
+_GENERATED_ASSERT = (
+    "[in UC] 67: ASSERT B549:bool [Cannot overflow: inferred pointer] (standard_deposits.rs:140:5)"
+)
+
+
+def test_a_generated_assertion_in_the_core_is_not_the_rule_s():
+    """`-unsatCoresForAllAsserts` keeps the Prover's own checks in the core."""
+    generated = _CORE.replace("[in UC] 66: ASSERT", "[context] 66: ASSERT") + _GENERATED_ASSERT
+    assert isinstance(core_finding(generated), AssertionNotInCore)
+
+
+def test_a_core_without_the_assertion_settles_it_over_one_with_it():
+    """Two cores of the same proof (`-numOfUnsatCores 2`): one that does without the assertion shows
+    the rest of the core is unsatisfiable on its own, which one that includes it cannot rule out."""
+    without = _CORE.replace("[in UC] 66: ASSERT", "[context] 66: ASSERT")
+    chosen = rule_core((_CORE, without))
+    assert chosen is not None
+    assert chosen.core == without and isinstance(chosen.finding, AssertionNotInCore)
+    assert chosen.unread == 1
+
+
+def test_with_the_assertion_in_every_core_it_is_in_the_core():
+    chosen = rule_core((_CORE, _CORE))
+    assert chosen is not None and isinstance(chosen.finding, AssertionInCore)
+
+
+def test_no_cores_is_none():
+    assert rule_core(()) is None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -135,11 +172,19 @@ def test_a_rule_s_cores_are_the_ones_its_checks_are_keyed_by():
     assert fetch_unsat_cores(api, "https://x/output/1/abc", "rule_backed") == ("mine",)  # type: ignore[arg-type]
 
 
-def test_a_job_status_link_is_handed_over_as_its_job_id():
-    """The Solana report link is `/jobStatus/…`, which POU cannot parse."""
+def test_a_job_status_link_is_handed_over_as_its_output_view():
+    """The Solana report link is `/jobStatus/…`, which POU cannot parse; its `/output/` view it can."""
     api = _FakeResults({}, {})
     fetch_unsat_cores(api, "https://prover.certora.com/jobStatus/37632/c1734c04?anonymousKey=k", "r")  # type: ignore[arg-type]
-    assert api.jobs == ["c1734c04"]
+    assert api.jobs == ["https://prover.certora.com/output/37632/c1734c04?anonymousKey=k"]
+
+
+def test_a_rule_s_cores_are_read_in_numeric_order():
+    api = _FakeResults(
+        {"r": ["UnsatCoreTAC-r-10.txt", "UnsatCoreTAC-r-2.txt"]},
+        {"UnsatCoreTAC-r-10.txt": "ten", "UnsatCoreTAC-r-2.txt": "two"},
+    )
+    assert fetch_unsat_cores(api, "https://x/output/1/abc", "r") == ("two", "ten")  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------------------------
@@ -322,6 +367,36 @@ async def test_a_rule_that_does_not_verify_without_the_check_has_no_core_to_read
     assert analyzer.calls == []
 
 
+@pytest.mark.asyncio
+async def test_a_failed_build_reports_its_diagnostics(monkeypatch):
+    async def build(_session, _submission):
+        return SbfRun(
+            duration_ms=1,
+            verdict=CompileFailed(diagnostics="error[E0425]: cannot find", exit_code=1),
+            confined=True,
+        )
+
+    monkeypatch.setattr(verify_mod, "build_for_submission", build)
+    answer = await _run(_deps(_FakeAnalyzer(), _FakeResults({}, {})), _state(), "rule_backed")
+    assert "nothing was submitted" in answer and "E0425" in answer
+    assert "verify_rules" not in answer
+
+
+@pytest.mark.asyncio
+async def test_a_report_that_does_not_name_the_rule_is_not_a_proof(tmp_path, monkeypatch):
+    _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
+
+    async def fake_run(prepared, **kwargs):
+        return _checked({"rule_other": "VERIFIED"})
+
+    monkeypatch.setattr(verify_mod, "run_submission", fake_run)
+    analyzer = _FakeAnalyzer()
+    results = _FakeResults({"rule_backed-Assertions": ["c.txt"]}, {"c.txt": _CORE})
+    answer = await _run(_deps(analyzer, results), _state(), "rule_backed")
+    assert "does not name `rule_backed`" in answer
+    assert results.jobs == [] and analyzer.calls == []
+
+
 # ---------------------------------------------------------------------------------------------
 # the prompts
 
@@ -330,6 +405,6 @@ def test_the_cvlr_prompts_render():
     system = load_jinja_template("cvlr_vacuity_system_prompt.j2")
     initial = load_jinja_template("cvlr_vacuity_prompt.j2")
     assert "Whether the rule's own `ASSERT` is among them" in system
-    # The core format is shared with the CVL analyzer's prompt, not restated.
-    assert "Understanding the Unsat Core Structure" in initial
-    assert "Understanding the Unsat Core Structure" in load_jinja_template("sanity_tool_prompt.j2")
+    # The Solana core's own shape, not the EVM one CVL's prompt describes.
+    assert "CFG Edges (compacted to UC blocks):" in initial and "CFG INFO" not in initial
+    assert "(call:main)" in initial and ".sol" not in initial

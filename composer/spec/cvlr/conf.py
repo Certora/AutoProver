@@ -129,9 +129,9 @@ class CollectUnsatCore:
     """A diagnostic submission for a rule reported vacuous: the vacuity check off, unsat cores on.
 
     With ``rule_sanity`` off, a vacuous rule verifies, and ``coverage_info`` makes the prover write
-    the core that proof rests on (``Reports/UnsatCoreTAC-<rule>-<n>.txt``). ``basic`` rather than the
-    ``advanced`` CVL's sanity reruns use: on a Solana rule ``basic`` took the same 25s as the
-    ordinary run, and ``advanced`` had not finished after 25 minutes.
+    the core that proof rests on (``Reports/UnsatCoreTAC-<rule>-<n>.txt``). ``basic``, not the
+    ``advanced`` CVL's sanity reruns use: on a Solana rule ``advanced`` ran over 25 minutes where
+    ``basic`` took the ordinary run's 25s.
     """
 
 
