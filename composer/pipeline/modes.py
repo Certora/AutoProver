@@ -3,9 +3,9 @@
 A run mode in :data:`~composer.pipeline.run_mode.EXTERNAL_MODES` shares the pipeline's front half
 with every other mode (system analysis, ``prepare_system``, property extraction with plugins). In
 place of ``prepare_formalization`` the driver runs the backend's ``prepare_external_mode`` (for
-the prover backend: the project build), alongside extraction. It then hands what it extracted to
-an implementation registered under the entry-point group
-:data:`~composer.pipeline.run_mode.MODE_ENTRY_POINT_GROUP`. The driver never runs
+the prover backend: the project build, unless the implementation declares it needs none),
+alongside extraction. It then hands what it extracted to an implementation registered under the
+entry-point group :data:`~composer.pipeline.run_mode.MODE_ENTRY_POINT_GROUP`. The driver never runs
 ``prepare_formalization`` or the per-component formalization for such a run. The implementation
 returns the report and its verdict on the run; the driver writes the report and derives the exit
 status from that verdict.
@@ -60,7 +60,7 @@ class ProjectBuild(BaseModel):
 class ModeSupport:
     """What a backend's :meth:`~composer.pipeline.core.PreparedSystem.prepare_external_mode`
     hands the driver for an external mode, in place of a formalizer."""
-    #: ``None`` for a backend with no build step.
+    #: ``None`` for a backend with no build step, or when the driver asked for no build.
     build: ProjectBuild | None = None
     #: The prover options the backend runs with (cloud or local, server, global timeout).
     #: ``None`` for a backend that runs no prover.
@@ -90,7 +90,7 @@ class ModeContext[P: enum.Enum, H, U: FeatureUnit, Main]:
     #: The backend's phase for the mode's own work: tag the mode's tasks with it.
     phase: P
     #: The project build the driver ran before the hand-off, or ``None`` for a backend that has
-    #: no build step.
+    #: no build step or a mode that declares it needs none (``needs_project_build``).
     project_build: ProjectBuild | None = None
     #: The prover options the backend runs with, or ``None`` for a backend that runs no prover.
     prover_options: ProverOptions | None = None
@@ -109,6 +109,10 @@ class ModeResult(BaseModel):
 
 class RunModeImpl[U: FeatureUnit, Main](ABC):
     """A running mode implementation, built by :meth:`RunModeLoader.initialize`."""
+
+    #: Build the project before invoking the mode. If False, project_build is None;
+    #: prover_options are provided either way.
+    needs_project_build: ClassVar[bool] = True
 
     @abstractmethod
     async def run(self, ctx: ModeContext[Any, Any, U, Main]) -> ModeResult:

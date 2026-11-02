@@ -17,7 +17,7 @@ installed separately. This package only declares the mode and the hook.
 | preflight and system analysis | yes | yes |
 | `prepare_system` | yes, with harness creation | yes, **without** harness creation (prover backend) |
 | `prepare_formalization` (AutoSetup, summaries) | yes | **no** |
-| `prepare_external_mode` (project build) | no | **yes**, alongside extraction |
+| `prepare_external_mode` (project build) | no | **yes**, alongside extraction; builds nothing for a mode with `needs_project_build = False` |
 | `_extract_all` (property inference + plugins) | yes | yes |
 | ranking, formalization, `build_report` | yes | **no** |
 | `RunModeImpl.run`, then `write_report` | no | **yes** |
@@ -37,10 +37,20 @@ built-in modes verify through is neither created nor validated, and AutoSetup's
 
 ### Project build
 
-The driver builds the project for every external-mode run, before the
+The driver builds the project for an external-mode run, before the
 hand-off. It calls `PreparedSystem.prepare_external_mode`, which runs
 alongside extraction, and passes the result to the mode as
 `ModeContext.project_build`.
+
+A mode that does not need this build sets `needs_project_build = False` on
+its `RunModeImpl` class. The driver then calls
+`prepare_external_mode(run, build=False)`, and the backend builds nothing:
+for the prover backend, no AutoSetup process runs, no `project_build.log` is
+written, and no import fix edits the project sources. The mode gets
+`project_build=None` and still gets `prover_options`. Use this for a mode that
+builds each of the project's confs with the conf's own settings: a failed
+project build would tell it nothing about those confs, and the build's import
+fixes would change the sources the confs run on. The default is `True`.
 
 For the prover backend, the build is AutoSetup's build step
 (`certora_autosetup --build-only`, `Autosetup.build`): build-system
@@ -102,6 +112,8 @@ class EvaluateLoader(RunModeLoader[ContractComponentInstance, ContractInstance])
 
 
 class EvaluateMode(RunModeImpl[ContractComponentInstance, ContractInstance]):
+    needs_project_build = False  # optional; the default True builds the project first
+
     async def run(self, ctx: ModeContext[Any, Any, ContractComponentInstance, ContractInstance]) -> ModeResult:
         ...
         return ModeResult(report=report, succeeded=True)
@@ -122,6 +134,9 @@ Contract:
 * `initialize()` is entered before the pipeline body starts and exited when
   the run returns or raises. It is never entered for another mode, so an
   installed mode costs `comprehensive` and `prioritized` runs nothing.
+* `needs_project_build` (a class attribute of the `RunModeImpl`, default
+  `True`) decides whether the driver builds the project before the hand-off.
+  See [Project build](#project-build).
 * A mode is not a plugin. It is not in the active-plugin list and does not enter
   any cache key.
 
@@ -139,7 +154,7 @@ dataclass):
 | `threat_model`, `extra_context` | the run's guidance documents |
 | `artifact_store` | the backend's artifact store. Write deliverables through `write_deliverable` |
 | `phase` | the backend's phase for the mode's work. Tag the mode's tasks with it. The prover backend's is `AutoProvePhase.EVALUATION` ("Evaluation" in the UIs). A backend that names none gives its `formalization` phase |
-| `project_build` | the `ProjectBuild` the driver ran, or `None` for a backend with no build step |
+| `project_build` | the `ProjectBuild` the driver ran, or `None` for a backend with no build step or a mode with `needs_project_build = False` |
 | `prover_options` | the backend's `ProverOptions` (`app`, `server`: set for a cloud run, `global_timeout`; `cloud`, `cli_args()`), or `None` for a backend that runs no prover |
 | `active_plugins` | the active-plugin list extraction ran with |
 
