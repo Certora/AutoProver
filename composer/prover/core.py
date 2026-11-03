@@ -739,6 +739,13 @@ async def declared_rules_list(
     return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
 
+_HALTED_NOTE = (
+    "The prover job reached its time limit before every rule finished. The rules it finished "
+    "have their verdicts; a rule it cut off is reported as TIMEOUT. Resubmitting the same rules "
+    "will reach the limit again: simplify or split the rules that timed out."
+)
+
+
 def _failure_advice(alerts: tuple[ErrorAlert, ...]) -> str:
     """What to tell the author, given the ``ERROR`` entries on a job with no verdicts.
 
@@ -921,6 +928,8 @@ async def run_prover(
                     rule_entries=[(r, None) for r in all_results],
                     diagnoses=[],
                 )
+            if fetched.halted:
+                result_str = f"{_HALTED_NOTE}\n\n{result_str}"
     except CloudJobError as exc:
         return cloud_job_failure_message(exc)
     except CloudResultsUnavailable as exc:

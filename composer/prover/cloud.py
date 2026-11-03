@@ -29,8 +29,11 @@ from composer.prover.results import (
     AlertReport,
     ErrorAlert,
     FetchedResults,
+    MalformedTreeVew,
+    NoTreeViewResultError,
     UnreadableAlertReport,
     error_alerts,
+    get_final_treeview,
     parse_alert_report,
 )
 
@@ -40,7 +43,8 @@ logger = logging.getLogger("composer.spec")
 class CloudJobError(RuntimeError):
     """Raised when a cloud prover job reaches a terminal status other than
     SUCCEEDED, does not reach a terminal status within the poll timeout, or
-    finishes without an output archive. Carries the ``status``, the prover
+    finishes without an output archive. A ``HALTED`` job is raised only when it
+    wrote no tree view; otherwise its finished verdicts are yielded. Carries the ``status``, the prover
     ``link``, and ``alerts``: the ``ERROR`` entries from ``Reports/alertReport.json``
     when a ``FAILED`` or ``HALTED`` job wrote them.
     """
@@ -75,6 +79,10 @@ _TERMINAL_STATUSES = frozenset({
     JobStatus.SERVICE_UNAVAILABLE,
     JobStatus.UPLOAD_FAILED,
 })
+
+#: Statuses whose tree view holds verdicts. A ``HALTED`` job hit the time limit: the rules it
+#: finished have their verdicts, and the rest are ``TIMEOUT``.
+_VERDICT_STATUSES = frozenset({JobStatus.SUCCEEDED, JobStatus.HALTED})
 
 #: Statuses on which the prover ran and may have written an alert report
 #: without producing verdicts. The other terminal failures are rejected earlier.
@@ -193,7 +201,7 @@ def results_api() -> ProverOutputAPI:
 
 
 #: A fetch failure here is a *transport* fault, not a bad job: by the time we download documents
-#: the job has already polled ``SUCCEEDED``. Re-fetching the same completed job is cheap; re-running
+#: the job has already polled ``SUCCEEDED`` or ``HALTED``. Re-fetching the same completed job is cheap; re-running
 #: the whole proof throws away a finished — often hours-long — verification. So retry the fetch
 #: itself a few times with exponential backoff before giving up, and give up with
 #: :class:`CloudResultsUnavailable`, which ``run_prover`` reports rather than raises. POU retries at the individual-request level; this covers a whole-fetch failure that
@@ -277,6 +285,14 @@ async def _failure_alerts(job_id: str) -> tuple[ErrorAlert, ...]:
     return () if text is None else error_alerts(text)
 
 
+def _has_tree_view(root: Path) -> bool:
+    try:
+        get_final_treeview(root)
+    except (NoTreeViewResultError, MalformedTreeVew):
+        return False
+    return True
+
+
 @asynccontextmanager
 async def cloud_results(
     run_result_link: str,
@@ -306,9 +322,10 @@ async def cloud_results(
         raise CloudJobError(JobStatus.UNKNOWN, run_result_link) from exc
 
     status = convert_job_status(job_data.get("job_status", "UNKNOWN"))
-    if status is not JobStatus.SUCCEEDED:
+    if status not in _VERDICT_STATUSES:
         alerts = await _failure_alerts(cloud_job.job_id) if status in _ALERT_STATUSES else ()
         raise CloudJobError(status, run_result_link, alerts)
+    halted = status is JobStatus.HALTED
 
     runtime_ms = _job_runtime_ms(job_data)
 
@@ -321,5 +338,7 @@ async def cloud_results(
         # jobs measured here these two subtrees are ~3% of the archive. POU writes
         # them in the same layout the archive had, so the parse is unchanged.
         await _fetch_results(cloud_job.job_id, dest, run_result_link)
+        if halted and not _has_tree_view(dest):
+            raise CloudJobError(status, run_result_link, await _failure_alerts(cloud_job.job_id))
         alerts = await _fetch_alert_report(cloud_job.job_id)
-        yield FetchedResults(dest, runtime_ms, alerts)
+        yield FetchedResults(dest, runtime_ms, alerts, halted=halted)

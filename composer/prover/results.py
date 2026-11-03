@@ -359,6 +359,8 @@ class FetchedResults:
     #: The prover's queue-free run time, when it is known.
     runtime_ms: int | None
     alerts: AlertReport | UnreadableAlertReport
+    #: The job hit the time limit, so rules it had not finished are ``TIMEOUT``.
+    halted: bool = False
 
 
 def parse_alert_report(text: str) -> AlertReport | UnreadableAlertReport:

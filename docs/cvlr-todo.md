@@ -362,12 +362,16 @@ beside `solana.html`: its diagnostics and timeout chapters are on-topic and its 
 not. And vector search missed *Parametric Rules & Macros* for "one rule covering every instruction",
 which keyword search found. Neither has been looked at since the corpus became the manual alone.
 
-**U32. A halted job's finished rules are not returned. Deferred: parity with CVL.**
-`cloud_results` raises on `HALTED` before it downloads the tree view, so the author hears that the
-job ran out of resources and not which rules already had a verdict. The EVM author path uses the
-same function. PreAudit does read them: it treats `HALTED` as complete and calls
-`parse_rule_results_from_job`. Seen as 18 jobs on the 2026-10-16 stake run
-([stake-benchmark.md](./stake-benchmark.md)). Not a Solana gap to fix on its own.
+**~~U32. A halted job's finished rules are not returned.~~** — **built (2026-11-02), for both
+backends.** `cloud_results` raised on `HALTED` before it downloaded the tree view, so the author
+heard that the job ran out of resources and not which rules already had a verdict. A halted job
+does write its tree view: one of the lending benchmark's halted jobs parses to 9 rules VERIFIED and
+the 5 the limit cut off as `TIMEOUT`, which both gates already treat as unfinished. `cloud_results`
+now yields a halted job's results with `FetchedResults.halted`, and `run_prover` puts a note ahead
+of the report: the limit cut those rules off, and resubmitting them unchanged reaches it again. A
+halted job with no tree view still raises `CloudJobError` with its alerts. PreAudit already read
+halted jobs this way. Seen as 18 jobs on the 2026-10-16 stake run
+([stake-benchmark.md](./stake-benchmark.md)) and 6 on the lending benchmark's run 2b.
 
 **U33. `-solanaHeapSize` could be a setting the author may change.** `BASE_CONF` raises it to 256 KB,
 enough for the one crashed job of the lending benchmark that was resubmitted
@@ -504,7 +508,7 @@ across 75 calls. Jobs of 20 to 30 minutes were common, 6 halted at the ceiling, 
 of their wall clock waiting. Find out what the long jobs are before moving `global_timeout`: which
 rules, and whether they are the wide-integer arithmetic, the loops, or the translation. A halted job's
 finished verdicts are not returned (U32), so each halt also discards the rules that did finish. That
-makes U32 worth doing for the Solana backend on its own.
+makes U32 worth doing for the Solana backend on its own. (Built 2026-11-02; see U32.)
 
 *Measured 2026-10-30: it is wide-integer division.* The data comes from 7 of run 2b's job output
 archives (`Reports/treeView`: the per-rule `rule_live_statistics_*.json` and the final
