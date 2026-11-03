@@ -6,7 +6,9 @@ intermediate machinery lives under `.certora_internal/`.
 """
 
 import json
+import os
 from pathlib import Path
+from typing import Callable, List, Optional
 
 from certora_autosetup.utils.constants import (
     CERTORA_REPORTS_DIR,
@@ -160,3 +162,27 @@ def same_source_file(candidate: str, wanted: str) -> bool:
     want_parts = Path(wanted).parts
     depth = min(len(cand_parts), len(want_parts))
     return cand_parts[-depth:] == want_parts[-depth:]
+
+
+def relativize_packages(
+    packages: List[str], root: Path, log_fn: Optional[Callable[[str, str], None]] = None
+) -> List[str]:
+    """``packages`` (``name=path`` entries) with every absolute path inside ``root`` made relative
+    to it; relative paths are kept as they are.
+
+    An absolute path outside ``root`` (e.g. a package hoisted above the run root) is kept, and
+    ``log_fn`` is told. Containment is textual: no symlink is resolved."""
+    root_abs = Path(os.path.abspath(root))
+    result = []
+    for package in packages:
+        name, sep, path = package.partition("=")
+        if not sep or not Path(path).is_absolute():
+            result.append(package)
+            continue
+        try:
+            result.append(f"{name}={Path(os.path.normpath(path)).relative_to(root_abs)}")
+        except ValueError:
+            if log_fn is not None:
+                log_fn(f"Package '{name}' points outside {root_abs}; keeping the absolute path {path}", "WARNING")
+            result.append(package)
+    return result
