@@ -21,6 +21,7 @@ from composer.pipeline.cli import cli_pipeline, user_ns
 from composer.pipeline.run_mode import RunMode, resolve_run_mode
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
+from composer.spec.prop_inference import DEFAULT_MAX_BUG_ROUNDS
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.prover.core import make_prover_options
@@ -90,7 +91,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'threat' model (text or pdf) with which to seed the property extraction process")
     add_extra_context_args(parser)
     add_protocol_args(parser, PropertySetOptions)
-    parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
+    parser.add_argument("--max-bug-rounds", type=int, default=DEFAULT_MAX_BUG_ROUNDS, help=f"Maximum number of property-inference rounds run per component; a round runs only if the previous one found a new property (default: {DEFAULT_MAX_BUG_ROUNDS})")
     # One budget, two spellings: the file shapes spend across phases, the scalar
     # sets the pool alone. argparse reports taking both, and renders the choice in
     # --help; resolve_budget re-checks it for callers that skip the parser.

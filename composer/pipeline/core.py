@@ -62,7 +62,8 @@ from composer.spec.prioritize import (
     Candidate, PropertyRanking, Selection, build_candidates, rank_properties, select,
 )
 from composer.spec.prop_inference import (
-    run_property_inference, AnyPropertyGenerationInput, CacheablePropertyGenerationInput,
+    DEFAULT_MAX_BUG_ROUNDS, run_property_inference, AnyPropertyGenerationInput,
+    CacheablePropertyGenerationInput,
 )
 from composer.llm.types import CacheLevel
 from composer.input.files import Document
@@ -452,7 +453,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     interactive: bool = False,
     threat_model: Document | None = None,
     extra_context: Sequence[Document] = (),
-    max_bug_rounds: int = 3,
+    max_bug_rounds: int = DEFAULT_MAX_BUG_ROUNDS,
     ecosystem: Ecosystem[App, Main, U],
     budget: RunBudget | None = None,
     time_budget_s : float | None = None,
@@ -505,7 +506,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     interactive: bool = False,
     threat_model: Document | None = None,
     extra_context: Sequence[Document] = (),
-    max_bug_rounds: int = 3,
+    max_bug_rounds: int = DEFAULT_MAX_BUG_ROUNDS,
     ecosystem: Ecosystem[App, Main, U],
     predefined: PropertySet | None = None,
     stop_after_properties: bool = False,
@@ -777,6 +778,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 interactive,
                 combine_digests([d.to_digest() for d in extra_context]),
                 run_mode_name(run.run_mode.value),
+                max_rounds=max_bug_rounds,
             )
         ).cache_put(FinalProperties(items=batch.props, tool_plugins=contributing_plugins))
 
@@ -1138,6 +1140,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
                 extra_input=pre_input,
                 system_template=ecosystem.property_prompts.system,
                 render_initial=ecosystem.property_prompts.render_initial,
+                existing_specs=run.run_mode is RunMode.EVALUATE,
             ),
         )
         if not props:

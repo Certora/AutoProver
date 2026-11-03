@@ -480,6 +480,7 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                     threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
                     extra_context_digests=[d.to_digest() for d in extra_context],
                     interactive=args.interactive,
+                    max_bug_rounds=args.max_bug_rounds,
                     run_mode=run_mode.value,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(
