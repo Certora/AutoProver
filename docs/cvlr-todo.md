@@ -603,6 +603,16 @@ arguments, and it must be updated or re-recorded.
 
 ---
 
+**U42. A skip recorded beside `verify_rules` makes its stamp stale.** The prover stamp is
+`checked_digest`, which is built on `draft_digest`, and that covers the skipped properties. On the
+lending benchmark's run 3 pilot (2026-11-02), the author called `record_skip` and `verify_rules` in
+one step. The run came back stamped (35 VERIFIED, 1 marked VIOLATED), the judge accepted, and then
+`result` was refused as stale, so the author resubmitted an unchanged harness: one more Prover job.
+What the Prover checks does not depend on which properties are skipped, so the verdict stamp should
+leave the skips out and keep the harness, the tuning history and the markings. The judge's stamp
+must keep covering skips, since a skip's reason is part of what it accepts. Saying "not in parallel"
+in the tool docstrings, as `expect_rule_failure` does, would be the weaker fix.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open

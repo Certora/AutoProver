@@ -319,6 +319,37 @@ what it showed to be missing, recorded in [cvlr-todo.md](./cvlr-todo.md):
 
 Nothing is graded against P-01 to P-10 yet.
 
+## Run 3 pilot (2026-11-02): liquidations alone, delivered, but short of the answer key
+
+Run 3 gives each answer-key unit a run of its own, with its own budget, rather than one shared pool
+(the workaround for U39). The pilot is the liquidation unit, the one that started with about a
+dollar in runs 1 and 2b. It replayed run 1's pinned analysis and extraction narrowed to that
+component, on a fresh copy of the input, with a $150 budget. It was the first run with U32, U36,
+U37 and the verdict classification of [#280](https://github.com/Certora/AutoProver/pull/280), and
+the first on Claude Opus 5.5 rather than Opus 5.
+
+- **Delivered.** 36 rules: 35 verified, and 1 marked as an expected failure. 22 of the 33 properties
+  have rules; 11 were skipped with reasons. The judge accepted the unit after three rounds.
+- **Cost.** 3h 52m wall clock and about $27 by the log's estimate, of which authoring took 3h 38m.
+  Prover time was 2h 44m across 8 jobs of 9 to 25 minutes each, plus queue waits of up to 24
+  minutes.
+- **U32 at work.** One job reached the time limit. It returned the verdicts it had finished, and
+  the author used them to plan a smaller next job.
+- **U36 at work.** The one marked failure carries a pre-state the program can produce: reserve
+  configurations that pass the program's own validation, then a price drop into the bad-debt
+  region. Untriaged. In that region the liquidation bonus is not capped by the configured maximum
+  bonus, which may be the design.
+- **U42 found.** A skip recorded in the same step as a Prover run made that run's stamp stale, and
+  the unchanged harness was submitted once more.
+
+**None of P-07 to P-10 is covered.** Every skip that bears on them comes back to one place. The
+functions that decide whether and how much an obligation can be liquidated timed out, even as rules
+driving them alone in small jobs. The redeem path and the post-maturity ramp failed in translation
+inside the program's 256-bit integer arithmetic. That is the wall U40 measured, and it is the one
+the published report names its abstractions for: `calculate_liquidation` replaced by one that
+returns arbitrary values, and a narrower `Fraction`. The next step is to tell the author when and
+how to replace a whole subcomputation with a bounded stand-in, before the other answer-key units run.
+
 ## Grading it
 
 Decided before the run, so the result stays falsifiable:
