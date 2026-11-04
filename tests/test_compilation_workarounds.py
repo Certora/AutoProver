@@ -14,6 +14,8 @@ from certora_autosetup.utils.compilation_workarounds import (
     UnimplementedContractError,
     UnsatisfiableSolcPinError,
 )
+from certora_autosetup.utils import solc_version_resolver
+from certora_autosetup.utils.solc_version_resolver import assign_evm_versions
 from certora_autosetup.utils.types import ContractHandle
 
 
@@ -923,6 +925,45 @@ def test_solc_fallback_fires_when_pin_is_in_compiler_map(
     assert "compiler_map" not in compilation_config
 
 
+def test_solc_fallback_fills_the_evm_map_entry_of_the_contract_it_moves(
+    manager, monkeypatch, tmp_path
+) -> None:
+    # Setup cannot read the default EVM version of a compiler that is not
+    # installed, so the map it writes has no entry for that contract. certoraRun
+    # reports the missing compiler first; after the fallback, the map must cover
+    # the contract or certoraRun rejects the conf.
+    defaults = {"solc8.24": "shanghai"}
+    monkeypatch.setattr(solc_version_resolver, "solc_default_evm_version", defaults.get)
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.solc_default_evm_version", defaults.get
+    )
+    monkeypatch.setattr(manager, "_solc_fallback_candidates", lambda: [("solc8.24", "0.8.24")])
+    contracts = [
+        ContractHandle(contract_name="Foo", source_file="contracts/Foo.sol"),
+        ContractHandle(contract_name="Bar", source_file="contracts/Bar.sol"),
+    ]
+    config = {"compiler_map": {"Foo": "solc8.24", "Bar": "solc9.99"}}
+    assign_evm_versions(config, contracts, {"Foo": "cancun"})
+    assert config["solc_evm_version_map"] == {"Foo": "cancun"}
+
+    success, updated, compilation_config, fake_run = _run_loop(
+        manager,
+        monkeypatch,
+        tmp_path,
+        ["attribute/flag 'compiler_map': Solidity executable solc9.99 not found in path\n"],
+        contracts,
+        extra_config=config,
+    )
+    assert success is True
+    assert fake_run.calls == 2
+    assert compilation_config["solc_evm_version_map"] == {"Foo": "cancun", "Bar": "shanghai"}
+    assert updated["solc_evm_version_map"] == {"Foo": "cancun", "Bar": "shanghai"}
+    assert json.loads((tmp_path / "test.conf").read_text())["solc_evm_version_map"] == {
+        "Foo": "cancun",
+        "Bar": "shanghai",
+    }
+
+
 def _write_pragma(tmp_path, contract: str, pragma: str) -> ContractHandle:
     source = tmp_path / "contracts" / f"{contract}.sol"
     source.parent.mkdir(parents=True, exist_ok=True)
@@ -1598,7 +1639,9 @@ def test_unseeded_cancun_map_covers_every_contract(manager, monkeypatch, tmp_pat
         probed.append(solc_binary)
         return defaults[solc_binary]
 
-    monkeypatch.setattr(manager, "_solc_default_evm_version", fake_default)
+    monkeypatch.setattr(
+        "certora_autosetup.utils.compilation_workarounds.solc_default_evm_version", fake_default
+    )
     success, updated, compilation_config, _ = _run_loop(
         manager,
         monkeypatch,
@@ -1612,31 +1655,6 @@ def test_unseeded_cancun_map_covers_every_contract(manager, monkeypatch, tmp_pat
     assert compilation_config["solc_evm_version_map"] == expected
     assert updated["solc_evm_version_map"] == expected
     assert sorted(probed) == ["solc7.6", "solc8.24"]
-
-
-def test_solc_default_evm_version_read_from_metadata(manager, monkeypatch) -> None:
-    calls: list = []
-    metadata = json.dumps({"settings": {"evmVersion": "shanghai"}})
-    stdout = json.dumps({"contracts": {"probe.sol": {"Probe": {"metadata": metadata}}}})
-
-    def fake_run(cmd, **kwargs):
-        calls.append(cmd)
-        request = json.loads(kwargs["input"])
-        assert "evmVersion" not in request["settings"]
-        return subprocess.CompletedProcess(cmd, returncode=0, stdout=stdout, stderr="")
-
-    monkeypatch.setattr("certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run)
-    assert manager._solc_default_evm_version("solc8.24") == "shanghai"
-    assert manager._solc_default_evm_version("solc8.24") == "shanghai"
-    assert calls == [["solc8.24", "--standard-json"]]  # probed once per binary
-
-
-def test_solc_default_evm_version_none_when_binary_missing(manager, monkeypatch) -> None:
-    def fake_run(cmd, **kwargs):
-        raise FileNotFoundError(cmd[0])
-
-    monkeypatch.setattr("certora_autosetup.utils.compilation_workarounds.subprocess.run", fake_run)
-    assert manager._solc_default_evm_version("solc9.99") is None
 
 
 # =============================================================================
