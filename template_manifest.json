@@ -161,6 +161,12 @@
     "template_name": "property_analysis_prompt.j2",
     "ty_sort": "TypedTemplate"
   },
+  "composer.spec.prop_inference:PROPERTY_DEDUP_TEMPLATE": {
+    "module": "composer.spec.prop_inference",
+    "qualname": "PROPERTY_DEDUP_TEMPLATE",
+    "template_name": "property_dedup_prompt.j2",
+    "ty_sort": "TypedTemplate"
+  },
   "composer.spec.source.author:_PropertyGenTemplate": {
     "module": "composer.spec.source.author",
     "qualname": "_PropertyGenTemplate",

@@ -28,8 +28,9 @@ objects, and never inspected by the driver.
 
 A run in an external mode (``evaluate``; see :mod:`composer.pipeline.modes`) takes the chain only
 as far as ``PreparedSystem`` and extraction. It never calls ``prepare_formalization``; it calls
-``PreparedSystem.prepare_external_mode`` (the project build) instead. The mode implementation
-receives the extracted batches and the build, and returns the report, which the driver writes.
+``PreparedSystem.prepare_external_mode`` (the project build) instead, and skips the build when
+the implementation declares ``needs_project_build = False``. The mode implementation receives the
+extracted batches and the build (or ``None``), and returns the report, which the driver writes.
 """
 
 import asyncio
@@ -61,7 +62,8 @@ from composer.spec.prioritize import (
     Candidate, PropertyRanking, Selection, build_candidates, rank_properties, select,
 )
 from composer.spec.prop_inference import (
-    run_property_inference, AnyPropertyGenerationInput, CacheablePropertyGenerationInput,
+    DEFAULT_MAX_BUG_ROUNDS, run_property_inference, AnyPropertyGenerationInput,
+    CacheablePropertyGenerationInput,
 )
 from composer.llm.types import CacheLevel
 from composer.input.files import Document
@@ -270,11 +272,12 @@ class PreparedSystem[FormT: BackendResult, U: FeatureUnit, Main](ABC):
         never mentions staging at all."""
         ...
 
-    async def prepare_external_mode(self, run: PipelineRun) -> ModeSupport:
-        """What a run in an external mode gets from the backend in place of
-        :meth:`prepare_formalization`: the project build and the backend's prover options (see
-        :class:`~composer.pipeline.modes.ModeSupport`). The driver runs it alongside extraction
-        and passes the result to the mode. A backend with nothing to build returns nothing."""
+    async def prepare_external_mode(self, run: PipelineRun, *, build: bool) -> ModeSupport:
+        """Prepare backend support for an external mode, alongside extraction.
+
+        With build=False, skip the project build but still provide prover options.
+        The default implementation returns empty support.
+        """
         return ModeSupport()
 
 
@@ -449,7 +452,7 @@ async def run_pipeline[P: enum.Enum, FormT: BackendResult, H, A: ArtifactIdentif
     interactive: bool = False,
     threat_model: Document | None = None,
     extra_context: Sequence[Document] = (),
-    max_bug_rounds: int = 3,
+    max_bug_rounds: int = DEFAULT_MAX_BUG_ROUNDS,
     ecosystem: Ecosystem[App, Main, U],
     budget: RunBudget | None = None,
     time_budget_s : float | None = None
@@ -496,7 +499,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     interactive: bool = False,
     threat_model: Document | None = None,
     extra_context: Sequence[Document] = (),
-    max_bug_rounds: int = 3,
+    max_bug_rounds: int = DEFAULT_MAX_BUG_ROUNDS,
     ecosystem: Ecosystem[App, Main, U],
     mode_impl: RunModeImpl[U, Any] | None = None,
 ) -> CorePipelineResult[FormT]:
@@ -584,16 +587,15 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             )
         )
 
-    # An external mode works on the project's own verification artifacts, so the backend's
-    # pre-formalization setup (AutoSetup, summaries) is never started: it is the most
-    # expensive step of the front half, and its specs and summaries are not what the mode
-    # measures. The backend's ``prepare_external_mode`` runs instead, alongside extraction as
-    # ``prepare_formalization`` would: for the prover backend it builds the project, so the
-    # project's confs compile. A task group, so a failure in either cancels the other.
+    # External modes prepare backend support instead of formalization.
+    # Modes that build their own confs can skip the shared project build.
+    # Run alongside extraction; failure in either task cancels the other.
     if mode_impl is not None:
         async def _prepare_external_mode() -> ModeSupport:
             with named_budget_or_nop("formalization_preparation"):
-                return await prepared.prepare_external_mode(run)
+                return await prepared.prepare_external_mode(
+                    run, build=mode_impl.needs_project_build,
+                )
 
         async with asyncio.TaskGroup() as tg:
             support_task = tg.create_task(_prepare_external_mode())
@@ -693,6 +695,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 interactive,
                 combine_digests([d.to_digest() for d in extra_context]),
                 run_mode_name(run.run_mode.value),
+                max_rounds=max_bug_rounds,
             )
         ).cache_put(FinalProperties(items=batch.props, tool_plugins=contributing_plugins))
 
@@ -1057,6 +1060,7 @@ async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](
                 extra_input=pre_input,
                 system_template=ecosystem.property_prompts.system,
                 render_initial=ecosystem.property_prompts.render_initial,
+                existing_specs=run.run_mode is RunMode.EVALUATE,
             ),
         )
         if not props:
