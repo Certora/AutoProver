@@ -613,6 +613,20 @@ leave the skips out and keep the harness, the tuning history and the markings. T
 must keep covering skips, since a skip's reason is part of what it accepts. Saying "not in parallel"
 in the tool docstrings, as `expect_rule_failure` does, would be the weaker fix.
 
+**~~U43. The author has no recipe for a computation that will not finish.~~** — **built
+(2026-11-04, not yet exercised by a run).** On the lending benchmark's run 3 pilot, the functions
+that decide whether and how much an obligation can be liquidated timed out even alone in small jobs,
+and the author skipped every property whose path crossed them, including the ones that only use
+their result. The published report for that program names the abstraction that answers it: the
+liquidation computation replaced by one that returns arbitrary values. The mechanism was already
+there (`mock_fn` with a stand-in the author writes); the prompt only offered it for a hash, a clock
+or a CPI. The author's system prompt now has "When a computation will not finish: a bounded
+stand-in": sort the properties into those about what the function computes and those that only
+consume its result; for the second kind, a `nondet()` stand-in constrained only by guarantees taken
+from the function's own code or proved by a rule over it; the stand-in applies to the whole unit;
+a counterexample may use a value the real function never returns; and the rules that cross it say
+so. The judge checks each constraint's source. The example is an AMM, not a lending program.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
