@@ -497,6 +497,14 @@ is "treated as external". That is a soundness caveat a reader has to discount by
 So U38 is still worth doing, as cleanup of verdict caveats and of the author rounds spent on
 pointer errors, but it is not the cause of U40.
 
+*Seen again 2026-11-04, on the liquidation rerun of run 3.* The author guessed that formatted
+logging made the eligibility rules time out, and asked the editor to make the logging macro a
+no-op. The editor refused, correctly: none of its kinds edits a `macro_rules!` definition, and
+dropping the arguments would also drop any panic inside them. The guess was wrong. The pilot's
+program dumps for those rules hold about 400 instructions' worth of formatting out of 43,799 (U44
+has the breakdown). So the recipe above needs a new editor kind, a gated macro-definition swap, and
+U44 is what would have kept the author from asking for it here.
+
 **U39. The run spends its budget first in, first out.** Formalization authors four units at a time
 in component order, from one shared pool. On both benchmark runs the first units took the whole pool
 and the units that mattered most started with about a dollar. Give each unit a share of the pool, or
@@ -626,6 +634,57 @@ consume its result; for the second kind, a `nondet()` stand-in constrained only 
 from the function's own code or proved by a rule over it; the stand-in applies to the whole unit;
 a counterexample may use a value the real function never returns; and the rules that cross it say
 so. The judge checks each constraint's source. The example is an AMM, not a lending program.
+
+**U44. A TIMEOUT does not say what the Prover was stuck on.** The Prover writes per-rule statistics
+(`rule_live_statistics_*.json`, linked from each rule's `LiveCheckInfo` in the tree view): the
+phase the rule reached, its path count, and the functions that dominate its branching and its
+nonlinear operations. `cloud_results` downloads the tree view and the sources but not these
+files, so a TIMEOUT reaches the author as a bare status, and the author guesses. On the liquidation
+rerun of run 3 (2026-11-04) the author guessed formatted logging, and spent an editor round trip on
+it (U38). The pilot's statistics for the same rules showed something else:
+
+* Four eligibility rules never left static analysis in 25 minutes. Their programs were about 13
+  times the size of a rule that reached the solver (43,799 instructions against 3,372). The
+  function they drive inlines 25 copies of the 256-bit division under the fixed-point type, which
+  make up most of that size. Formatting was under 1%.
+* The rules that reached the solver had that division at 86 to 96% of their branching.
+
+Fetch the statistics files with the tree view. Add one line to each unfinished rule's verdict: the
+phase it reached, its path count, and its top one or two hotspot functions with their share.
+"Static analysis" and "solving" call for different remedies. The line has to stay a measurement,
+not advice: the remedies are already in the prompt (U43, the loop ladder, bounding inputs). It is
+generic: the statistics come from the Prover for any program, and nothing in them is specific to
+one benchmark.
+
+**U45. A narrower fixed-point type has to be chosen when a unit starts.** The eligibility decision
+in the lending benchmark's liquidation unit compares ratios that the program computes with 25
+fixed-point divisions, each a 256-bit long division (U44). A stand-in (U43) cannot replace those
+divisions without changing the decision the property is about, and U40 found that characterizing
+the division exactly (`q*d + r == n`) is slower still. The published report for that program
+names the abstraction that answers it: `Fraction` replaced by a narrower fixed-point type
+(`FixedU64<14>` in place of the 128-bit type with 60 fractional bits).
+
+U40's experiment says what supporting this takes. A 64-bit `Fraction` swapped in under the unit's
+feature turned a 17-minute rule into 3.5 minutes, and two timeouts into 8-second verdicts. But it
+needed eight coordinated edits to compile, and it made 8 of 14 rules vacuous until the harness
+constants were rescaled. The program's encoding, the harness's constants and every stored `_sf`
+field have to agree on the scale. So it cannot be applied to rules already written. It is a
+decision for the start of a unit, or for a family of units that share the type, made before the
+first rule:
+
+* **When.** The author's research step, or preflight, sees the program's fixed-point type and its
+  widening multiply and divide, and a probe rule over one of its divisions times out or reaches
+  the 256-bit path.
+* **What.** A verification-only replacement of the type's module under the unit's feature, with
+  the same API at the narrower width. It is a new editor kind, or a `redirect_module` with a recipe.
+  Its caveats are fixed: it changes rounding, so it cannot support a property about rounding or
+  precision, and every verdict in the unit is stated under it.
+* **The harness.** Rules must use the program's own constants (its `ONE`, its scale shift) rather
+  than literal encodings, so that they survive a change of scale. That is worth telling the author
+  even without the narrow type.
+
+This is the larger piece of work. Do U44 first. It makes the problem visible to the author, and it
+tells us how often a unit hits this wall.
 
 ## Leads from the certora-cvlr-kb ledger
 
