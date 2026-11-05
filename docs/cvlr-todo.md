@@ -611,7 +611,11 @@ arguments, and it must be updated or re-recorded.
 
 ---
 
-**U42. A skip recorded beside `verify_rules` makes its stamp stale.** The prover stamp is
+**~~U42. A skip recorded beside `verify_rules` makes its stamp stale.~~** — **fixed (2026-11-05).**
+A verdict stamp is now built on `checks_digest`, the spec and the tuning history without the skips,
+and so is the draft `LastVerdicts` records, so a skip after a run neither stales its stamp nor sends
+`verify_rules` back to the Prover. The judge's stamp still covers the skips. The stamper is shared,
+so the Rust-app and Foundry gates changed the same way. What was found: the prover stamp was
 `checked_digest`, which is built on `draft_digest`, and that covers the skipped properties. On the
 lending benchmark's run 3 pilot (2026-11-02), the author called `record_skip` and `verify_rules` in
 one step. The run came back stamped (35 VERIFIED, 1 marked VIOLATED), the judge accepted, and then
@@ -642,7 +646,14 @@ the eligibility result, so a stand-in for the callee was the move. The section s
 the function a rule drives, so the author never looked one call down. It now says to sort by what the
 rule asserts over, and its example adds a timed-out callee.
 
-**U44. A TIMEOUT does not say what the Prover was stuck on.** The Prover writes per-rule statistics
+**~~U44. A TIMEOUT does not say what the Prover was stuck on.~~** — **built (2026-11-05, not yet
+exercised by a run).** `cloud_results` now fetches the statistics file of every rule without a
+verdict (a halted job leaves a cut-off rule `RUNNING`, which the parse reads as `TIMEOUT`), and the
+prover report ends with one line per timed-out rule: the phase, the path count, and the top two
+functions by share of branching and of nonlinear operations. A local run already has the files.
+Checked against the pilot's halted job, the lines name the four rules stuck in static analysis and
+the 256-bit division at 86–96 % in the rest. The author's stand-in section says how to read them.
+What was found: the Prover writes per-rule statistics
 (`rule_live_statistics_*.json`, linked from each rule's `LiveCheckInfo` in the tree view): the
 phase the rule reached, its path count, and the functions that dominate its branching and its
 nonlinear operations. `cloud_results` downloads the tree view and the sources but not these

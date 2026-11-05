@@ -32,7 +32,7 @@ from graphcore.tools.schemas import (
     WithInjectedState,
 )
 
-from composer.authoring.state import draft_digest
+from composer.authoring.state import checks_digest
 from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
@@ -670,7 +670,7 @@ class VerifyRules(
         last = self.state.get("last_verdicts")
         if (
             last is not None
-            and last.draft == draft_digest(self.state, history)
+            and last.draft == checks_digest(self.state, history)
             and accounted_for(last, self.state["expected_failures"])
         ):
             return tool_state_update(
@@ -732,7 +732,7 @@ class VerifyRules(
                 status={},
                 incomplete=[],
                 unverdicted=[],
-                draft=draft_digest(self.state, history),
+                draft=checks_digest(self.state, history),
                 rules=(),
             ),
         )
@@ -805,7 +805,7 @@ class VerifyRules(
                     status=status,
                     incomplete=sorted(incomplete),
                     unverdicted=unverdicted,
-                    draft=draft_digest(self.state, tuning_history(self.state)),
+                    draft=checks_digest(self.state, tuning_history(self.state)),
                     rules=tuple(sorted(declared)),
                 )
                 stamped = accounted_for(last, expected)

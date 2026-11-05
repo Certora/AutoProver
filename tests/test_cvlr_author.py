@@ -26,7 +26,7 @@ import pytest
 from langgraph.store.memory import InMemoryStore
 
 from composer.prover.ptypes import StatusCodes
-from composer.authoring.state import SkippedProperty, checked_digest, draft_digest
+from composer.authoring.state import SkippedProperty, checked_digest, checks_digest, draft_digest
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import TunableConf, RunOverlay, solana_conf
 from composer.spec.cvlr.prover import Submission as CvlrSubmission
@@ -552,7 +552,7 @@ def _stamped(draft: str, *, rules: tuple[str, ...] | None, store: bool) -> dict:
     state["validations"] = PROVER_STAMPER(state, history)
     if store:
         state["last_verdicts"] = LastVerdicts(
-            status={}, incomplete=[], unverdicted=[], draft=draft_digest(state, history), rules=rules
+            status={}, incomplete=[], unverdicted=[], draft=checks_digest(state, history), rules=rules
         )
     return state
 
