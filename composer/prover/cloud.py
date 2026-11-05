@@ -6,6 +6,7 @@ job URL (so waiting needs no credentials), then retrieves its results through
 """
 
 import asyncio
+import json
 import logging
 import shutil
 import tempfile
@@ -35,6 +36,7 @@ from composer.prover.results import (
     error_alerts,
     get_final_treeview,
     parse_alert_report,
+    unfinished_statistics_files,
 )
 
 logger = logging.getLogger("composer.spec")
@@ -285,6 +287,29 @@ async def _failure_alerts(job_id: str) -> tuple[ErrorAlert, ...]:
     return () if text is None else error_alerts(text)
 
 
+async def _fetch_unfinished_statistics(job_id: str, root: Path) -> None:
+    """Download the statistics of the rules the Prover did not finish beside the tree view.
+
+    The tree-view fetch brings only the rule outputs. A statistics file that cannot be fetched is
+    left out: the rule's verdict stands without it.
+    """
+    try:
+        tree, tree_view_dir = get_final_treeview(root)
+    except (NoTreeViewResultError, MalformedTreeVew):
+        return
+    for name in unfinished_statistics_files(tree):
+        if (tree_view_dir / name).exists():
+            continue
+        try:
+            body = await asyncio.to_thread(
+                results_api().fetch_treeview_output_by_filename, job_id, name
+            )
+        except Exception as exc:  # noqa: BLE001 — a missing statistics file does not fail the run
+            logger.warning("Cloud job %s: fetching %s failed (%s)", job_id[:8], name, exc)
+            continue
+        (tree_view_dir / name).write_text(json.dumps(body))
+
+
 def _has_tree_view(root: Path) -> bool:
     try:
         get_final_treeview(root)
@@ -340,5 +365,6 @@ async def cloud_results(
         await _fetch_results(cloud_job.job_id, dest, run_result_link)
         if halted and not _has_tree_view(dest):
             raise CloudJobError(status, run_result_link, await _failure_alerts(cloud_job.job_id))
+        await _fetch_unfinished_statistics(cloud_job.job_id, dest)
         alerts = await _fetch_alert_report(cloud_job.job_id)
         yield FetchedResults(dest, runtime_ms, alerts, halted=halted)

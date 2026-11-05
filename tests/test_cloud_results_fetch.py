@@ -16,6 +16,9 @@ from composer.prover.core import ProverCallbacks, ProverOptions, ProverReport
 from composer.prover.results import AlertReport, ErrorAlert, FetchedResults
 
 _TREE_VIEW = Path(__file__).parent / "data" / "solana_cex" / "loop_unwinding" / "Reports"
+#: A tree view with two rules that timed out. The tree-view fetch brings only its status file;
+#: the statistics are served one by one.
+_TIMED_OUT = Path(__file__).parent / "data" / "prover_statistics" / "Reports" / "treeView"
 _LINK = "https://prover.certora.com/jobStatus/37632/793b747e3a2c41a4819b6a0ec9705ad7?anonymousKey=k"
 _HINT = (
     "TAC Clock::get expected to extract 5 TAC variables from call "
@@ -25,13 +28,19 @@ _HINT = (
 
 class _FlakyAPI:
     def __init__(
-        self, failures: int, report: str | ProverAPIError = "{}", tree_view: bool = False
+        self,
+        failures: int,
+        report: str | ProverAPIError = "{}",
+        tree_view: bool = False,
+        timed_out: bool = False,
     ) -> None:
         self.failures = failures
         self.report = report
         self.tree_view = tree_view
+        self.timed_out = timed_out
         self.calls = 0
         self.alert_calls = 0
+        self.statistics_fetched: list[str] = []
 
     def fetch_sources_and_treeview_files(self, job_id: str, dest: Path) -> None:
         self.calls += 1
@@ -39,6 +48,16 @@ class _FlakyAPI:
             raise ProverAPIError("Read timed out")
         if self.tree_view:
             shutil.copytree(_TREE_VIEW, dest / "Reports")
+        if self.timed_out:
+            tree_view = dest / "Reports" / "treeView"
+            tree_view.mkdir(parents=True)
+            shutil.copy(_TIMED_OUT / "treeViewStatus_1.json", tree_view)
+
+    def fetch_treeview_output_by_filename(self, job_id: str, name: str) -> object:
+        self.statistics_fetched.append(name)
+        if name == "rule_live_statistics_3.json":
+            raise ProverAPIError("Read timed out")
+        return json.loads((_TIMED_OUT / name).read_text())
 
     def fetch_output_file(self, job_id: str, name: str) -> str:
         self.alert_calls += 1
@@ -55,8 +74,9 @@ def api(monkeypatch: pytest.MonkeyPatch):
         status: str = "SUCCEEDED",
         report: str | ProverAPIError = "{}",
         tree_view: bool = False,
+        timed_out: bool = False,
     ) -> _FlakyAPI:
-        fake = _FlakyAPI(failures, report, tree_view)
+        fake = _FlakyAPI(failures, report, tree_view, timed_out)
         monkeypatch.setattr(cloud, "results_api", lambda: fake)
 
         async def finished(*_args, **_kwargs) -> dict:
@@ -143,6 +163,22 @@ async def test_a_succeeded_job_is_not_halted(api) -> None:
 
     async with cloud_results(_LINK, poll_timeout=1) as fetched:
         assert not fetched.halted
+
+
+@pytest.mark.asyncio
+async def test_the_statistics_of_the_rules_that_timed_out_are_fetched(api) -> None:
+    """A statistics file that cannot be fetched is left out; the verdicts still arrive."""
+    fake = api(0, status="HALTED", timed_out=True)
+
+    async with cloud_results(_LINK, poll_timeout=1) as fetched:
+        tree_view = fetched.root / "Reports" / "treeView"
+        assert (tree_view / "rule_live_statistics_2.json").is_file()
+        assert not (tree_view / "rule_live_statistics_3.json").exists()
+
+    assert sorted(fake.statistics_fetched) == [
+        "rule_live_statistics_2.json",
+        "rule_live_statistics_3.json",
+    ]
 
 
 @pytest.mark.asyncio

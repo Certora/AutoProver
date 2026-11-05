@@ -1,0 +1,38 @@
+[
+ {
+  "uiId": 0,
+  "label": "verification phase: finished checking rule (attempted 1 splits, proved a total weighing 100 %)",
+  "value": null,
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ },
+ {
+  "uiId": 1,
+  "label": "path count",
+  "value": "164",
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ },
+ {
+  "uiId": 2,
+  "label": "path count hotspots",
+  "value": null,
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ },
+ {
+  "uiId": 3,
+  "label": "per call stats",
+  "value": null,
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ }
+]

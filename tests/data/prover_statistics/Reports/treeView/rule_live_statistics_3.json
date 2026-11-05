@@ -1,0 +1,94 @@
+[
+ {
+  "uiId": 0,
+  "label": "verification phase: \n splits attempted (solved or split again): 8 \n total weight of splits proved: 0 % \n splitting depth reached: 7 \n configured max. splitting depth: 10",
+  "value": null,
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ },
+ {
+  "uiId": 1,
+  "label": "path count",
+  "value": "approx. 2^19",
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ },
+ {
+  "uiId": 2,
+  "label": "nonlinearity",
+  "value": "nonlinear ops: 23\nmax polyn. degree: 12",
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ },
+ {
+  "uiId": 3,
+  "label": "path count hotspots",
+  "value": null,
+  "children": [
+   {
+    "uiId": 4,
+    "label": "function: amm::math::fee_tier",
+    "value": "contrib. to branching: 4 %",
+    "children": [],
+    "jumpToDefinition": null,
+    "severity": 0,
+    "hSev": 0
+   },
+   {
+    "uiId": 5,
+    "label": "function: amm::math::mul_div_wide",
+    "value": "contrib. to branching: 86 %",
+    "children": [],
+    "jumpToDefinition": null,
+    "severity": 0,
+    "hSev": 0
+   },
+   {
+    "uiId": 6,
+    "label": "function: amm::pool::swap_output",
+    "value": "contrib. to branching: 10 %",
+    "children": [],
+    "jumpToDefinition": null,
+    "severity": 0,
+    "hSev": 0
+   }
+  ],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ },
+ {
+  "uiId": 7,
+  "label": "nonlinearity hotspots",
+  "value": null,
+  "children": [
+   {
+    "uiId": 8,
+    "label": "function: amm::math::mul_div_wide",
+    "value": "contrib. to nonlinear ops: 96 % \ncontrib. to max polyn. degree: 75 %",
+    "children": [],
+    "jumpToDefinition": null,
+    "severity": 0,
+    "hSev": 0
+   }
+  ],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ },
+ {
+  "uiId": 9,
+  "label": "per call stats",
+  "value": null,
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ }
+]

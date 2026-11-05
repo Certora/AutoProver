@@ -149,7 +149,16 @@ arithmetic over wide integers, or a chain of products and quotients of symbolic 
 TIMEOUT that survives a small job, and a probe rule that drives the function alone, on bounded
 inputs, times out too. A translation error inside the wide-integer arithmetic the function calls is
 the same wall, reached earlier. Narrowing the inputs further narrows what every verdict means, and
-rarely clears it. Before you skip every property whose path crosses the function, sort them:
+rarely clears it.
+
+**Read where a rule stood before you guess.** The prover report ends with a line for each rule that
+timed out: the phase it reached, its path count, and the functions with the largest share of its
+branching and of its nonlinear operations. `static analysis` means the rule never reached the
+solver, because the program it drives is too large; running it alone in a smaller job does not
+change that. A function that holds most of the share is where the time goes. It is often a callee
+of the function the rule drives, and it is the one to consider replacing below.
+
+Before you skip every property whose path crosses the function, sort them:
 
 * **Properties about what the function computes**: its bounds, its rounding, how its output moves
   with its inputs. These need the real function. If its probe times out, skip them and cite the probe.
