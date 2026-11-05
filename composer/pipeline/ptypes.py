@@ -3,13 +3,13 @@ import asyncio
 import enum
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol, Callable, Awaitable, TypedDict
+from typing import Protocol, Callable, Awaitable, NamedTuple, NotRequired, TypedDict
 
 from pydantic import BaseModel
 
 from composer.io.multi_job import HandlerFactory, TaskInfo, run_task, ConversationContextProvider
 from composer.spec.context import (
-    WorkflowContext, SourceCode, SourceFields
+    WorkflowContext, SourceCode, SourceFields, ComponentGroup
 )
 from composer.spec.service_host import ServiceHost
 from composer.spec.system_model import (
@@ -95,6 +95,9 @@ class CorePhases[P: enum.Enum](TypedDict):
     extraction: P
     formalization: P
     report: P
+    #: The phase an external run mode's work is tagged with (see ``composer.pipeline.modes``).
+    #: A backend without one has its mode's work tagged ``formalization``, the phase it replaces.
+    external_mode: NotRequired[P]
 
 
 @dataclass(frozen=True)
@@ -115,6 +118,20 @@ class BackendJob[U: FeatureUnit]:
     # without casts.
     feat: U
     props: list[PropertyFormulation]
+
+
+@dataclass
+class ExtractedBatch[U: FeatureUnit](BackendJob[U]):
+    """One component's extracted properties, after every post-inference plugin, with the
+    component's cache namespace (``feat_ctx``). Formalization and an external run mode both key
+    their per-component work under ``feat_ctx``, so a component's cache entries stay together."""
+    feat_ctx: WorkflowContext[ComponentGroup]
+
+
+class ExtractionFailure[U: FeatureUnit](NamedTuple):
+    """A component whose property extraction raised, and what took it down."""
+    unit: U
+    error: BaseException
 
 
 class FinalProperties(BaseModel):
@@ -191,6 +208,9 @@ class CorePipelineResult[FormT: BackendResult]:
     #: How many inferred properties the run chose not to pursue. Non-zero only under
     #: ``PRIORITIZED``; ``n_properties`` counts only the ones it did.
     n_deprioritized: int = 0
+    #: An external mode's own verdict on the run (``ModeResult.succeeded``). ``None`` for a run
+    #: the driver formalized itself, whose success is read off ``outcomes`` instead.
+    mode_succeeded: bool | None = None
 
     @property
     def n_delivered(self) -> int:
@@ -204,8 +224,24 @@ class CorePipelineResult[FormT: BackendResult]:
         """Every attempted component ended without a reliable deliverable (gave up, crashed, or
         was budget-curtailed) — the run is a total failure. Guarded on a non-empty outcome set so
         "all of nothing" is never reported as failure (the driver raises before returning in the
-        no-outcomes case anyway)."""
+        no-outcomes case anyway).
+
+        A run handed to an external mode formalizes nothing, so it has no outcomes; the mode's own
+        verdict decides instead."""
+        if self.mode_succeeded is not None:
+            return not self.mode_succeeded
         return bool(self.outcomes) and self.n_delivered == 0
+
+    @property
+    def failure_headline(self) -> str:
+        """The end-of-run line every entry point prints when :attr:`all_failed`. A run handed
+        to an external mode formalized nothing, so "every component failed" would misdescribe
+        it; its line names what the mode was for instead."""
+        if self.mode_succeeded is not None:
+            if self.run_mode is RunMode.EVALUATE:
+                return "RUN FAILED: the evaluation produced no usable result."
+            return f"RUN FAILED: the {self.run_mode.value} run reported failure."
+        return "RUN FAILED: every component failed to generate or gave up."
 
 class PhaseBudget(TypedDict):
     """Per-phase spending *caps* (USD). Ceilings, not allotments: they bound
@@ -232,6 +268,8 @@ __all__ = [
     "Curtailed",
     "Delivered",
     "BackendJob",
+    "ExtractedBatch",
+    "ExtractionFailure",
     "SystemAnalysisSpec",
     "CorePhases",
     "GaveUp",

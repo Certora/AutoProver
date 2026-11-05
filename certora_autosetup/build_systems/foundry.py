@@ -442,7 +442,7 @@ class FoundryRestrictionManager:
     """ This manager keeps information about restrictions from
     foundry.toml (defined in the section [profile.<name>].compilation_restrictions).
     These restrictions modify the `solc_optimize_map` for specified contracts.
-    (Per-path via_ir and evm_version are intentionally not applied.)
+    (Per-path via_ir is intentionally not applied. Per-path evm_version comes from the build artifacts.)
     The manager also provides functionality for applying the restriction to a given certora conf file.
     """
 
@@ -469,13 +469,10 @@ class FoundryRestrictionManager:
         # per-path via_ir is intentionally not applied: viaIR inlines internal functions,
         # which might prevent CVL internal summaries from being applied.
 
-        # NOTE: per-path evm_version from compilation_restrictions is
-        # intentionally NOT emitted. The prover requires solc_evm_version_map to
-        # be total, so unmatched contracts would have to be filled with a
-        # concrete version even where the project relies on each solc's own
-        # default. The PROFILE-level evm_version is honored separately (emitted
-        # as scalar solc_evm_version by _apply_common_solc_settings and dropped
-        # by the invalid_evm_version workaround if a solc rejects it).
+        # Artifact metadata supplies per-contract EVM versions (see
+        # SetupProver._precompute_from_foundry_artifacts). Without artifacts the
+        # conf has the profile's evm_version, which the invalid_evm_version
+        # workaround drops if a solc rejects it.
 
         # ---------------- solc_optimize map ----------------
         restricted_optimize = self._optimize_map(contracts)

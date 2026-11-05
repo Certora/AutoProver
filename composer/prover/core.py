@@ -25,7 +25,7 @@ import sys
 import tempfile
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
@@ -48,8 +48,21 @@ from prover_output_utility import cloud_server_for_env
 from composer.prover.analysis import analyze_cex_raw
 from composer.certora_env import ProverApp
 from composer.prover.cloud import CloudJobError, cloud_results
-from composer.prover.ptypes import RuleResult, RulePath, StatusCodes
-from composer.prover.results import read_and_format_run_result
+from composer.prover.ptypes import (
+    IncompleteCheck,
+    PropertyViolation,
+    RulePath,
+    RuleResult,
+    StatusCodes,
+    classify_violation,
+)
+from composer.prover.results import (
+    AlertReport,
+    FetchedResults,
+    UnreadableAlertReport,
+    read_alert_report,
+    read_and_format_run_result,
+)
 from composer.templates.loader import load_jinja_template
 from composer.prover.prover_protocol import ProverResult
 
@@ -139,15 +152,26 @@ class ProverReport:
     result_str: str
     link: str
     certora_run_stdout: str
+    #: The job's alert report. Alerts carry what the verdicts do not, e.g. soundness
+    #: caveats about how the program was modeled.
+    alerts: AlertReport | UnreadableAlertReport = field(default_factory=AlertReport)
+    #: The violated instances that stopped on an assertion the Prover generated because it reached
+    #: a limit of its own (:func:`composer.prover.ptypes.classify_violation`). Every other violated
+    #: instance found something about the program.
+    incomplete: dict[RulePath, IncompleteCheck] = field(default_factory=dict)
+
+    def rule_outcomes(self) -> dict[str, StatusCodes]:
+        """One status per rule. A non-``VERIFIED`` instance is kept over a later ``VERIFIED`` one."""
+        found: dict[str, StatusCodes] = {}
+        for path, code in self.raw_rule_status.items():
+            if path.rule in found and found[path.rule] != "VERIFIED":
+                continue
+            found[path.rule] = code
+        return found
 
     @property
     def rule_status(self) -> dict[str, bool]:
-        to_ret = {}
-        for (k, v) in self.raw_rule_status.items():
-            if k.rule in to_ret and not to_ret[k.rule]:
-                continue
-            to_ret[k.rule] = v == "VERIFIED"
-        return to_ret
+        return {name: code == "VERIFIED" for name, code in self.rule_outcomes().items()}
 
     @property
     def all_verified(self) -> bool:
@@ -462,14 +486,14 @@ DefaultCexHandler = TrivialFanoutCexHandler
 
 
 @asynccontextmanager
-async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[tuple[Path, int | None]]:
-    """Trivial context manager yielding ``(local results path, runtime_ms)``.
+async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[FetchedResults]:
+    """Trivial context manager yielding the local results path and ``runtime_ms``.
 
     Mirrors ``cloud_results``' interface so ``run_prover`` consumes both uniformly. Where
     ``cloud_results`` computes the runtime from the polled job, the local run already
     happened in ``run_prover_inner``, so its wall-clock (queue-free — local isn't queued)
     is measured there and handed in here."""
-    yield (path, runtime_ms)
+    yield FetchedResults(path, runtime_ms, read_alert_report(path))
 
 
 async def _report_to_todo_list(
@@ -690,13 +714,27 @@ async def declared_rules_list(
         all_rules = f.read()
     return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
+
+def _incomplete(results: dict[str, RuleResult]) -> dict[RulePath, IncompleteCheck]:
+    found: dict[RulePath, IncompleteCheck] = {}
+    for result in results.values():
+        if result.status != "VIOLATED" or result.counterexample is None:
+            continue
+        match classify_violation(result.counterexample):
+            case IncompleteCheck() as check:
+                found[result.path] = check
+            case PropertyViolation():
+                pass
+    return found
+
+
 async def run_prover(
     folder: Path,
     args: list[str],
     tool_call_id: str,
     prover_opts: ProverOptions,
     callbacks: ProverCallbacks,
-    cex: CexHandler
+    cex: CexHandler,
 ) -> ProverReport | str:
     """Execute the Certora prover and return structured results.
 
@@ -781,11 +819,15 @@ async def run_prover(
     # time, sourced by each context manager (cloud job window / local
     # subprocess wall-clock).
     try:
-        async with results_cm as (emv_path, runtime_ms):
+        async with results_cm as fetched:
+            emv_path = fetched.root
+            runtime_ms = fetched.runtime_ms
             parsed = read_and_format_run_result(emv_path, prover_opts.app)
 
             if isinstance(parsed, str):
                 return f"Failed to parse prover results: {parsed}"
+            alerts = fetched.alerts
+            incomplete = _incomplete(parsed)
 
             # 9. Notify runtime + prover_result callbacks
             if runtime_ms is not None:
@@ -827,6 +869,8 @@ async def run_prover(
 
     return ProverReport(
         raw_rule_status=raw_rule_results,
+        alerts=alerts,
+        incomplete=incomplete,
         result_str=result_str,
         link=run_result["link"],
         certora_run_stdout=stdout,

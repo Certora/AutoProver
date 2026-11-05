@@ -3,6 +3,8 @@ CLI entry point for standalone autosetup (certora-autosetup).
 
 Runs the autosetup phase only — no checker generation or verification.
 Outputs AutosetupResult to .certora_internal/autosetup_result.json.
+With ``--build-only PATH`` it stops once the project compiles and writes the compilation
+settings (a ``ProjectBuildResult``) to PATH instead.
 """
 
 import json
@@ -12,14 +14,14 @@ from datetime import datetime
 from pathlib import Path
 
 from certora_autosetup.autosetup.autosetup import Autosetup
-from certora_autosetup.autosetup.cli_args import create_parser
+from certora_autosetup.autosetup.cli_args import create_parser, parse_proxy_mappings
 from certora_autosetup.autosetup.types import AutosetupConfig
 from certora_autosetup.cache.cache_fs import get_fs, init_cache_fs
 from certora_autosetup.harnesser.swap import swap_library_main_contract, with_harnessed_library
 from certora_autosetup.cache.content_cache import ContentCache
 from certora_autosetup.reporting.reporter import Reporter
 from certora_autosetup.setup.sanity_rule_generator import SanityRuleGenerator
-from certora_autosetup.setup.setup_prover import SetupProver
+from certora_autosetup.setup.setup_prover import CompilationAnalysisError, SetupProver
 from certora_autosetup.setup.signature_manager import SignatureManager
 from certora_autosetup.utils.cloud_runner import CloudProverRunner
 from certora_autosetup.utils.constants import (
@@ -111,22 +113,25 @@ def main():
     # A library cannot be a verification target — the Prover accepts it and instantiates
     # no parametric methods. Swap in a generated harness before anything downstream keys
     # on the contract name (sanity spec, base conf, verify target, result keys).
-    harnessed_library = main_contract_handle
-    main_contract_handle, contract_handles, _library_harness = swap_library_main_contract(
-        project_root=cwd,
-        main_contract_handle=main_contract_handle,
-        contract_handles=contract_handles,
-        solc=args.solc_default,
-        certora_run_command=args.certora_run_command,
-    )
-    # AutoProver's pipeline swaps before it invokes us, so on that path the target
-    # arrives already harnessed and only the manifest still names the library.
-    args.additional_contracts = with_harnessed_library(
-        cwd,
-        main_contract_handle,
-        args.additional_contracts or [],
-        swapped_from=harnessed_library if _library_harness is not None else None,
-    )
+    # --build-only writes no spec or conf: it compiles the project as the user wrote it,
+    # so a library target stays the library, and no harness is generated or validated.
+    if not args.build_only:
+        harnessed_library = main_contract_handle
+        main_contract_handle, contract_handles, _library_harness = swap_library_main_contract(
+            project_root=cwd,
+            main_contract_handle=main_contract_handle,
+            contract_handles=contract_handles,
+            solc=args.solc_default,
+            certora_run_command=args.certora_run_command,
+        )
+        # AutoProver's pipeline swaps before it invokes us, so on that path the target
+        # arrives already harnessed and only the manifest still names the library.
+        args.additional_contracts = with_harnessed_library(
+            cwd,
+            main_contract_handle,
+            args.additional_contracts or [],
+            swapped_from=harnessed_library if _library_harness is not None else None,
+        )
 
     # TODO: a bare `path.sol` spec drops only the contract whose name matches the file
     # stem. Expand to "drop every concrete contract in the file" for symmetry with
@@ -148,6 +153,7 @@ def main():
 
     # Parse extra args
     extra_args = shlex.split(args.extra_args) if args.extra_args else []
+    proxy_mappings = parse_proxy_mappings(args.proxy_mapping)
 
     project_root = Path.cwd()
     certora_dir = Path("certora")
@@ -186,6 +192,7 @@ def main():
         additional_contracts=args.additional_contracts or [],
         extra_args=extra_args,
         skip_llm=args.skip_llm,
+        skip_llm_summaries=args.skip_llm_summaries,
         force_llm_regenerate=args.force_llm_regenerate,
         stop_after_summaries=args.stop_after_summaries,
         stop_after_compilation_analysis=args.stop_after_compilation_analysis,
@@ -234,7 +241,9 @@ def main():
             requested_profile=args.profile,
             skip_sanity_setup=args.skip_sanity_setup,
             skip_call_resolution=args.skip_call_resolution,
-            skip_proxy_detection=args.skip_proxy_detection,
+            # Proxy detection is an LLM agent with no static fallback.
+            skip_proxy_detection=args.skip_proxy_detection or args.skip_llm,
+            proxy_mappings=proxy_mappings,
             skip_harnessing=args.skip_harnessing,
             skip_test_run=args.skip_test_run,
             composer_output=getattr(args, 'composer_setup', None),
@@ -259,10 +268,23 @@ def main():
     # After creating autosetup, fix setup_prover's get_build_system_config_dict reference
     setup_prover.get_build_system_config_dict = autosetup.get_build_system_config_dict
 
-    Autosetup.ensure_git_config_files()
     autosetup._load_signature_database_to_scope()
-    autosetup.generate_dummy_erc20_files()
 
+    # The build-only path compiles the project as the user wrote it, so it runs before the
+    # DummyERC20Impl mock is copied into certora/mocks and added to the scene, and before the
+    # repository's .gitignore and .gitattributes gain the lines for AutoSetup's own outputs.
+    if args.build_only:
+        try:
+            build = autosetup.build(main_contract_handle)
+        except CompilationAnalysisError as e:
+            logger.log(f"Build failed: {e}", "ERROR", "Autosetup")
+            sys.exit(1)
+        Path(args.build_only).write_text(json.dumps(build.to_json(), indent=2))
+        print(f"Build settings written to: {args.build_only}")
+        sys.exit(0)
+
+    Autosetup.ensure_git_config_files()
+    autosetup.generate_dummy_erc20_files()
     result = autosetup.run(main_contract_handle, skip_warmup=args.skip_warmup)
 
     # Persist this run's token usage to the per-run reports dir (zero-row on a

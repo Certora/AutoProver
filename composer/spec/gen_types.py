@@ -51,6 +51,12 @@ FOUNDRY_DELIVERABLE_DIR = CERTORA_DIR / "foundry"
 #: under a foundry-specific subdir so a co-located autoprove run doesn't collide.
 FOUNDRY_INTERNAL_DIR = INTERNAL_DIR / "foundry"
 
+#: The CVLR backend's deliverables other than the harness, which goes into the verified package
+#: (:mod:`composer.spec.cvlr.scaffold`): properties, commentary, and the run report.
+CVLR_DELIVERABLE_DIR = CERTORA_DIR / "cvlr"
+#: CVLR counterpart to AUTOPROVE_INTERNAL_DIR.
+CVLR_INTERNAL_DIR = INTERNAL_DIR / "cvlr"
+
 
 def under_project(project_root: "str | Path", rel: "str | Path") -> Path:
     """Resolve a project-root-relative path (e.g. :data:`CERTORA_DIR`,

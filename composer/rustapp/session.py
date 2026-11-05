@@ -20,7 +20,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Annotated, Any, Callable, Literal, NotRequired, Sequence, override
+from typing import Any, Callable, Literal, NotRequired, Sequence, override
 
 from langchain_core.tools import BaseTool
 from langgraph.graph import MessagesState
@@ -41,8 +41,8 @@ from composer.authoring.judge import (
     build_feedback_judge,
 )
 from composer.authoring.state import (
-    AuthoringExtra, MappingVocab, SkippedProperty, check_completion, make_validation_stamper,
-    merge_expected_failures, validate_check_mapping,
+    CheckingExtra, MappingVocab, SkippedProperty, check_completion, make_validation_stamper,
+    make_verdict_stamper, validate_check_mapping,
 )
 from composer.authoring.tools import give_up_tool, skip_tools
 from composer.pipeline.core import GaveUp, PipelineRun
@@ -71,6 +71,14 @@ _log = logging.getLogger(__name__)
 VALIDATE_KEY = "validate"
 COMPILE_KEY = "compile"
 FEEDBACK_KEY = "feedback"
+
+# A build does not depend on the markings and the judge is not shown them, so only the validate
+# stamp covers them.
+_COMPILE_STAMPER = make_validation_stamper(COMPILE_KEY)
+_VALIDATE_STAMPER = make_verdict_stamper(VALIDATE_KEY)
+_FEEDBACK_STAMPER = make_validation_stamper(FEEDBACK_KEY)
+#: Every stamp a session's gate tools can write.
+STAMPERS = (_COMPILE_STAMPER, _VALIDATE_STAMPER, _FEEDBACK_STAMPER)
 
 _SKIP_DESCRIPTION = """
     Declare that you are skipping a property from the batch.
@@ -143,12 +151,11 @@ class PropertyCheckMapping(BaseModel):
     )
 
 
-class RustSpecExtra(AuthoringExtra):
+class RustSpecExtra(CheckingExtra):
     #: What the author says verifies what, declared with ``map_checks`` and revisable. The distinct
     #: check names in it are the set a gate run executes, and the whole of it is what the publish
     #: gate validates. Empty for a setup session, which formalizes no properties of its own.
     property_checks: list[PropertyCheckMapping]
-    expected_failures: Annotated[dict[CheckName, str], merge_expected_failures]
     #: The verdicts the last full gating run produced, check name → the wheel's verdict. Recorded
     #: verbatim: attribution is the wheel's, and the host does no verdict logic of its own.
     verdicts: dict[CheckName, WireVerdict]
@@ -271,7 +278,7 @@ class CompileSpec(
             return tool_state_update(
                 self.tool_call_id,
                 "The build succeeded.",
-                validations=make_validation_stamper(COMPILE_KEY)(self.state),
+                validations=_COMPILE_STAMPER(self.state),
             )
 
 
@@ -368,7 +375,7 @@ class ValidateSpec(
             f"satisfied.",
             verdicts=verdicts,
             ran=covered,
-            validations=make_validation_stamper(VALIDATE_KEY)(self.state),
+            validations=_VALIDATE_STAMPER(self.state),
         )
 
 
@@ -449,8 +456,7 @@ class ExpectCheckFailure(WithAsyncImplementation[Command | str], WithInjectedId)
 
     @override
     async def run(self) -> Command | str:
-        # An empty reason is the sentinel ``merge_expected_failures`` reads as an unmarking, so it
-        # must not get through here.
+        # An empty reason removes the marking, so it must not be stored as one.
         if not self.reason.strip():
             return "A non-empty reason is required when marking it as expected to fail."
         return tool_state_update(
@@ -473,6 +479,7 @@ class ExpectCheckPassage(WithAsyncImplementation[Command], WithInjectedId):
 
     @override
     async def run(self) -> Command:
+        # An empty reason removes the marking.
         return tool_state_update(
             self.tool_call_id, "Recorded.", expected_failures={self.check_name: ""},
         )
@@ -622,7 +629,7 @@ class FeedbackTool(
             return body
         return tool_state_update(
             self.tool_call_id, body,
-            validations=make_validation_stamper(FEEDBACK_KEY)(self.state),
+            validations=_FEEDBACK_STAMPER(self.state),
         )
 
 
@@ -686,7 +693,7 @@ class PublishSpec(
 
     @override
     async def run(self) -> Command | str:
-        if (err := check_completion(self.state)) is not None:
+        if (err := check_completion(self.state, STAMPERS)) is not None:
             return err
         mapping = self.state["property_checks"]
         with self.tool_deps() as deps:
@@ -723,7 +730,7 @@ class PublishSetup(
 
     @override
     async def run(self) -> Command | str:
-        if (err := check_completion(self.state)) is not None:
+        if (err := check_completion(self.state, STAMPERS)) is not None:
             return err
         return tool_state_update(
             self.tool_call_id, "Accepted", result=self.commentary, failed=False,

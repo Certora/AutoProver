@@ -107,6 +107,7 @@ dependencies = [
     { name = "psycopg", extra = ["binary"] },
     { name = "pycryptodome" },
     { name = "pydantic" },
+    { name = "pyelftools" },
     { name = "python-dotenv" },
     { name = "questionary" },
     { name = "rich" },
@@ -184,7 +185,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.14.4" },
     { name = "anthropic", specifier = ">=0.18.0" },
     { name = "attrs", specifier = ">=26.1" },
-    { name = "certora-cli", marker = "extra == 'certora-cli'", specifier = ">=8.20.2" },
+    { name = "certora-cli", marker = "extra == 'certora-cli'", specifier = ">=8.20.3" },
     { name = "certora-cli-beta", marker = "extra == 'certora-cli-beta'", specifier = ">=8.18.0" },
     { name = "certora-cli-beta-mirror", marker = "extra == 'certora-cli-beta-mirror'", specifier = ">=8.18.0" },
     { name = "certora-prover-cli", specifier = ">=0.2.5" },
@@ -209,6 +210,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pycryptodome", specifier = ">=3.19" },
     { name = "pydantic", specifier = ">=2.12" },
+    { name = "pyelftools", specifier = ">=0.33" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "questionary", specifier = ">=2.1" },
     { name = "rich", specifier = ">=14.3" },
@@ -729,7 +731,7 @@ wheels = [
 
 [[package]]
 name = "certora-cli"
-version = "8.20.2"
+version = "8.20.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -745,11 +747,11 @@ dependencies = [
     { name = "typing-extensions" },
     { name = "wcmatch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2b/b4/dbbe8686d2983e26956d787d4b4207aac164edb376562735617541fd47d8/certora_cli-8.20.2.tar.gz", hash = "sha256:de667caa01e841d78feecf263b5ca210f355b45b7938c9f4d01b9e78e15e2fa6", size = 43413096, upload-time = "2026-10-16T20:56:38.596Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/55/bb/f6282e2875501d3c59e854766400eb1f3deaf8304b531691624eb5c1d28e/certora_cli-8.20.3.tar.gz", hash = "sha256:b0ecc71580c12ffd9dc9420f6890f18d4eddc10b3219fe6bf9668e8e403bd00e", size = 43414527, upload-time = "2026-10-26T16:11:30.617Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/e8/bcd7dc68c1f81ea65732c59d92e57ed8b95851e8294f5c3ee1f8fb146825/certora_cli-8.20.2-py3-none-any.whl", hash = "sha256:df5de2585e2dcd1224bf3eaf7a1bfed215f814b85b73add4990e04b7c89af463", size = 43469836, upload-time = "2026-10-16T20:56:30.757Z" },
-    { url = "https://files.pythonhosted.org/packages/b3/5f/f64e4f41ee4f67add5f4d4e2f94109911a0a718129feb376b2ce06a24970/certora_cli-8.20.2-py3-none-macosx_10_9_universal2.whl", hash = "sha256:ddf907648d42c5638a168a9840ca25e9ca459fa358e6cf9689dc041150a2e4c8", size = 44995965, upload-time = "2026-10-16T20:56:36.077Z" },
-    { url = "https://files.pythonhosted.org/packages/65/cd/46e3d9551f052645dd0254f440bc3dc6541b2e2ea8c53ddc617fa7b9db76/certora_cli-8.20.2-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:2bb0f177f92d00ffa4537052dc38d3cd44fe130e70a2bc0a660a040704b18931", size = 44305909, upload-time = "2026-10-16T20:56:33.502Z" },
+    { url = "https://files.pythonhosted.org/packages/50/a0/b9d3519994cc55c7f1d04b7ddd48d59147f2cc588e077c5ff70979936f6d/certora_cli-8.20.3-py3-none-any.whl", hash = "sha256:350a4887a012b5528e5b6264e848c4488946048ef4a9219b3f2988d08a17230b", size = 43471187, upload-time = "2026-10-26T16:11:17.735Z" },
+    { url = "https://files.pythonhosted.org/packages/17/19/5251490df191b401495c1e0176209116079996e05d1dcc125c185fed348c/certora_cli-8.20.3-py3-none-macosx_10_9_universal2.whl", hash = "sha256:a297cf474a158af68454fe66f5fba731012254ae2e52b3df929c470ef17808e5", size = 44997316, upload-time = "2026-10-26T16:11:23.929Z" },
+    { url = "https://files.pythonhosted.org/packages/f8/0c/e7cbcc411bc98cee6da023552ab17e7fdf9423600b7edd2299e887abe9d8/certora_cli-8.20.3-py3-none-manylinux_2_28_x86_64.whl", hash = "sha256:f09dc4e79c5aa1e3fa5d41c6ea0f8cf03161c630a92a6ee4b09b26da5104013d", size = 44307260, upload-time = "2026-10-26T16:11:20.64Z" },
 ]
 
 [[package]]
@@ -3798,6 +3800,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/5c/b5/8f48e906c3e0205276e8bd8cb7512217a87b2685304d64be27cad5b3019f/pydantic_settings-2.14.2.tar.gz", hash = "sha256:c19dd64b19097f1de80184f0cc7b0272a13ae6e170cbf240a3e27e381ed14a5f", size = 237700, upload-time = "2026-06-19T13:44:56.324Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/77/c1/6e422f34e569cf8e18df68d1939c81c099d2b61e4f7d9621c8a77560799c/pydantic_settings-2.14.2-py3-none-any.whl", hash = "sha256:a20c97b37910b6550d5ea50fbcc2d4187defe58cd57070b73863d069419c9440", size = 61715, upload-time = "2026-06-19T13:44:55.02Z" },
+]
+
+[[package]]
+name = "pyelftools"
+version = "0.33"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/a3/11/767522582afab1b884d277de0e6e011640cb9d7292a38694b4b1a1df1ae8/pyelftools-0.33.tar.gz", hash = "sha256:660d82dcbeb8e83d1702bd97f223f761625da06111c0cc988eac6b8ab0c1b61f", size = 15068655, upload-time = "2026-05-29T12:56:22.553Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/2a/f9697576603dae937727827505a6126a066affb227034e77e6f9068910da/pyelftools-0.33-py3-none-any.whl", hash = "sha256:f215ad5f47d3f1373a21496a6c9e0707c622840d0622f23ff7ce08678b020036", size = 201178, upload-time = "2026-05-29T12:56:20.587Z" },
 ]
 
 [[package]]

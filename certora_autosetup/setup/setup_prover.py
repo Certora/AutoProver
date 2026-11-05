@@ -68,7 +68,7 @@ from certora_autosetup.utils.paths import (
     internal_compilation_dummy_spec,
     user_erc7201_spec_path,
 )
-from certora_autosetup.utils.solc_version_resolver import VIA_IR_MIN_VERSION
+from certora_autosetup.utils.solc_version_resolver import VIA_IR_MIN_VERSION, assign_evm_versions
 from certora_autosetup.utils.types import ContractHandle, ContractKind, TypeParseMode, parse_type_descriptor
 
 
@@ -106,14 +106,20 @@ class SetupProver:
         get_build_system_config_dict=None,
         solc_default_version=DEFAULT_SOLC_VERSION,
         stop_after_compilation_analysis=False,
+        skip_llm_summaries=False,
     ):
-        """Initialize SetupProver with required dependencies."""
+        """Initialize SetupProver with required dependencies.
+
+        ``skip_llm`` turns off every LLM call made here; ``skip_llm_summaries`` turns off the
+        LLM summary generation.
+        """
         self.log = log
         self.certora_dir = certora_dir
         self.script_dir = script_dir
         self.additional_contracts = additional_contracts
         self.extra_args = extra_args
         self.skip_llm = skip_llm
+        self.skip_llm_summaries = skip_llm_summaries
         self.force_llm_regenerate = force_llm_regenerate
         self.stop_after_summaries = stop_after_summaries
         self.stop_after_compilation_analysis = stop_after_compilation_analysis
@@ -199,20 +205,39 @@ class SetupProver:
     def _precompute_compiler_settings(
         self, contracts: List[ContractHandle], config_dict: Dict
     ) -> Dict:
-        """Precompute compiler_map and solc_via_ir_map from Foundry build artifacts.
+        """Precompute per-contract compiler settings from the project's own build.
 
-        Reads each artifact's metadata.compiler.version to determine the actual solc version
-        used during Foundry build. Sets up:
-        - compiler_map: maps contracts to their required solc version (Certora format)
-        - solc_via_ir_map: disables viaIR for contracts compiled with solc < 0.7.5
+        For Foundry, the build artifacts give each contract's solc and EVM version.
+        Then the build system applies its own per-contract settings (Foundry
+        `compilation_restrictions`, Hardhat `overrides`).
         """
 
         # Fall back to detection when used standalone (no orchestrator to populate self.build_system).
         if self.build_system is None:
             self.build_system = BuildSystemDetector.detect(Path.cwd())
-        if self.build_system != BuildSystem.FOUNDRY:
-            return config_dict
+        if self.build_system == BuildSystem.FOUNDRY:
+            config_dict = self._precompute_from_foundry_artifacts(contracts, config_dict)
 
+        if self.build_system_config is not None:
+            config_dict = self.build_system_config.apply_per_contract_settings(
+                contracts, config_dict
+            )
+
+        return config_dict
+
+    def _precompute_from_foundry_artifacts(
+        self, contracts: List[ContractHandle], config_dict: Dict
+    ) -> Dict:
+        """Precompute compiler_map, the EVM versions and solc_via_ir_map from Foundry build artifacts.
+
+        Reads each artifact's metadata to determine the solc version and EVM version
+        used during the Foundry build. Sets up:
+        - compiler_map: maps contracts to their required solc version (Certora format)
+        - solc_evm_version / solc_evm_version_map: the EVM version forge compiled each
+          contract for. forge has its own default EVM version, which can differ from
+          solc's (for example cancun for solc 0.8.24, whose own default is shanghai).
+        - solc_via_ir_map: disables viaIR for contracts compiled with solc < 0.7.5
+        """
         try:
             extractor = FoundryContractExtractor(Path.cwd())
             source_map = extractor.build_source_path_to_contracts_map()
@@ -222,15 +247,18 @@ class SetupProver:
         if not source_map:
             return config_dict
 
-        # Build contract_name -> compiler_version lookup from artifacts
+        # Build contract_name -> compiler_version and -> evm_version lookups from artifacts
         contract_versions: Dict[str, str] = {}
+        contract_evm_versions: Dict[str, str] = {}
         for handle in contracts:
             normalized = str(Path(handle.source_file))
             for src_path, entries in source_map.items():
                 if str(Path(src_path)) == normalized:
-                    for name, version in entries:
-                        if name == handle.contract_name and version:
-                            contract_versions[handle.contract_name] = version
+                    for entry in entries:
+                        if entry.name == handle.contract_name and entry.compiler_version:
+                            contract_versions[handle.contract_name] = entry.compiler_version
+                            if entry.evm_version:
+                                contract_evm_versions[handle.contract_name] = entry.evm_version
                     break
 
         if not contract_versions:
@@ -281,6 +309,11 @@ class SetupProver:
             for name, ver in compiler_map.items():
                 self.log(f"  {name} -> {ver}")
 
+        # After compiler_map: contracts with no artifact get their own compiler's default.
+        if contract_evm_versions:
+            assign_evm_versions(config_dict, contracts, contract_evm_versions)
+            self.log(f"Precomputed EVM versions from build artifacts: {contract_evm_versions}")
+
         # Precompute solc_via_ir_map: disable viaIR for contracts with solc < 0.7.5
         if config_dict.get("solc_via_ir"):
             via_ir_disabled: list[str] = []
@@ -301,12 +334,6 @@ class SetupProver:
                     f"Precomputed solc_via_ir_map: disabled viaIR for {len(via_ir_disabled)} contract(s) "
                     f"with solc < {VIA_IR_MIN_VERSION}: {via_ir_disabled}"
                 )
-
-        # Apply restrictions of compiler for the files - e.g. from the compilation_restrictions section of foundry.toml
-        if self.build_system_config is not None:
-            config_dict = self.build_system_config.apply_per_contract_settings(
-                contracts, config_dict
-            )
 
         return config_dict
 
@@ -1523,7 +1550,7 @@ class SetupProver:
                     additional_contracts=self.additional_contracts,
                     include_test_files=False,
                     include_dependencies=True,
-                    enable_llm=not self.skip_llm,
+                    enable_llm=not (self.skip_llm or self.skip_llm_summaries),
                     custom_recipe=None,
                     excluded_library=excluded_library,
                 )

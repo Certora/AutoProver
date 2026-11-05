@@ -1,0 +1,5 @@
+{{ warnings }}
+An external call returns an arbitrary value and writes nothing else, so any state it would change keeps its old value,
+and one that returns its result through memory may never succeed, which leaves the code after it unreachable. None of
+this shows in a verdict. You cannot add inlining directives.
+If a rule's property depends on the value one of these computes, say so in the rule's commentary, or skip the property.

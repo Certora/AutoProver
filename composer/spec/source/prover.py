@@ -12,7 +12,6 @@ import asyncio
 import functools
 import logging
 import os
-import time
 from dataclasses import dataclass
 from contextlib import contextmanager, asynccontextmanager, ExitStack, nullcontext
 from pathlib import Path
@@ -40,6 +39,7 @@ from composer.prover.core import (
     ProverOptions, SpecCompilationError, declared_rules_list, run_prover,
     DefaultCexHandler, ProverReport
 )
+from composer.prover.accounting import RunAccounting
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.prover.conf import (
     Conf, ExcludeRules, InheritRules, RuleSelection, SelectRules, dump_conf,
@@ -53,14 +53,14 @@ from composer.diagnostics.stream import (
 from composer.authoring.state import make_validation_stamper, spec_digest
 from composer.spec.cvl_generation import CVLGenerationState
 from composer.diagnostics.budget import budget_pressure, exhausted_constraint, raise_budget_exceeded
-from composer.diagnostics.timing import RunSummary, get_run_summary
 from graphcore.graph import tool_state_update
 from composer.spec.util import temp_certora_file
 from composer.spec.gen_types import CERTORA_DIR, SPECS_DIR, buffer_spec_path, component_specs_dir
 from composer.spec.util import string_hash
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.spec_buffers import (
-    NamedBuffer, SpecBuffersExtra, buffer_state_digest, run_targets,
+    PROVER_VALIDATION_KEY, NamedBuffer, SpecBuffersExtra, buffer_prover_digest, buffer_state_digest,
+    run_targets,
 )
 
 
@@ -124,7 +124,7 @@ def rule_selection(
 
 DELETE_SKIP = "__delete_skip"
 
-VALIDATION_KEY = "prover"
+VALIDATION_KEY = PROVER_VALIDATION_KEY
 
 # How often the idle collect wait wakes to re-check the budget wrap-up guard while no job has finished.
 _IDLE_WAIT_TICK = 15.0
@@ -463,26 +463,20 @@ type ProverEvents = CEXAnalysisStart | CloudPollingEvent | ProverOutputEvent | R
 class StateWithSkips(CVLGenerationState, ProverStateExtra, VersionedHistory, SpecBuffersExtra):
     pass
 
-class _SpecCallbacks(ProverEventCallbacks):
+class _SpecCallbacks(RunAccounting, ProverEventCallbacks):
     def __init__(
         self,
         writer: Callable[[ProverEvents], None],
         tool_call_id: str,
-        summary: RunSummary,
         config: dict,
         analysis_store: CexAnalysisStore | None = None,
     ) -> None:
-        super().__init__(writer, tool_call_id)
-        self._writer = writer
-        self._tool_call_id = tool_call_id
-        self._summary = summary
-        self._config = config
+        super().__init__(writer, tool_call_id, config)
         self._analysis_store = analysis_store
-        self._started_mono: float | None = None
 
     @override
     async def on_cloud_poll(self, status: str, message: str) -> None:
-        elapsed = (time.perf_counter() - self._started_mono) if self._started_mono else 0.0
+        elapsed = self.elapsed or 0.0
         _logger.info(
             f"cloud poll tool_call={self._tool_call_id} status={status} "
             f"elapsed={elapsed:.1f}s msg={message}"
@@ -505,40 +499,27 @@ class _SpecCallbacks(ProverEventCallbacks):
 
     @override
     async def on_prover_run(self, args: list[str]) -> None:
-        self._started_mono = time.perf_counter()
         _logger.info(f"prover start tool_call={self._tool_call_id} args={args}")
-        self._writer({
-            "type": "prover_run",
-            "tool_call_id": self._tool_call_id,
-            "args": args,
-            "config": self._config,
-        })
+        await super().on_prover_run(args)
 
     @override
     async def on_prover_link(self, link: str) -> None:
         _logger.info(f"prover link tool_call={self._tool_call_id} link={link}")
-        self._summary.record_prover_link(link)
         self._writer({
             "type": "prover_link",
             "tool_call_id": self._tool_call_id,
             "link": link,
         })
-
-    @override
-    async def on_prover_runtime(self, ms: int) -> None:
-        # Queue-free prover run time (cloud job startTime->finishTime, or local subprocess wall-clock).
-        # Attributed to the active task; folded into the phase / run "prover_usage" totals.
-        self._summary.record_prover_runtime(ms)
+        await super().on_prover_link(link)
 
     @override
     async def on_prover_result(self, results: dict[str, RuleResult]) -> None:
-        elapsed = (time.perf_counter() - self._started_mono) if self._started_mono else 0.0
+        elapsed = self.elapsed or 0.0
         status_summary = { k: v.status for (k,v) in results.items() }
         _logger.info(
             f"prover done tool_call={self._tool_call_id} "
             f"elapsed={elapsed:.1f}s status={status_summary}"
         )
-        self._summary.add_prover_call(elapsed)
         # This run supersedes what was captured for the rules it covers, so drop their old analyses
         # before the handler records fresh ones: an instantiation that failed in an earlier iteration
         # and passes now must not survive into the report as a current failure. Fires before the CEX
@@ -871,7 +852,7 @@ def get_prover_tool(
         async def _run_buffer_job(
             *, name: str, digest: str, label: str, buffers: Mapping[str, NamedBuffer],
             vfs: dict[str, str], conf: dict, cex_state: StateWithSkips, tool_call_id: str,
-            writer: Callable[[ProverEvents], None], summary: RunSummary,
+            writer: Callable[[ProverEvents], None],
             selection: RuleSelection = InheritRules(),
         ) -> None:
             """Verify one buffer end-to-end against a frozen snapshot (taken at submit time) of the source
@@ -902,7 +883,7 @@ def get_prover_tool(
                         ) as (cpath, cfg):
                             res = await run_prover(
                                 Path(run_root), [cpath], tool_call_id, prover_opts,
-                                _SpecCallbacks(writer, tool_call_id, summary, cfg, analysis_store=analysis_store),
+                                _SpecCallbacks(writer, tool_call_id, cfg, analysis_store=analysis_store),
                                 DefaultCexHandler(
                                     llm, cex_state, summarization_threshold=10,
                                     cache_marker=cex_cache_marker,
@@ -919,6 +900,14 @@ def get_prover_tool(
             return buffer_state_digest(
                 buffers, name, version_history=state["version_history"], config=state["config"],
             )
+
+        def _prover_stamp(
+            state: StateWithSkips, buffers: Mapping[str, NamedBuffer], name: str
+        ) -> dict[str, str]:
+            return {f"{VALIDATION_KEY}:{name}": buffer_prover_digest(
+                buffers, name, version_history=state["version_history"], config=state["config"],
+                rule_skips=state["rule_skips"].keys(),
+            )}
 
         def _buffer_complete_at(
             state: StateWithSkips, buffers: Mapping[str, NamedBuffer], name: str, digest: str,
@@ -988,7 +977,7 @@ def get_prover_tool(
                 # The stream writer is captured here and used by the detached task: its prover-progress
                 # events carry this submit call's tool_call_id, which has already returned, so background-job
                 # progress can render loosely in the UI (functional results are unaffected).
-                writer=get_stream_writer(), summary=get_run_summary(),
+                writer=get_stream_writer(),
             ))
             buffer_jobs[(name, selection)] = _BufJob(name=name, digest=digest, task=task, selection=selection)
             running = sorted({nm for (nm, _sel), j in buffer_jobs.items() if not j.task.done()})
@@ -1078,12 +1067,12 @@ def get_prover_tool(
             for b in targets:
                 d = cur_digest(b.name)
                 if _buffer_complete_at(state, buffers, b.name, d, extra_history=prover_update):
-                    prover_stamps[f"prover:{b.name}"] = d
+                    prover_stamps.update(_prover_stamp(state, buffers, b.name))
 
             # Status board — the agent's work-list. `running` counts only a live job at the CURRENT digest;
             # a job left running at a stale digest (its shared import changed) is doomed, so its buffer falls
             # under needs-(re)submission until the agent relaunches it.
-            complete = {b.name for b in targets if f"prover:{b.name}" in prover_stamps}
+            complete = {b.name for b in targets if f"{VALIDATION_KEY}:{b.name}" in prover_stamps}
             running = {
                 j.name for j in buffer_jobs.values()
                 if not j.task.done() and j.name in buffers and j.digest == cur_digest(j.name)

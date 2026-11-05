@@ -292,6 +292,32 @@ class TestWaitLoopIntegration:
         assert early is not None and early.reason == REASON_FIRST_VIOLATION
         runner._cancel_cloud_job.assert_awaited_once()
 
+    def test_transient_auth_error_keeps_polling(self, tmp_path):
+        runner = make_cloud_runner(tmp_path)
+        runner.preprocessing_budget = 0
+        runner.stop_on_first_violation = False
+        auth_error = Exception("Failed to get job info for x: Authentication failed - check CERTORAKEY")
+        prover_api = MagicMock()
+        prover_api.get_job_info.side_effect = [
+            auth_error,
+            _job_info(ProverJobStatus.RUNNING),
+            auth_error,
+            _job_info(ProverJobStatus.SUCCEEDED),
+        ]
+        success, early = _run_wait(runner, prover_api, timeout=60)
+        assert success is True and early is None
+        assert prover_api.get_job_info.call_count == 4
+
+    def test_persistent_auth_error_stops_polling(self, tmp_path):
+        runner = make_cloud_runner(tmp_path)
+        runner.preprocessing_budget = 0
+        runner.stop_on_first_violation = False
+        prover_api = MagicMock()
+        prover_api.get_job_info.side_effect = Exception("Authentication failed - check CERTORAKEY")
+        success, early = _run_wait(runner, prover_api, timeout=60)
+        assert success is True and early is None
+        assert prover_api.get_job_info.call_count == 3
+
 
 # ---- retry suppression -----------------------------------------------------------------------
 

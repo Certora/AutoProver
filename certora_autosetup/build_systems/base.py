@@ -80,8 +80,8 @@ class BuildSystemConfig(ABC):
 
         Default implementation is a no-op so callers can invoke this
         unconditionally — Foundry overrides it to apply its
-        `compilation_restrictions`.
-        TODO: add it for HardHat override block (or check if needed at all)
+        `compilation_restrictions`, Hardhat to apply the evmVersion of its
+        `overrides` entries.
 
         Returns the (possibly mutated) config_dict for caller convenience.
         """

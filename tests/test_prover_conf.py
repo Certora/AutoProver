@@ -5,7 +5,9 @@ from pathlib import Path
 
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 
-from composer.prover.conf import ExcludeRules, InheritRules, SelectRules, dump_conf
+import pytest
+
+from composer.prover.conf import ExcludeRules, InheritRules, SelectRules, checked_rules, dump_conf
 from composer.spec.source.prover import (
     BOTH_RULE_SCOPES, prover_config_overlay, rule_selection, setup_prover_config_in,
 )
@@ -66,3 +68,34 @@ def test_cvl_run_conf_on_disk(tmp_path: Path):
     assert parsed["exclude_rule"] == ["r"]
     assert parsed["msg"] == "iteration 1"
     assert parsed["rule_sanity"] == "basic"
+
+
+_DECLARED = ["inv_supply", "inv_balance", "transfer_moves", "deposit_mints", "sanity"]
+
+
+def test_a_conf_without_selection_checks_every_rule():
+    assert checked_rules({"files": ["C.sol"]}, _DECLARED) == _DECLARED
+
+
+def test_rule_and_exclude_rule_combine_and_read_globs():
+    # certoraRun applies ``rule`` first, then drops ``exclude_rule``. Both take globs.
+    conf = {"rule": ["inv_*", "transfer_moves"], "exclude_rule": ["inv_balance"]}
+    assert checked_rules(conf, _DECLARED) == ["inv_supply", "transfer_moves"]
+    assert checked_rules({"exclude_rule": ["*_m*"]}, _DECLARED) == [
+        "inv_supply", "inv_balance", "sanity",
+    ]
+
+
+def test_a_single_name_reads_like_a_one_element_list():
+    assert checked_rules({"rule": "sanity"}, _DECLARED) == ["sanity"]
+
+
+def test_the_union_over_confs_shows_what_no_conf_checks():
+    confs = [{"rule": ["inv_*"]}, {"rule": ["transfer_moves"]}]
+    checked = {r for c in confs for r in checked_rules(c, _DECLARED)}
+    assert [r for r in _DECLARED if r not in checked] == ["deposit_mints", "sanity"]
+
+
+def test_a_malformed_selection_is_rejected():
+    with pytest.raises(ValueError, match="'rule'"):
+        checked_rules({"rule": 3}, _DECLARED)

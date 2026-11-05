@@ -10,6 +10,7 @@ This class owns the autosetup portion of the orchestration:
 - Base config creation and warmup
 - Test run spec creation
 
+``Autosetup.build`` runs only the first two steps: it makes the project compile and stops.
 """
 
 import asyncio
@@ -20,7 +21,9 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from certora_autosetup.autosetup.types import AutosetupConfig, AutosetupResult
+from certora_autosetup.autosetup.types import (
+    AutosetupConfig, AutosetupResult, ProjectBuildResult, solc_versions_of,
+)
 from certora_autosetup.build_systems.base import BuildSystemConfig
 from certora_autosetup.build_systems.manager import BuildSystemManager
 from certora_autosetup.parsers.build_system_detector import BuildSystem, BuildSystemDetector
@@ -49,6 +52,7 @@ from certora_autosetup.utils.paths import (
 )
 from certora_autosetup.utils.contract_utils import split_contract_spec
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager, FileContent, ProverJobSpec
+from certora_autosetup.utils.job_utils import extract_job_hash_from_url
 from certora_autosetup.utils.llm_util import get_ledger_rows
 from certora_autosetup.utils.project_dir import describe_build_config_dir, find_build_config_dir
 from certora_autosetup.utils.scope import Scope
@@ -255,10 +259,7 @@ class Autosetup:
         self.main_contract_handle = main_contract_handle
 
         # Step 1: Setup build system config (must run before cache check so solc version is in cache key)
-        self.setup_build_system_config()
-        self.setup_prover.build_system = self.build_system
-        self.setup_prover.build_system_config = self.build_system_config
-        self.setup_prover.build_config_dir = self.build_config_dir
+        self._setup_build_system()
 
         # Check full-pipeline cache before running
         result_path = Path(DIR_CERTORA_INTERNAL) / FILE_AUTOSETUP_RESULT
@@ -354,6 +355,45 @@ class Autosetup:
         self.log(f"AutosetupResult saved to {result_path}")
 
         return result
+
+    def build(self, main_contract_handle: ContractHandle) -> ProjectBuildResult:
+        """Make the project's scene compile under certoraRun, then stop.
+
+        Runs the build-system detection and the compilation analysis with its workarounds
+        (solc selection among the installed compilers, via-ir and optimizer settings,
+        remappings and packages, import fixes). Nothing after that runs: no summaries, sanity
+        specs, base conf, warmup or prover job, and no result cache, because the import fixes
+        edit project sources and a cache hit would skip them.
+
+        Raises:
+            CompilationAnalysisError: If the scene does not compile under any workaround.
+        """
+        self.main_contract_handle = main_contract_handle
+        self._setup_build_system()
+        success, updated_config_dict, import_patcher_applied, self.contract_handles = (
+            self.setup_prover.run_compilation_analysis(
+                self.contract_handles, main_contract_handle.contract_name
+            )
+        )
+        if not success:
+            raise CompilationAnalysisError("Compilation analysis failed")
+        self.compilation_config_updates = updated_config_dict
+        self.import_patcher_applied = import_patcher_applied
+        config = self.get_build_system_config_dict_with_updates()
+        return ProjectBuildResult(
+            compilation_config=config,
+            solc_versions=solc_versions_of(config),
+            import_patcher_applied=import_patcher_applied,
+            contracts=[ch.to_config_str() for ch in self.contract_handles],
+        )
+
+    def _setup_build_system(self) -> None:
+        """Detect the build system and hand its config to ``setup_prover``, which compiles
+        with it."""
+        self.setup_build_system_config()
+        self.setup_prover.build_system = self.build_system
+        self.setup_prover.build_system_config = self.build_system_config
+        self.setup_prover.build_config_dir = self.build_config_dir
 
     # -------------------------------------------------------------------------
     # Build system configuration
@@ -925,9 +965,11 @@ class Autosetup:
                 return False
 
             if warmup_result.success:
-                self.log(
-                    f"✓ Completed: {warmup_result.job_handle.phase} for {warmup_result.job_handle.job_id.split('/')[-1]}"
-                )
+                job_ref = warmup_result.job_handle.job_id
+                # A cloud job_id is the job URL; its last path segment can be "report", so name
+                # the job by its hash instead.
+                job_label = extract_job_hash_from_url(job_ref) if job_ref.startswith("http") else job_ref.split('/')[-1]
+                self.log(f"✓ Completed: {warmup_result.job_handle.phase} for {job_label}")
                 if warmup_result.job_handle.job_id.startswith("http"):
                     self.log(f"📎 Job URL: {warmup_result.job_handle.job_id}")
                 self.log("✅ Sanity job completed")
@@ -964,6 +1006,7 @@ class Autosetup:
                 max_prover_invocations=10,
                 verbose=bool(self.config.verbose),
                 skip_proxy_detection=self.config.skip_proxy_detection,
+                proxy_mappings=self.config.proxy_mappings,
                 skip_harnessing=self.config.skip_harnessing,
                 summary_setup=self.setup_prover.summary_setup,
                 library_resolver=self.libraries_for_contracts,

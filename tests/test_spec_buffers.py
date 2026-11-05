@@ -7,6 +7,7 @@ from composer.spec.source.spec_buffers import (
     NamedBuffer,
     buffer_digest,
     buffer_imports,
+    buffer_prover_digest,
     buffer_state_digest,
     check_buffer_completion,
     combined_buffers_view,
@@ -230,16 +231,17 @@ def test_buffer_completion_vacuous_without_run_targets():
     # No run-target buffers means no stamps to require; completion is vacuously satisfied.
     b = {"shared": NamedBuffer(name="shared", cvl=SHARED, is_run_target=False)}
     assert check_buffer_completion(
-        b, {}, ["feedback", "prover"], skipped=[], version_history=[]
+        b, {}, ["feedback", "prover"], skipped=[], version_history=[], rule_skips=[]
     ) is None
 
 
-def _stamp(buffers, name, key):
+def _stamp(buffers, name, key, rule_skips=()):
     # The feedback stamp also tracks the buffer's claimed properties (include_claim); the prover stamp
-    # does not — mirrors check_buffer_completion.
-    d = buffer_state_digest(
-        buffers, name, version_history=[], include_claim=(key == "feedback")
-    )
+    # tracks the buffer's markings instead — mirrors check_buffer_completion.
+    if key == "prover":
+        d = buffer_prover_digest(buffers, name, version_history=[], rule_skips=rule_skips)
+    else:
+        d = buffer_state_digest(buffers, name, version_history=[], include_claim=True)
     return {f"{key}:{name}": d}
 
 
@@ -280,7 +282,7 @@ def test_buffer_completion_rejects_stale_feedback_after_claim_change():
         validations.update(_stamp(b, name, "prover"))
     reclaimed = {**b, "easy": b["easy"].model_copy(update={"property_rules": {"P-moved": ["r_easy"]}})}
     err = check_buffer_completion(
-        reclaimed, validations, ["feedback", "prover"], skipped=[], version_history=[]
+        reclaimed, validations, ["feedback", "prover"], skipped=[], version_history=[], rule_skips=[]
     )
     assert err is not None and "easy" in err and "feedback" in err
 
@@ -292,14 +294,14 @@ def test_buffer_completion_ok_when_all_stamped_at_digest():
         validations.update(_stamp(b, name, "feedback"))
         validations.update(_stamp(b, name, "prover"))
     assert check_buffer_completion(
-        b, validations, ["feedback", "prover"], skipped=[], version_history=[]
+        b, validations, ["feedback", "prover"], skipped=[], version_history=[], rule_skips=[]
     ) is None
 
 
 def test_buffer_completion_rejects_missing_stamp():
     b = _buffers()
     validations = _stamp(b, "easy", "feedback")  # hard + prover missing
-    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[], rule_skips=[])
     assert err is not None and ("hard" in err or "prover" in err)
 
 
@@ -311,7 +313,7 @@ def test_buffer_completion_stamp_goes_stale_on_edit():
         validations.update(_stamp(b, name, "prover"))
     # Edit `easy`: its digest changes, so its stamps go stale.
     b["easy"] = NamedBuffer(name="easy", cvl=EASY + "// edit\n", property_rules={"P-easy": ["r_easy"]})
-    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[], rule_skips=[])
     assert err is not None and "easy" in err
 
 
@@ -323,7 +325,7 @@ def test_buffer_completion_stamp_goes_stale_on_shared_import_edit():
         validations.update(_stamp(b, name, "prover"))
     # Editing the shared buffer invalidates BOTH importers' stamps.
     b["shared"] = NamedBuffer(name="shared", cvl=SHARED + "// edit\n", is_run_target=False)
-    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[])
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=[], version_history=[], rule_skips=[])
     assert err is not None
 
 
@@ -337,9 +339,28 @@ def test_skip_change_does_not_invalidate_buffer_stamps():
         validations.update(_stamp(b, name, "prover"))
     skipped = [("P-x", "cannot express in CVL")]
     # The buffer stamps are still current under a skip; only the skip review is missing.
-    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=skipped, version_history=[])
+    err = check_buffer_completion(b, validations, ["feedback", "prover"], skipped=skipped, version_history=[], rule_skips=[])
     assert err is not None and "skip review" in err
     assert "easy" not in err and "hard" not in err
+
+
+def test_marking_a_rule_invalidates_only_its_own_buffers_prover_stamp():
+    # A buffer passes relative to its markings, so a stamp earned under other markings no longer
+    # applies. Another buffer's rules are not its concern.
+    b = _buffers()
+    validations = {}
+    for name in ("easy", "hard"):
+        validations.update(_stamp(b, name, "feedback"))
+        validations.update(_stamp(b, name, "prover"))
+    err = check_buffer_completion(
+        b, validations, ["feedback", "prover"], skipped=[], version_history=[], rule_skips=["r_easy"]
+    )
+    assert err is not None and "'easy' prover" in err
+    assert "hard" not in err and "feedback" not in err
+    validations.update(_stamp(b, "easy", "prover", rule_skips=["r_easy"]))
+    assert check_buffer_completion(
+        b, validations, ["feedback", "prover"], skipped=[], version_history=[], rule_skips=["r_easy"]
+    ) is None
 
 
 def test_completion_requires_skip_review_when_skipped():
@@ -351,12 +372,12 @@ def test_completion_requires_skip_review_when_skipped():
         validations.update(_stamp(b, name, "feedback"))
         validations.update(_stamp(b, name, "prover"))
     assert check_buffer_completion(  # no skips -> no skip stamp needed
-        b, validations, ["feedback", "prover"], skipped=[], version_history=[]
+        b, validations, ["feedback", "prover"], skipped=[], version_history=[], rule_skips=[]
     ) is None
     skipped = [("P-x", "cannot express in CVL")]
     stamped = {**validations, SKIPS_VALIDATION_KEY: skips_review_digest(b, skipped=skipped, version_history=[])}
     assert check_buffer_completion(
-        b, stamped, ["feedback", "prover"], skipped=skipped, version_history=[]
+        b, stamped, ["feedback", "prover"], skipped=skipped, version_history=[], rule_skips=[]
     ) is None
 
 

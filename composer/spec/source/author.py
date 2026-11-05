@@ -179,7 +179,7 @@ class PublishResultTool(
         if (err := check_buffer_completion(
             buffers, self.state["validations"], self.state["required_validations"],
             skipped=skipped_pairs, version_history=self.state["version_history"],
-            config=self.state["config"],
+            config=self.state["config"], rule_skips=self.state["rule_skips"].keys(),
         )) is not None:
             return err
         with self.tool_deps() as titles:
