@@ -100,7 +100,7 @@ class _Gate:
 
     async def verify(self, draft: str | None = _DRAFT) -> Any:
         state = {**self.state, "curr_spec": draft}
-        tool = gate_tools(self.deps)[1]
+        tool = gate_tools(self.deps, analyzer=None)[1]  # type: ignore[arg-type]
         return await tool.ainvoke(
             {"name": tool.name, "args": {"state": state}, "id": "tc", "type": "tool_call"}
         )

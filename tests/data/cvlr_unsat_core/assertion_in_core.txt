@@ -1,0 +1,163 @@
+
+================================================================================
+= UNSAT CORE: rule_recorded_assets_backed_deposit_exact
+================================================================================
+
+=== 139_1_0_0_0_249 (call:main)
+[context] 0: Annotation dsa.assign.start := 139_1_0_0_0_0 -> 140_1_0_0_0_0
+[context] 1: LabelCmd "Parallel assignment for R11881:bv256 := R11880:bv256"
+[context] 2: Annotation dsa.assign.end := 139_1_0_0_0_0 -> 140_1_0_0_0_0
+[context] 3: LabelCmd "Parallel assignment for R515:bv256 := R514:bv256"
+[in UC] 4: R515:bv256 := 0x1
+
+=== 140_1_0_0_0_0 (call:main)
+[in UC] 0: B516:bool := Eq(R515:bv256 0x0)
+
+=== 141_1_0_0_0_0 (call:main)
+[context] 1: Annotation debug.sbf.function_end := memcpy
+[context] 2: R517:bv256 := Select(M486:bytemap 0x402800098)
+[context] 3: ASSUME LAnd(Ge(R517:bv256 0x1) Le(R517:bv256 0xffffffffffffffff))
+[context] 4: Annotation debug.sbf.function_start := SbfInlinedFuncStartAnnotation(name=cvlr_m...truncated...gs=[(R517:bv256, SbfFuncArgInfo(sort=UNKNOWN, observedUse=true))], mockFor=null)
+[context] 5: Annotation debug.sbf.function_end := SbfInlinedFuncEndAnnotation(name=cvlr_mathint::nativeint_u64::NativeIntU64::is_u64, id=10, retVal=R3:bv256)
+[in UC] 6: R518:bv256 := Select(M486:bytemap 0x400a00098)
+[context] 7: ASSUME Le(R518:bv256 0xfffffffffffffffe)
+[context] 8: Annotation debug.sbf.function_start := SbfInlinedFuncStartAnnotation(name=cvlr_m...truncated...gs=[(R518:bv256, SbfFuncArgInfo(sort=UNKNOWN, observedUse=true))], mockFor=null)
+[context] 9: Annotation debug.sbf.function_end := SbfInlinedFuncEndAnnotation(name=cvlr_mathint::nativeint_u64::NativeIntU64::is_u64, id=11, retVal=R3:bv256)
+[context] 10: ASSUME Le(R488:bv256 R517:bv256)
+[in UC] 11: I520:int := IntAdd(R518:bv256 R488:bv256)
+[context] 12: ASSUME LAnd(Ge(I520:int 0x1) Le(I520:int 0xffffffffffffffff))
+[in UC] 13: R521:bv256 := Apply(safe_math_narrow_bv256:bif I520:int)
+
+=== 142_1_0_0_0_0 (call:main)
+[context] 45: Annotation dsa.assign.end := 87_1_0_0_0_0 -> 84_1_0_0_0_0
+[context] 46: Annotation sbf.inline.end := SbfInlinedFuncEndAnnotation(name=certora_vault::processor::deposit_exact::process_deposit_exact, id=27, retVal=R538:bv256)
+[context] 47: R540:bv256 := 0x200001fe8
+[context] 48: Annotation debug.sbf.function_start := SbfInlinedFuncStartAnnotation(name=solana...truncated...e)), (R52:bv256, SbfFuncArgInfo(sort=UNKNOWN, observedUse=true))], mockFor=null)
+[context] 49: Annotation debug.sbf.function_end := SbfInlinedFuncEndAnnotation(name=solana_account_info::AccountInfo::try_borrow_data, id=33, retVal=R538:bv256)
+[in UC] 50: R541:bv256 := Select(M525:bytemap 0x4000000f1)
+[in UC] 51: R542:bv256 := Select(M525:bytemap 0x4000000e1)
+[context] 52: Annotation debug.sbf.function_start := SbfInlinedFuncStartAnnotation(name=cvlr_s...truncated...gs=[(R385:bv256, SbfFuncArgInfo(sort=POINTER, observedUse=true))], mockFor=null)
+[in UC] 53: R543:bv256 := Select(M525:bytemap 0x400a00098)
+[context] 56: Annotation debug.sbf.function_end := SbfInlinedFuncEndAnnotation(name=cvlr_mathint::nativeint_u64::NativeIntU64::is_u64, id=31, retVal=R3:bv256)
+[context] 57: Annotation debug.sbf.function_end := SbfInlinedFuncEndAnnotation(name=cvlr_solana::token::spl_token_account_get_amount, id=32, retVal=R543:bv256)
+[context] 58: Annotation snippet.cmd := CexPrintValues(displayMessage=assets_after, symbols=[R542:bv256])
+[context] 59: Annotation snippet.cmd := CexPrintValues(displayMessage=fee_after, symbols=[R541:bv256])
+[context] 60: Annotation snippet.cmd := CexPrintValues(displayMessage=balance_after, symbols=[R543:bv256])
+[in UC] 61: R544:bv256 := Add(R541:bv256 R542:bv256)
+[in UC] 62: tacTmp!t1985!1986:bool := Le(R541:bv256 R544:bv256)
+[in UC] 63: tacTmp!t1987!1988:bool := Le(R544:bv256 R543:bv256)
+[in UC] 64: B548:bool := LAnd(tacTmp!t1985!1986:bool tacTmp!t1987!1988:bool)
+[context] 65: Annotation snippet.cmd := Assert(displayMessage=assert, symbol=B548:bool, fromSatisfy=false) (standard_deposits.rs:149:1)
+[in UC] 66: ASSERT B548:bool [assertion failed] (standard_deposits.rs:149:1)
+  [cmd] tac.assert.id: 100001
+
+=== 143_1_0_0_0_0 (call:main)
+[in UC] 0: R550:bv256 := Select(M486:bytemap 0x400a00010)
+[in UC] 1: R551:bv256 := Select(M486:bytemap 0x402800010)
+[in UC] 2: B552:bool := Eq(R551:bv256 R550:bv256)
+
+=== 144_1_0_0_0_0 (call:main)
+[in UC] 0: R553:bv256 := Select(M486:bytemap 0x400a00018)
+[in UC] 1: R554:bv256 := Select(M486:bytemap 0x402800018)
+[in UC] 2: B555:bool := Eq(R554:bv256 R553:bv256)
+
+=== 145_1_0_0_0_0 (call:main)
+[in UC] 0: R556:bv256 := Select(M486:bytemap 0x400a00020)
+[in UC] 1: R557:bv256 := Select(M486:bytemap 0x402800020)
+[in UC] 2: B558:bool := Eq(R557:bv256 R556:bv256)
+
+=== 32_1_0_0_0_0 (call:main)
+[context] 8: Annotation dsa.assign.end := 152_1_0_0_0_0 -> 153_1_0_0_0_0
+[context] 9: Annotation debug.sbf.function_end := SbfInlinedFuncEndAnnotation(name=solana_account_info::AccountInfo::try_borrow_mut_data, id=14, retVal=R664:bv256)
+[context] 10: Annotation dsa.assign.start := 34_1_0_0_0_0 -> 35_1_0_0_0_0
+[context] 11: LabelCmd "Parallel assignment for R10800:bv256, R10801:bv256, R11695:bv256, R11696:bv256, R11697:bv256 := R12085:bv256, R10799:bv256, R10000:bv256, R9843:bv256, R10009:bv256"
+[context] 12: Annotation dsa.assign.end := 34_1_0_0_0_0 -> 35_1_0_0_0_0
+[in UC] 13: R459:bv256 := Select(M58:bytemap 0x4000000e1)
+
+=== 36_1_0_0_0_0 (call:main)
+[context] 17: R477:bv256 := Apply(safe_math_narrow_bv256:bif I476:int)
+[context] 18: Annotation debug.sbf.function_end := __udivti3
+[context] 19: I478:int := IntAdd(R460:bv256 R469:bv256)
+[context] 20: ASSUME LAnd(Ge(I478:int 0x2) Le(I478:int 0xffffffffffffffff))
+[context] 21: Annotation debug.sbf.external_call := overflow_check
+[in UC] 22: I479:int := IntAdd(R459:bv256 R477:bv256)
+[context] 23: ASSUME LAnd(Ge(I479:int 0x2) Le(I479:int 0xffffffffffffffff))
+[in UC] 24: R480:bv256 := Apply(safe_math_narrow_bv256:bif I479:int)
+[context] 27: Annotation dsa.assign.start := 36_1_0_0_0_0 -> 85_1_0_0_0_0
+[context] 28: LabelCmd "Parallel assignment for R10933:bv256, R10934:bv256, R10935:bv256 := R10800:bv256, R10892:bv256, R10848:bv256"
+[context] 29: Annotation dsa.assign.end := 36_1_0_0_0_0 -> 85_1_0_0_0_0
+[context] 30: LabelCmd "Parallel assignment for M486:bytemap, R487:bv256, R488:bv256, R489:bv256 := M482:bytemap, R483:bv256, R477:bv256, R469:bv256"
+[context] 31: R487:bv256 := 0x300000048
+[in UC] 32: R488:bv256 := R477:bv256
+
+=== 405_1_0_0_0_0 (call:main)
+[context] 326: Annotation debug.sbf.function_start := memcpy(dst=Stack{-952=StackSlice(lb=15432, ub=15479)}, src=Stack{-568=StackSlice(lb=15816, ub=15863)}, len=48)
+[context] 327: Annotation debug.sbf.function_end := memcpy
+[context] 328: Annotation debug.sbf.function_start := memcpy(dst=Stack{-904=StackSlice(lb=15480, ub=15527)}, src=Stack{-520=StackSlice(lb=15864, ub=15911)}, len=48)
+[context] 329: Annotation debug.sbf.function_end := memcpy
+[context] 330: AssignHavocCmd R664:bv256
+[in UC] 331: R665:bv256 := Select(M58:bytemap 0x402800008)
+[in UC] 332: R666:bv256 := Select(M58:bytemap 0x400a00008)
+[in UC] 333: B667:bool := Eq(R666:bv256 R665:bv256)
+
+=== 6_1_0_0_0_0 (call:main)
+[context] 2: ASSUME LAnd(Ge(R415:bv256 0x1) Le(R415:bv256 0xffffffffffffffff))
+[context] 3: Annotation snippet.cmd := ExternalCall(displayMessage=CVT_nondet_u64, symbols=[R415:bv256])
+[context] 4: R416:bv256 := 0x200001fe8
+[context] 5: Annotation debug.sbf.function_start := SbfInlinedFuncStartAnnotation(name=solana...truncated...e)), (R52:bv256, SbfFuncArgInfo(sort=UNKNOWN, observedUse=true))], mockFor=null)
+[context] 6: Annotation debug.sbf.function_end := SbfInlinedFuncEndAnnotation(name=solana_account_info::AccountInfo::try_borrow_data, id=34, retVal=R415:bv256)
+[in UC] 7: R417:bv256 := Select(M58:bytemap 0x4000000f1)
+[context] 8: Annotation debug.sbf.function_start := memcpy(dst=Stack{-824=StackSlice(lb=7368, ub=7375)}, src=non-stack, len=8)
+[context] 9: R418:bv256 := Select(M58:bytemap 0x4000000e1)
+[context] 10: Annotation debug.sbf.function_end := memcpy
+[in UC] 11: R419:bv256 := Select(M58:bytemap 0x4000000e1)
+[in UC] 12: R420:bv256 := Add(R417:bv256 R419:bv256)
+[in UC] 13: B421:bool := Le(R417:bv256 R420:bv256)
+[context] 14: Annotation debug.sbf.function_start := SbfInlinedFuncStartAnnotation(name=cvlr_s...truncated...gs=[(R385:bv256, SbfFuncArgInfo(sort=POINTER, observedUse=true))], mockFor=null)
+[in UC] 15: R422:bv256 := Select(M58:bytemap 0x400a00098)
+[context] 16: ASSUME Le(R422:bv256 0xffffffffffffffff)
+[context] 17: Annotation debug.sbf.function_start := SbfInlinedFuncStartAnnotation(name=cvlr_m...truncated...gs=[(R422:bv256, SbfFuncArgInfo(sort=UNKNOWN, observedUse=true))], mockFor=null)
+[context] 18: Annotation debug.sbf.function_end := SbfInlinedFuncEndAnnotation(name=cvlr_mathint::nativeint_u64::NativeIntU64::is_u64, id=28, retVal=R3:bv256)
+[context] 19: Annotation debug.sbf.function_end := SbfInlinedFuncEndAnnotation(name=cvlr_solana::token::spl_token_account_get_amount, id=29, retVal=R422:bv256)
+[in UC] 20: B423:bool := Le(R420:bv256 R422:bv256)
+[in UC] 21: B424:bool := Le(R417:bv256 R420:bv256)
+[in UC] 22: ASSUME Ite(B424:bool B423:bool B421:bool)
+
+=== 85_1_0_0_0_0 (call:main)
+[context] 11: Annotation debug.sbf.function_start := SbfInlinedFuncStartAnnotation(name=cvlr_s...truncated...e)), (R488:bv256, SbfFuncArgInfo(sort=SCALAR, observedUse=true))], mockFor=null)
+[context] 12: R493:bv256 := 0x200006000
+[context] 13: Annotation debug.sbf.function_start := memcpy(dst=Stack{-4096=StackSlice(lb=20480, ub=20487)}, src=Stack{-9368=StackSlice(lb=15208, ub=15215)}, len=8)
+[context] 14: Annotation debug.sbf.function_end := memcpy
+[context] 15: Annotation debug.sbf.function_start := SbfInlinedFuncStartAnnotation(name=cvlr_s...truncated...)), (R493:bv256, SbfFuncArgInfo(sort=POINTER, observedUse=true))], mockFor=null)
+[in UC] 16: R494:bv256 := Select(M486:bytemap 0x400a00008)
+[in UC] 17: R495:bv256 := Select(M486:bytemap 0x402800008)
+[in UC] 18: B496:bool := Eq(R495:bv256 R494:bv256)
+
+=== 92_1_0_0_0_0 (call:main)
+[in UC] 0: R497:bv256 := Select(M58:bytemap 0x402800010)
+[in UC] 1: R498:bv256 := Select(M58:bytemap 0x400a00010)
+[in UC] 2: B499:bool := Eq(R498:bv256 R497:bv256)
+[in UC] 3: R500:bv256 := Select(M58:bytemap 0x402800018)
+[in UC] 4: R501:bv256 := Select(M58:bytemap 0x400a00018)
+[in UC] 5: B502:bool := Eq(R501:bv256 R500:bv256)
+[in UC] 6: R503:bv256 := Select(M58:bytemap 0x402800020)
+[in UC] 7: R504:bv256 := Select(M58:bytemap 0x400a00020)
+[in UC] 8: B505:bool := Eq(R504:bv256 R503:bv256)
+[in UC] 9: ASSUME LOr(LNot(B499:bool) LOr(LNot(B502:bool) LNot(B505:bool)))
+
+=== 97_1_0_0_0_0 (call:main)
+[context] 0: I506:int := IntAdd(R460:bv256 R415:bv256)
+[context] 1: ASSUME LAnd(Ge(I506:int 0x1) Le(I506:int 0xffffffffffffffff))
+[context] 2: Annotation debug.sbf.external_call := overflow_check
+[in UC] 3: I507:int := IntAdd(R459:bv256 R415:bv256)
+[context] 4: ASSUME LAnd(Ge(I507:int 0x1) Le(I507:int 0xffffffffffffffff))
+[in UC] 5: R508:bv256 := Apply(safe_math_narrow_bv256:bif I507:int)
+[context] 8: Annotation dsa.assign.start := 97_1_0_0_0_0 -> 85_1_0_0_0_0
+[context] 9: LabelCmd "Parallel assignment for R10933:bv256, R10934:bv256, R10935:bv256 := R10800:bv256, R11696:bv256, R11696:bv256"
+[context] 10: Annotation dsa.assign.end := 97_1_0_0_0_0 -> 85_1_0_0_0_0
+[context] 11: LabelCmd "Parallel assignment for M486:bytemap, R487:bv256, R488:bv256, R489:bv256 := M510:bytemap, R511:bv256, R415:bv256, R415:bv256"
+[context] 12: R487:bv256 := 0x300000048
+[in UC] 13: R488:bv256 := R415:bv256
+
+CFG Edges (compacted to UC blocks):
+  142_1_0_0_0_0 <- {6_1_0_0_0_0}
