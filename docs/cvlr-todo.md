@@ -686,6 +686,63 @@ first rule:
 This is the larger piece of work. Do U44 first. It makes the problem visible to the author, and it
 tells us how often a unit hits this wall.
 
+**U46. The Solana AutoProver has no prioritized mode.** Every CVLR run is comprehensive: it
+formalizes every inferred property of every unit. Each of the three cloud Solana jobs on dev
+formalized 4–7 units for an estimated $39–65, while a prioritized Solidity run formalizes one.
+Prioritized is the dashboard's default for Solidity, and it is what a like-for-like cost
+comparison between the two needs. The ranking itself is already backend-agnostic. `run_pipeline` in
+[core.py](../composer/pipeline/core.py) ranks the candidates (`_prioritize`), cuts the run to one
+batch, skips hoisting and refuses a cached result that retires the focus (`_focus_satisfied`), and
+passes the deprioritized list to `build_report`. What is missing is the mode's input and the CVLR
+author's side of it:
+
+* **The entry point.** [cvlr/entry.py](../composer/spec/cvlr/entry.py) has no `--run-mode`, passes
+  none to `cli_pipeline`, and writes `comprehensive` into `job_info.json` unconditionally. It needs
+  the flag, `resolve_run_mode` (which reads `AUTOPROVER_RUN_MODE` too), and the resolved mode in
+  both places. The flag's definition is in `autoprove_common.py` today; it should move beside
+  `resolve_run_mode` so the two entry points share it.
+* **The staged formalizer.** `CvlrStagedFormalizer.begin` then receives the chosen batch alone, so
+  the shared scaffold is built from the focus's properties only. That should be correct and cheaper,
+  but it has not been checked. In particular, nothing in it may assume one section per inferred unit.
+* **The author's exits.** The CVL author tightens its exits around the focus with a `FocusPolicy`
+  (`source/pipeline.py`, `source/author.py`), and CVLR has to do the same:
+  `skip_tools(..., protected=...)`, `gated_give_up_tool` in place of `give_up_tool`, a focus variant
+  of the give-up description, and a `focused` branch in the CVLR property generation prompt. That
+  branch is the `<skipping>` text in `property_generation_prompt.j2`, with the CVLR remedies: state
+  the missing fact as an invariant, decompose, weaken honestly and say so. `FocusPolicy` should move
+  to `composer/authoring` rather than be imported from the CVL author. CVLR's budget monitor already
+  sets `budget_curtailed`, which lifts the skip protection at wrap-up.
+* **The give-up gate counts the wrong tool.** `_verify_attempts` in
+  [authoring/tools.py](../composer/authoring/tools.py) counts `submit_buffer` calls, which is the
+  CVL tool. Under CVLR it would count zero and refuse every `exhausted` give-up. The verify tool's
+  name has to be a parameter of `gated_give_up_tool` (`verify_rules` for CVLR).
+* **The ranking prompt.** `property_prioritization_system.j2` speaks of contracts and uses ERC-20
+  examples. It ranks property descriptions, so it probably works as it is. Judge it from the first
+  prioritized run, not in advance.
+* **The cloud.** data-processors refuses a `run_mode` for `AUTO_PROVER_SOLANA`
+  (`_require_solana_inputs`), and `_submit_autoprover_solana` passes `include_run_mode=False`. Both
+  lift for `prioritized` only; `evaluate` stays refused until U47. The AIAutoProver wrapper needs no
+  change: `s3_autoprove_solana` calls `console_solana` in-process, so the env var reaches it.
+* **The dashboard.** zeus-saas shows the run-mode picker, and prices by mode, only for the
+  `auto-prover` app (`auto-prover-sections.tsx`, `aiss-run-overview-dialog.tsx`). The Solana app
+  needs the picker with Prioritized and Comprehensive, and a default chosen deliberately. Its size
+  estimator is calibrated on Solidity runs.
+
+Order: AutoProver first, then the AIAutoProver pin, then the API, then the dashboard. A first
+prioritized run on a benchmark unit says whether the ranking prompt needs Solana wording. Tests: the
+entry point resolves the mode, the formalizer binds the focus exits under prioritized and not under
+comprehensive, and the gate counts `verify_rules`.
+
+**U47. The Solana AutoProver has no evaluate mode (deferred).** Evaluate (#282, not yet merged into
+`feature/solana`) writes no specs. It runs the specs and confs already in the repository and reports
+how well they cover the inferred properties. #282 adds only the hook: the driver hands the
+extracted batches to an implementation registered under the `certora.autoprove.modes` entry point.
+The implementation in use is CVL-specific (the CVL judge, conf coverage per spec). A Solana version
+needs its own implementation. It has to find a project's existing CVLR rules and the confs that
+select them, run them through the CVLR verify path, and judge per property which rules cover it.
+The API and dashboard would need the same per-kind lifting as U46, and the dashboard's flat
+evaluate price. Left until after U46.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
