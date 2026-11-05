@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Sequence, override
 
 
+from composer.authoring.tools import FocusPolicy
 from composer.cargo.sbf import sbf_check
 from composer.cargo.session import CargoSession, WarmFailed
 from composer.pipeline.core import (
@@ -60,6 +61,7 @@ from composer.pipeline.core import (
     ToolBinder,
 )
 from composer.pipeline.ptypes import BackendJob, Curtailed, Delivered, GaveUp
+from composer.pipeline.run_mode import RunMode
 from composer.prover.conf import Conf, InheritRules, SelectRules
 from composer.prover.core import ProverOptions
 from composer.sandbox.config import SandboxConfig
@@ -304,6 +306,13 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             target=target,
             verify=verify,
             editing=self.deps.editing,
+            # A prioritized run staked itself on these properties, so the author's exits
+            # tighten around them: they cannot be skipped, and an exhausted give-up is
+            # refused until the prover has actually been run.
+            focus=(
+                FocusPolicy(protected=tuple(p.title for p in props))
+                if run.run_mode is RunMode.PRIORITIZED else None
+            ),
         )
 
     @override

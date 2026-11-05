@@ -269,7 +269,7 @@ def _flat(text: str) -> str:
     return " ".join(text.split())
 
 
-def _author_task_prompt() -> str:
+def _author_task_prompt(*, focused: bool = False) -> str:
     from composer.spec.cvlr.author import CvlrPropertyGenParams, _PropertyGenTemplate
 
     params: CvlrPropertyGenParams = {
@@ -281,6 +281,7 @@ def _author_task_prompt() -> str:
         "module": "spec",
         "cvlr_versions": "cvlr 0.6.1",
         "sort": "existing",
+        "focused": focused,
     }
     return _PropertyGenTemplate.bind(params).render_to(load_jinja_template)
 

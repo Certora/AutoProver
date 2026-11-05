@@ -19,6 +19,7 @@ from composer.spec.cvlr.reference import SOLANA_V2, generations
 from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.spec.cvlr import entry, preflight
 from composer.spec.cvlr.pipeline import CvlrPhase
+from composer.pipeline.run_mode import RUN_MODE_ENV, RunMode
 
 
 def _package(root: Path, name: str, *, lib: bool = True) -> CratePackage:
@@ -534,4 +535,37 @@ async def test_a_bad_package_fails_before_any_service_starts(project, monkeypatc
         async with entry.cvlr_executor(args, SimpleNamespace()):  # type: ignore[arg-type]
             pass
 
+    assert wiring.kwargs == {}
+
+
+@pytest.mark.asyncio
+async def test_the_run_is_comprehensive_unless_asked(project, monkeypatch, wiring):
+    monkeypatch.delenv(RUN_MODE_ENV, raising=False)
+    recorded = await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
+    assert recorded.kwargs["run_mode"] is RunMode.COMPREHENSIVE
+
+
+@pytest.mark.asyncio
+async def test_the_run_mode_flag_reaches_the_pipeline(project, monkeypatch, wiring):
+    monkeypatch.delenv(RUN_MODE_ENV, raising=False)
+    recorded = await _run(
+        [str(project), "programs/vault/src/lib.rs:vault", "--run-mode", "prioritized"], monkeypatch, wiring
+    )
+    assert recorded.kwargs["run_mode"] is RunMode.PRIORITIZED
+
+
+@pytest.mark.asyncio
+async def test_the_cloud_sets_the_run_mode_from_the_environment(project, monkeypatch, wiring):
+    # The AIAutoProver wrapper calls this entry point in-process, so the Batch job's env var is
+    # the route by which the dashboard's choice arrives.
+    monkeypatch.setenv(RUN_MODE_ENV, "prioritized")
+    recorded = await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
+    assert recorded.kwargs["run_mode"] is RunMode.PRIORITIZED
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_run_mode_fails_before_anything_is_staged(project, monkeypatch, wiring):
+    monkeypatch.setenv(RUN_MODE_ENV, "evaluate")
+    with pytest.raises(ValueError, match="Unknown run mode"):
+        await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
     assert wiring.kwargs == {}

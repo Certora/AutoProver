@@ -18,7 +18,7 @@ from composer.spec.context import (
     SourceFields
 )
 from composer.pipeline.cli import cli_pipeline, user_ns
-from composer.pipeline.run_mode import RunMode, resolve_run_mode
+from composer.pipeline.run_mode import add_run_mode_arg, resolve_run_mode
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
@@ -97,13 +97,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     budget_group.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
-    parser.add_argument(
-        "--run-mode", choices=[m.value for m in RunMode], default=None,
-        help="How much of the inferred property set to pursue. 'comprehensive' (the default) "
-             "formalizes every property of every component. 'prioritized' ranks them all, then "
-             "spends the run on the highest-contribution property and the properties it rests "
-             "on. Also settable as AUTOPROVER_RUN_MODE; this flag wins.",
-    )
+    add_run_mode_arg(parser)
 
     args = cast(AutoProveArgs, parser.parse_args())
     async with autoprove_executor(args, summary) as runner:
