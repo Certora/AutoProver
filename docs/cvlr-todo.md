@@ -768,6 +768,16 @@ directive now allows the suffix, as the layer's other generic directives already
 fixture held a numbered `try_accounts`, so nothing caught it. A test now checks the numbered
 spellings.
 
+**U49. The Solana launch form has no Expert Settings panel.** The Solidity AutoProver form
+(zeus-saas `auto-prover-sections.tsx`) shows only the essentials by default and keeps the rest
+behind an `ExpertSettingsToggle`: the contract picker, the run mode, *Use repo memory* and the
+design and threat-model documents. The Solana form (`auto-prover-solana-sections.tsx`) has no such
+panel. Its program picker, run-mode picker and design-document picker are always shown, and it
+offers no repo memory and no threat model. The Solana form should get the same panel and the same
+default view, so that the two apps look and behave alike. The panel is also where any future Solana
+settings would go. Moving the run mode behind it should keep Prioritized as the default, as the
+Solidity form does.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
