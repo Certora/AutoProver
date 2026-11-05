@@ -275,7 +275,7 @@ it is not.
 | **K1** A knowledge bundle, its second instance, and the CVLR recipes — [#298](https://github.com/Certora/AutoProver/pull/298), draft | +831 | +166 | Hold two corpora behind one context mechanism instead of a fork of it, carry the run-invariant CVLR fact the author's prompt would otherwise restate, and index the recipes an author retrieves when stuck. |
 | **P4** The Anchor surface and the worked example | +831 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
 | **P5** The munge editor | ≈ +1,460 | ≈ +470 | Ask an agent to edit the program as text in the unit's own overlay, gated on the unit's feature, and have a second one accept or reject it; the judge sees the edits and the report gives one patch per unit. |
-| **P1b** SDK 3 targets, a follow-up to master — [#299](https://github.com/Certora/AutoProver/pull/299), draft | +733 | +909, and 91 of fixtures | Point preflight at a workspace on the split `solana-*` 3.x crates, or on `solana-program` 1.18, and it picks that platform generation, scaffolds the `cvlr-solana` release for it, checks the harness for the SBF target, and builds with platform-tools v1.53 under one host toolchain. See [What the merge and later work carry](#what-the-merge-and-later-work-carry). |
+| **P1b** SDK 3 targets, a follow-up to master — [#299](https://github.com/Certora/AutoProver/pull/299), draft | +722 | +902, and 91 of fixtures | Point preflight at a workspace on the split `solana-*` 3.x crates, or on `solana-program` 1.18, and it picks that platform generation, scaffolds the `cvlr-solana` release for it, checks the harness for the SBF target, and builds with platform-tools v1.53 under one host toolchain. See [What the merge and later work carry](#what-the-merge-and-later-work-carry). |
 | **C7b** The CVLR API corpus | +1,580 | +700, and 19,751 of fixtures | Generate the CVLR API reference from the pinned crates' rustdoc, ingest it as `cvlr_api_kb`, and search it with three tools that say they outrank the manual. |
 | **P6** The authoring loop | ≈ +2,150 | ≈ +2,250 | Give the author a program and get CVLR rules, judged, with a research sub-agent over both CVLR corpora behind the author and the judge. |
 | **P7** The backend, the pipeline and the CLI | +1,300 | +1,600 | `console-solana` / `tui-solana` on a real target. |
@@ -364,10 +364,10 @@ collides with its own graph, and that test is still to write.
 
 #### Later work on merged files: the toolchains, and the Prover's signed math
 
-**Superseded by P1b ([#299](https://github.com/Certora/AutoProver/pull/299)).** The table below is the plan before P1b existed. All three rows now
-ride P1b, the signed-math row included, with the pin; see
-[What the merge and later work carry](#what-the-merge-and-later-work-carry) and
-[Deferred: sound signed math](#deferred-sound-signed-math).
+**The toolchain rows are superseded by P1b ([#299](https://github.com/Certora/AutoProver/pull/299)).**
+The table below is the plan before P1b existed. Its first two rows ride P1b rather than a
+*Toolchains* PR; see [What the merge and later work carry](#what-the-merge-and-later-work-carry).
+The signed-math row is still held; see [Deferred: sound signed math](#deferred-sound-signed-math).
 
 Three commits from 2026-10-12 and 2026-10-13 change `conf.py` and other files that P1, P2 and S1
 own. They came from pointing the backend at SDK 3 targets and running it in the Solana image.
@@ -943,11 +943,11 @@ it is a follow-up rather than a slice of its own capability. It has to land only
 first reader, C7b: `cvlr_api_docs.py` builds a corpus per platform generation
 (`generations`, `GitCommit`), and `test_cvlr_research.py` reads both. P6
 (`test_cvlr_loop_bound.py` reads `PLATFORM_TOOLS_ROOT`) and P7 (`entry.py`, `pipeline.py`) read it
-too. P3b3, K1, P4 and P5 read none of it, and pass on master without it. It carries one pin its
-description must name: `prover_version: master` until the Prover releases the sound-math fixes
-([cvlr-todo.md](./cvlr-todo.md) U25).
+too. P3b3, K1, P4 and P5 read none of it, and pass on master without it. It changes no Prover
+setting in `BASE_CONF`; those are held for a later PR (see
+[Deferred: sound signed math](#deferred-sound-signed-math)).
 
-**Cut 2026-11-05 as [#299](https://github.com/Certora/AutoProver/pull/299)**, `eric/cvlr-sdk3`, a draft: +733 code, +909 tests and 91 of fixtures,
+**Cut 2026-11-05 as [#299](https://github.com/Certora/AutoProver/pull/299)**, `eric/cvlr-sdk3`, a draft: +722 code, +902 tests and 91 of fixtures,
 planned at under +904 and +1,031 and 48. What the cut changed:
 
 * **Taken beyond the table below,** each because a P1b file or test needs it:
@@ -966,10 +966,11 @@ planned at under +904 and +1,031 and 48. What the cut changed:
 * **Left on the branch:** `ProgramModel`, `models` / `companions` and `withholding` (**P7**), so
   master keeps `specializations`; every later slice's `conf.py` hunk (`caveats`, `OptimisticLoop`,
   the submission purpose, `delivered_conf`); the "master now" items (the `.cvlr_work` ignore,
-  `roots()`, `manifest_dir=`); `SBF_SUBCOMMAND_VERSION` (**R3**); and
-  `-solanaHeapSize 262144` (`36a6fa27`), which no slice owns yet.
-* **The pin's guard test is dropped.** It reads `cvlr-todo.md`, which is not on master. `BASE_CONF`
-  carries a `TODO` instead, and the PR names the pin as a ship blocker.
+  `roots()`, `manifest_dir=`); and `SBF_SUBCOMMAND_VERSION` (**R3**).
+* **No `BASE_CONF` change.** The cut first took `-solanaTACSoundSignedMath` and the
+  `prover_version: master` pin; `ccbe963c` took them back out, with their plumbing test. They and
+  `-solanaHeapSize 262144` wait for a later PR (see
+  [Deferred: sound signed math](#deferred-sound-signed-math)).
 * `test_cvlr_env_paths.py`'s counts are master's env files plus the allocator change; the held
   starting directives' counts stay on the branch.
 
@@ -977,7 +978,8 @@ planned at under +904 and +1,031 and 48. What the cut changed:
 |---|---|---|
 | Platform generations picked per target (`a1a3bfba`, `f17fc6f1`, `5332f039`, `8d99f006`): SDK 3 and 2.x, and in the cut 1.18 as well | `reference.py`, `scaffold.py`, `preflight.py`, `crates.py`, `env_paths.py`, their tests, `tests/data/stake_sdk3_sbf_symbols.txt` | **P1b**. The `entry.py` and `pipeline.py` hunks ride P7, and the per-generation API corpus (`bf0406ac`, `ae33e379`) rides C7b |
 | Platform-tools v1.53, one host toolchain, and the tools found at `$CERTORA_PLATFORM_TOOLS_ROOT` (`f5179ae0`, `2f2c8ecc`, `6e6c80c6`, `fd0f653d`) | `conf.py`, `composer/cargo/{metadata,sbf,sbf_build_script,session}.py`, `composer/sandbox/{config,recipes}.py`, `tests/test_sandbox_config.py`, `tests/test_cvlr_end_to_end.py` | **P1b**. The `Dockerfile.solana` hunks ride R3 |
-| Top-bit `u64` constants modelled soundly, on Prover master (`91f4261d`) | `conf.py`, `tests/test_cvlr_plumbing.py` *(hunk)* | **P1b** |
+| Top-bit `u64` constants modelled soundly, on Prover master (`91f4261d`) | `conf.py`, `tests/test_cvlr_plumbing.py` *(hunk)* | **Held** for a later `BASE_CONF` PR (see *Deferred: sound signed math*) |
+| The TAC heap bound raised to 256 KB (`36a6fa27`) | `conf.py` *(`BASE_CONF`)*, `tests/test_cvlr_plumbing.py` *(hunk)* | **Held**, with the signed math |
 | Preflight's cargo graph fetched into a home the run can write (`54dcfb49`) | `metadata.py`, `preflight.py`, their tests | **P1b**; the `entry.py` and `pipeline.py` hunks ride P7 |
 | SDK 3 prompt and recipe text (`8477d18d`), rejection rules taught as their contrapositive (`57e33e67`) | the editor's, author's, judge's and vacuity prompts | **P5**, **P6** and **P3b**, by prompt |
 | Recipe K3, sysvars read directly (`d129bacf`) | `composer/kb/resources/recipes/cvlr-k3-sysvars-read-directly.md`, `cvlr_recipes_index.yaml`, `tests/test_cvlr_knowledge.py` *(hunk)* | **K1** ([#298](https://github.com/Certora/AutoProver/pull/298)), whose test is in `test_cvlr_bundle.py` instead; P6 drops the `test_cvlr_knowledge.py` hunk |
@@ -1154,13 +1156,10 @@ that assumes the sentinel is vacuous, and a program branch on it is never taken
 `-solanaTACMathInt` are on its master branch and not all released. So the branch's `BASE_CONF`
 turns the flag on *and* pins `prover_version: master` (`91f4261d`).
 
-**Superseded: P1b ([#299](https://github.com/Certora/AutoProver/pull/299)) carries the flag and the pin to master.** The reasoning below is what
-the plan said before P1b; it is kept because the trade it describes is the one #299's review has to
-make. #299 drops the guard test and names the pin as a ship blocker in a `TODO` on `BASE_CONF` and
-in its description. The last paragraph still holds.
-
-The plan was to hold both on the branch until the Prover releases those fixes, and then send the
-flag and its plumbing test to master as a one-line follow-up, with no pin.
+**Both are held on the branch until the Prover releases those fixes.** Then the flag and its
+plumbing test go to master as a one-line follow-up, with no pin. P1b
+([#299](https://github.com/Certora/AutoProver/pull/299)) leaves `BASE_CONF` alone, so the follow-up
+also carries the branch's other `BASE_CONF` change, `-solanaHeapSize 262144` (`36a6fa27`).
 
 * **Not the pin to master.** It would run master's Solana end-to-end gate against an unreleased
   Prover. And the guard that keeps the pin visible cannot go with it.
@@ -1510,7 +1509,7 @@ already local to the functions that need them.
 | P1 follow-up, to master now | `composer/spec/cvlr/preflight.py` *(hunk: `check(manifest_dir=…)`)* `composer/spec/cvlr/crates.py` *(hunk: drop `roots()`)* — plus the regression test, still to write |
 | P2 *(merged)* | `composer/cargo/sbf.py` `composer/spec/cvlr/prover.py` `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
 | Toolchains, to master now | `composer/spec/cvlr/conf.py` *(hunks: `PLATFORM_TOOLS_VERSION`, `HOST_RUST_TOOLCHAIN`)* `composer/cargo/{metadata,sbf,sbf_build_script,session}.py` *(hunks: the host toolchain)* `composer/sandbox/{config,recipes}.py` *(hunks: the host toolchain)* `composer/spec/cvlr/preflight.py` *(hunk: the host toolchain)* `tests/data/vault_sbf_symbols.txt` `tests/test_cvlr_env_paths.py` *(hunk: the v1.53 coverage counts, not the directive counts)* `tests/test_cvlr_plumbing.py` `tests/test_cvlr_scaffold.py` `tests/test_sandbox_config.py` *(hunks: the host toolchain)* |
-| Sound signed math *(superseded: rides P1b, #299)* | `composer/spec/cvlr/conf.py` *(hunk: `-solanaTACSoundSignedMath`; not `prover_version`)* `tests/test_cvlr_plumbing.py` *(hunk: `test_the_base_models_top_bit_constants_soundly`)* |
+| Sound signed math *(held, with the heap bound)* | `composer/spec/cvlr/conf.py` *(hunks: `-solanaTACSoundSignedMath`, `-solanaHeapSize`; not `prover_version`)* `tests/test_cvlr_plumbing.py` *(hunk: `test_the_base_models_top_bit_constants_soundly`)* |
 | Tuning directives *(held)* | `composer/spec/cvlr/envs/` *(hunks)* `tests/test_cvlr_env_paths.py` *(hunk: the directive counts)* `tests/test_cvlr_dropped_writes.py` `tests/data/dropped_writes_probe.rs` |
 | P3a1 *(merged)* | `composer/spec/cvlr/tree.py` `composer/spec/cvlr/preflight.py` *(hunk: `source`)* `composer/layout.py` `composer/pipeline/ecosystem.py` *(hunks: `RUST_BUILD_DIRS`)* `graphcore` `pyproject.toml` *(hunk: the pin)* `tests/test_cvlr_tree.py` *(split: the cases with no harness)* `tests/test_fs_forbidden_read.py` *(hunk)* |
 | P3a1 follow-up, to master now | `composer/spec/cvlr/tree.py` *(hunks: drop `.cvlr_work`, the `materialize` docstring, the dangling symlink)* `tests/test_cvlr_tree.py` *(hunk: the dangling symlink)* |
