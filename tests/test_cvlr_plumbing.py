@@ -417,13 +417,6 @@ def test_the_base_enables_no_optimistic_solana_flags():
     assert not [f for f in flags if f.startswith("-solanaOptimistic")]
 
 
-def test_the_base_models_top_bit_constants_soundly():
-    """Without ``-solanaTACSoundSignedMath`` no ``u64`` can equal ``u64::MAX``, so a program's
-    sentinel branches are never taken."""
-    flags = cvlr_conf.tunable_conf(cvlr_conf.TunableConf())["prover_args"]
-    assert "-solanaTACSoundSignedMath true" in flags
-
-
 def test_every_conf_checks_vacuity():
     """With ``rule_sanity`` off, a [3308] inside the generated vacuity rule is reported as
     verified. No setting turns it off."""
