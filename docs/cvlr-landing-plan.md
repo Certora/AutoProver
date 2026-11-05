@@ -49,11 +49,12 @@ munge vocabulary left to land; see [P3a](#p3a--the-working-copy-and-what-may-be-
 brought into step: `eric/solana-staging` merged `feature/solana` (`068ab6d4`) and then master after
 #268 (`5e2f7470`), and `feature/solana` fast-forwarded to it. Since then the two sync only by merge.
 On 2026-10-30 `eric/solana-staging` merged master after #280 (`42f0507c`), porting the branch's later
-work onto #280's design; see [P3b2b](#p3b2b--what-a-verdict-means). The next PR is **P3b3**, the
-vacuity diagnostic, [#295](https://github.com/Certora/AutoProver/pull/295), a draft on
-`eric/cvlr-vacuity` opened 2026-11-02. Its review changes are not on `eric/solana-staging` yet; see
-[P3b3](#p3b3--why-a-rule-passed-vacuously). **P1b**, SDK 3 targets, a follow-up to master that the
-merge of `eric/solanaProver` made necessary, lands just ahead of C7b, its first reader. P3b2 was split
+work onto #280's design; see [P3b2b](#p3b2b--what-a-verdict-means). **P3b3**, the vacuity diagnostic, is
+open as [#295](https://github.com/Certora/AutoProver/pull/295), a draft on `eric/cvlr-vacuity`
+opened 2026-11-02. Its review changes are not on `eric/solana-staging` yet; see
+[P3b3](#p3b3--why-a-rule-passed-vacuously). Only P6 needs it, so **K1** and **P1b** (SDK 3 targets,
+a follow-up to master that the merge of `eric/solanaProver` made necessary) can be cut alongside it;
+see [Order, and what is forced](#order-and-what-is-forced). P3b2 was split
 in two on 2026-10-23, after its rebase onto master. P3b had grown to about +3,250 code and +1,530 tests, and on
 2026-10-16 it was split into three: P3b1, submitting a generated draft; P3b2, the rest of what a
 verdict depends on; and P3b3, the vacuity diagnostic. See [P3b](#p3b--a-generated-harness-and-what-its-verdict-means).
@@ -911,8 +912,8 @@ split `solana-*` 3.x crates and it picks that platform generation, scaffolds `cv
 for it (0.5.1 for `solana-program` 2.x), and builds with platform-tools v1.53 under one host
 toolchain rather than the target's `rust-toolchain.toml`. Its files are P1's and P2's, all merged,
 and master's tests reach them through `preflight.select`, the scaffold and the end-to-end test, so
-it is a follow-up rather than a slice of its own capability. It lands as late as its first
-reader allows, which is C7b: `cvlr_api_docs.py` builds a corpus per platform generation
+it is a follow-up rather than a slice of its own capability. It has to land only ahead of its
+first reader, C7b: `cvlr_api_docs.py` builds a corpus per platform generation
 (`generations`, `GitCommit`), and `test_cvlr_research.py` reads both. P6
 (`test_cvlr_loop_bound.py` reads `PLATFORM_TOOLS_ROOT`) and P7 (`entry.py`, `pipeline.py`) read it
 too. P3b3, K1, P4 and P5 read none of it, and pass on master without it. It carries one pin its
@@ -946,16 +947,35 @@ changes the schema bumps it once, from whatever master has.
 
 ### Order, and what is forced
 
-**~~P1~~ → ~~P2~~ → ~~P3a1~~ → ~~P3b1~~ → ~~P3b2a~~ → ~~P3b2b~~ → P3b3 → K1 → P4 → P5 → P1b → C7b → P6 → P7**
+Merged: ~~P1~~ → ~~P2~~ → ~~P3a1~~ → ~~P3b1~~ → ~~P3b2a~~ → ~~P3b2b~~. What remains is not a chain
+but three tracks that meet at P6:
 
-P3b3 has slack too: it needed only P3b2b, which has merged, and only P6 needs it, so it can land
-anywhere before P6.
+```
+P3b3 ──────────────────┐
+K1 ───┬── P4 ──────────┤
+      └── P5 ──────────┼── P6 ── P7
+P1b ───── C7b ─────────┘
+```
 
-K1, P4 and C7b are the three with slack. K1 needs nothing in `composer/spec/cvlr/` at all. P4
-carries `rust_source` itself and needs K1, whose bundle its worked-example test renders. C7b has to
-be ahead of P6, which reads it, and behind P1b, whose platform generations it builds a corpus for.
-P1b is placed as late as that allows: no slice before C7b reads it, so C7b moved behind P5 to make
-room. Everything else is the DAG.
+Each edge is a reader, not a preference:
+
+* **P3b3 → P6.** `author.py` imports `vacuity`. P3b3 itself needed only P3b2b, which has merged.
+* **K1 → P4.** P4's worked-example test renders K1's bundle. P4 carries `rust_source` itself.
+* **K1 → P5.** P5's reviewer is the first production reader of `with_cvlr_facts`.
+* **P1b → C7b.** C7b builds one corpus per platform generation, from `reference.generations` and
+  `reference.GitCommit`, which P1b lands.
+* **P4, P5, C7b → P6.** `author.py` imports P4's `anchor_surface` and `example` and P5's
+  `editor`, and `cvlr_research` binds C7b's three API tools. P6 also reads P1b
+  (`test_cvlr_loop_bound.py`, `PLATFORM_TOOLS_ROOT`).
+* **P6 → P7.** P7 composes all of it.
+
+K1 and P1b need nothing that has not merged, so either can be cut while #295 is in review. P4 and
+P5 can each start once K1 merges, and C7b once P1b does; P4 and P5 do not touch each other. Nothing
+waits on P3b3 but P6. What does constrain the order is review bandwidth, not the graph.
+
+The tracks share one file. P1b's hunks in `conf.py` (SDK 3, the Prover pin) and P3b3's
+`CollectUnsatCore` case in `solana_conf` are independent, but whichever lands second merges past
+the other.
 
 Checked rather than assumed: the only modules outside `composer/spec/cvlr/` that import from it are
 the two Solana CLI entry points, the tape driver and the env refresher — all of them CVLR-specific
