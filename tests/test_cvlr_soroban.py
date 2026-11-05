@@ -334,7 +334,8 @@ def test_soroban_conf_owns_the_run_keys():
     conf = soroban_conf(TunableConf(), RunOverlay(build_script=Path("/subs/unit_a.py")))
     assert conf["build_script"] == "/subs/unit_a.py"
     assert conf["precise_bitwise_ops"] is True
-    assert conf["rule_sanity"] == "basic"
+    # The wasm prover registers its vacuity check at ``advanced``; ``basic`` would run none.
+    assert conf["rule_sanity"] == "advanced"
     assert conf["loop_iter"] == "2"
 
 
@@ -360,9 +361,11 @@ def test_the_soroban_base_carries_no_solana_keys_or_flags():
     conf = soroban_tunable_conf(TunableConf())
     assert not any(k.startswith("solana") or k.startswith("cargo_tools") for k in conf)
     assert "prover_args" not in conf
-    # The shared settings are the same on both chains.
+    # The timeout is the same on both chains. ``rule_sanity`` is not: on wasm the vacuity check
+    # runs only at ``advanced``.
     assert SOROBAN_BASE_CONF["smt_timeout"] == BASE_CONF["smt_timeout"]
-    assert SOROBAN_BASE_CONF["rule_sanity"] == BASE_CONF["rule_sanity"]
+    assert BASE_CONF["rule_sanity"] == "basic"
+    assert SOROBAN_BASE_CONF["rule_sanity"] == "advanced"
 
 
 # ---------------------------------------------------------------------------------------------

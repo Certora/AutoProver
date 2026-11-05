@@ -268,12 +268,24 @@ def delivered_conf(
 # no tuning files at all, which is why the Soroban scaffold plans no ``envs/`` tree and a Soroban
 # unit binds no ``summarize_for_prover``.
 
-#: :data:`BASE_CONF`'s Soroban peer: the same timeout and vacuity check, and none of the
-#: ``-solana*`` prover flags. ``precise_bitwise_ops`` because every surveyed Soroban engagement conf
-#: sets it.
+#: :data:`BASE_CONF`'s Soroban peer: the same timeout, and none of the ``-solana*`` prover flags.
+#: ``precise_bitwise_ops`` because every surveyed Soroban engagement conf sets it.
+#:
+#: ``rule_sanity`` is ``advanced``, not ``basic``. The wasm prover registers its only sanity check,
+#: the ``rule_not_vacuous_tac`` vacuity check, at ``advanced``, so under ``basic`` a Soroban rule
+#: gets no vacuity check at all. ``advanced`` adds nothing else on wasm.
+#:
+#: The check has a blind spot. It runs on the rule's TAC after optimization, so when the optimizer
+#: resolves the contradiction itself (``v > 0`` then ``v < 0`` on one variable), the assert is
+#: already gone and the check reports the rule not vacuous. It catches contradictions only the
+#: solver sees, such as a cycle of comparisons or a storage read that disagrees with the write.
+#: A ``cvlr_satisfy!`` reachability rule is still the only check that covers both.
+#:
+#: TODO: back to ``basic`` once cvlr-soroban's ``#[rule]`` emits ``cvlr_vacuity_check!()`` and the
+#: wasm prover checks that marker before optimization, as the Solana prover does.
 SOROBAN_BASE_CONF: Conf = {
     "smt_timeout": "6000",
-    "rule_sanity": "basic",
+    "rule_sanity": "advanced",
     "precise_bitwise_ops": True,
 }
 
