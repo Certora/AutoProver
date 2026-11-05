@@ -91,8 +91,9 @@ class PropertyRanking(BaseModel):
         "one group."
     )
     justification: str = Field(
-        description="Two to four sentences on which claim came out on top and why it is the one "
-        "worth proving."
+        description="Two to four sentences on which claim the run will pursue and why it is the "
+        "one worth proving. That is the group holding the property with the highest priority "
+        "(score, plus the critical-match bonus), which is not always the highest raw score."
     )
 
 
@@ -235,7 +236,9 @@ async def rank_properties(
     A ranking that will not validate raises rather than falling back to the whole
     candidate set: a silent widening would spend exactly the budget the caller asked to
     save, and failing here is cheap — nothing has been formalized yet."""
-    system = load_jinja_template("property_prioritization_system.j2")
+    system = load_jinja_template(
+        "property_prioritization_system.j2", critical_match_bonus=CRITICAL_MATCH_BONUS
+    )
     user = load_jinja_template(
         "property_prioritization_prompt.j2",
         contract_name=contract_name,

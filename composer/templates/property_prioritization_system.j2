@@ -38,7 +38,8 @@ does not.
 candidate in exactly one group and name what that group, taken together, establishes. A group of
 one is fine when a property stands alone.
 
-The run pursues the group containing the highest-scoring property, and it pursues all of it, so a
+The run pursues the group containing the property with the highest priority — its score, plus
+{{ critical_match_bonus }} if `critical_match` is set (see below) — and it pursues all of it, so a
 group must hold everything its claim rests on. A property that has to hold for the claim to mean
 anything belongs in the group even when its own score is low; leaving it out does not make the run
 cheaper, it makes the claim unproven. Equally, a property the claim does not need belongs in its
@@ -122,8 +123,9 @@ component with the most properties.
 
 Set it when a property answers a concern raised explicitly in the design document, threat model, or
 supplied notes — something the reader of those documents asked to be checked, rather than something
-inferred unaided. It carries a fixed bonus on top of the score, so mark it honestly: flagging
-everything makes it meaningless.
+inferred unaided. It adds {{ critical_match_bonus }} to the property's priority, so a flagged
+property can outrank an unflagged one that scored higher. Mark it honestly: flagging everything
+makes it meaningless.
 
 # Hard constraints — violating these means your output is rejected
 
