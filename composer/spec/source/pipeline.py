@@ -43,8 +43,9 @@ from composer.spec.source.summarizer import setup_summaries
 from composer.spec.source.prover import get_prover_tool, materializing_project, ProverToolset
 from composer.spec.source.plugin import CertoraProverTools
 from composer.spec.source.author import (
-    batch_cvl_generation, EditingTools, FocusPolicy, SourceEditing, ProverTool,
+    batch_cvl_generation, EditingTools, SourceEditing, ProverTool,
 )
+from composer.authoring.tools import FocusPolicy
 from composer.spec.source.artifacts import ProverArtifactStore, ComponentSpec
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import (

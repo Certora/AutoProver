@@ -735,6 +735,12 @@ author's side of it:
   needs the picker with Prioritized and Comprehensive, and a default chosen deliberately. Its size
   estimator is calibrated on Solidity runs.
 
+**The AutoProver side is done:** the flag (`add_run_mode_arg`, shared with the CVL entry point), the
+mode in `job_info.json`, `FocusPolicy` in `composer/authoring/tools.py`, the gate counting
+`verify_rules` (`GiveUpFloor`), and the `focused` prompt branch. The staged formalizer needed no
+change; it declares whatever units it is handed. Open: the pin, the API, the dashboard, and a first
+prioritized run.
+
 Order: AutoProver first, then the AIAutoProver pin, then the API, then the dashboard. A first
 prioritized run on a benchmark unit says whether the ranking prompt needs Solana wording. Tests: the
 entry point resolves the mode, the formalizer binds the focus exits under prioritized and not under

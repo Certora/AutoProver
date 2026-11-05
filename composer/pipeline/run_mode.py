@@ -13,6 +13,7 @@ either side of the wrapper — the same route ``AUTOPROVER_GLOBAL_PROVER_TIMEOUT
 takes into ``composer.prover.core``.
 """
 
+import argparse
 import enum
 import os
 from typing import Literal
@@ -29,6 +30,18 @@ class RunMode(enum.StrEnum):
 
 
 RUN_MODE_ENV = "AUTOPROVER_RUN_MODE"
+
+
+def add_run_mode_arg(parser: argparse.ArgumentParser) -> None:
+    """``--run-mode``, for an entry point whose backend's author honours a focus. Resolve the
+    parsed value with :func:`resolve_run_mode`."""
+    parser.add_argument(
+        "--run-mode", choices=[m.value for m in RunMode], default=None,
+        help="How much of the inferred property set to pursue. 'comprehensive' (the default) "
+             "formalizes every property of every component. 'prioritized' ranks them all, then "
+             "spends the run on the highest-contribution property and the properties it rests "
+             f"on. Also settable as {RUN_MODE_ENV}; this flag wins.",
+    )
 
 
 def resolve_run_mode(cli: str | None) -> RunMode:
