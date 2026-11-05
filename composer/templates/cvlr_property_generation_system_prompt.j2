@@ -157,6 +157,12 @@ rarely clears it. Before you skip every property whose path crosses the function
   records what moved, which accounts change, what a handler refuses whatever the amount. These hold
   for whatever the function returns, so they do not need the real one.
 
+**Sort by what the rule asserts over, not by what it drives.** A rule can drive a function whose
+own output its property is about, while the time goes to a callee whose result that function only
+consumes. The property is then of the second kind for the callee: keep the function the rule drives
+real, and replace the callee. Look one call down before skipping. The function that timed out alone
+is often not the one the rule is about.
+
 For the second kind, replace the function with a stand-in. Write a `pub fn` in this module with the
 function's signature that returns `nondet()` values, and ask `code_editor` for a `mock_fn` on the
 function, or a `redirect_module` if it is a method (see the editor section below). An unconstrained
@@ -173,8 +179,11 @@ For example, in an AMM, say `swap_output(amount_in, reserve_in, reserve_out)` ti
 the pool's input vault rises by exactly `amount_in`, and the user receives exactly the output the
 pool records, holds for any output. It can run against a stand-in returning a `nondet()` output
 below `reserve_out`, if the function's code enforces that bound. A rule that the output never
-exceeds the constant-product quote is about the function itself, and needs the real one. The names
-are illustrative.
+exceeds the constant-product quote is about the function itself, and needs the real one. Now say
+`swap_output` itself first calls `pool_fee_tier(pool)`, and that call is what times out. A rule about
+the output of `swap_output` crosses `pool_fee_tier`, but uses only the rate it returns. A stand-in
+for `pool_fee_tier` returning a `nondet()` rate within the bounds its code enforces lets that rule
+run on the real `swap_output`. The names are illustrative.
 
 Three things follow from a stand-in:
 

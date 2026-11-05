@@ -635,6 +635,13 @@ from the function's own code or proved by a rule over it; the stand-in applies t
 a counterexample may use a value the real function never returns; and the rules that cross it say
 so. The judge checks each constraint's source. The example is an AMM, not a lending program.
 
+*Not used on its first run (2026-11-04).* On the liquidation rerun the author skipped the
+flow-of-funds properties because `calculate_liquidation` calls the eligibility function first, and
+that function timed out. Those properties are about `calculate_liquidation`'s own output, and use only
+the eligibility result, so a stand-in for the callee was the move. The section sorted properties by
+the function a rule drives, so the author never looked one call down. It now says to sort by what the
+rule asserts over, and its example adds a timed-out callee.
+
 **U44. A TIMEOUT does not say what the Prover was stuck on.** The Prover writes per-rule statistics
 (`rule_live_statistics_*.json`, linked from each rule's `LiveCheckInfo` in the tree view): the
 phase the rule reached, its path count, and the functions that dominate its branching and its
@@ -742,6 +749,18 @@ needs its own implementation. It has to find a project's existing CVLR rules and
 select them, run them through the CVLR verify path, and judge per property which rules cover it.
 The API and dashboard would need the same per-kind lifting as U46, and the dashboard's flat
 evaluate price. Left until after U46.
+
+**~~U48. A generic impl's account validation stayed external.~~** — **fixed (2026-11-04, not yet
+exercised by a run).** The Anchor inlining layer inlines `<.. as anchor_lang::Accounts<..>>::try_accounts`
+with a directive anchored at `$`. The Prover numbers a name that several symbols share, `_0`, `_1`
+and so on, and the bare name is then not a symbol (`as_the_prover_names` in `composer/cargo/symbols.py`).
+`AccountLoader<T>`'s validation is generic and was monomorphized three times in the lending benchmark,
+so it came back external as `try_accounts_0` to `_2`. Under the blanket `inline(never)` on
+`anchor_lang`, validation returned an arbitrary `Result`, so every handler-level rule over a zero-copy
+account was vacuous, and no `has_one`, signer or owner constraint in the unit was verified. The
+directive now allows the suffix, as the layer's other generic directives already did. No symbol
+fixture held a numbered `try_accounts`, so nothing caught it. A test now checks the numbered
+spellings.
 
 ## Leads from the certora-cvlr-kb ledger
 

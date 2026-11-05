@@ -350,6 +350,40 @@ the published report names its abstractions for: `calculate_liquidation` replace
 returns arbitrary values, and a narrower `Fraction`. The next step is to tell the author when and
 how to replace a whole subcomputation with a bounded stand-in, before the other answer-key units run.
 
+## Run 3, liquidations again (2026-11-04): the stand-in guidance went unused
+
+The same unit, input and budget as the pilot, run after the stand-in guidance (U43) landed. It
+delivered again, and cost more.
+
+| | Pilot (2026-11-02) | Rerun (2026-11-04) |
+|---|---|---|
+| Wall clock | 3h 52m | 5h 05m |
+| Spend (log estimate) | about $27 | about $47 |
+| Prover jobs | 8, 2h 44m | 15, 3h 11m |
+| Rules | 36: 35 verified, 1 marked | 34, all verified |
+| Properties skipped | 11 | 9 |
+
+- **One more property proved.** The post-maturity ramp failed translation in the pilot. The author
+  had the editor redirect the fixed-point helper it goes through to native integers in place of
+  256-bit ones. By the author's account, the result is identical wherever the original returns.
+- **Coverage is stated precisely.** For each property, the commentary separates what is proved, what
+  was read from source and not proved, and what is assumed.
+- **P-07 is still skipped.** The eligibility rules time out. The pilot's Prover statistics show why:
+  the function inlines 25 copies of the 256-bit division, and four of its rules never left static
+  analysis. The author guessed formatted logging instead, and spent an editor round trip on it (U38,
+  U44). A stand-in cannot help here, because the decision is made from those divisions (U45).
+- **P-08 and P-10 are still mostly skipped**, and this is where the guidance should have applied.
+  The seized-versus-repaid bound is about `calculate_liquidation`'s own output, but the time goes to
+  the eligibility function it calls first, whose result it only consumes. A stand-in for that callee
+  was the move. The author read the callee's timeout as a reason to skip. The guidance now covers
+  that case.
+- **Handler-level rules were vacuous.** The Prover left the account validation of Anchor's
+  `AccountLoader` external, so no `has_one`, signer or owner constraint in the unit is verified. The
+  cause was ours: the inlining directive for `try_accounts` did not allow the numeric suffix the
+  Prover gives a generic impl monomorphized more than once (U48). It is fixed.
+
+The next liquidation run should wait for U44, and will be the first to exercise U48. P-07 waits on U45.
+
 ## Grading it
 
 Decided before the run, so the result stays falsifiable:
