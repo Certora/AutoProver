@@ -61,8 +61,10 @@
 ;;; `init` constraint is checked. `init` reaches the system-program helpers below, which left
 ;;; external never return Ok, the same trap as `transfer`. Anchor generates the `init` block as an
 ;;; `#[inline(never)]` closure inside `try_accounts`, and that closure binds the new account.
+;;; A generic impl monomorphized more than once, such as `AccountLoader<T>`'s, is numbered `_0`,
+;;; `_1`, ... by the Prover, and the bare name is then not among the symbols.
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-#[inline] ^<.+ as anchor_lang::Accounts<.+>>::try_accounts(::\{\{closure\}\})?$
+#[inline] ^<.+ as anchor_lang::Accounts<.+>>::try_accounts(::\{\{closure\}\})?(_[0-9][0-9]*)*$
 #[inline] ^anchor_lang::system_program::create_account$
 #[inline] ^anchor_lang::system_program::allocate$
 #[inline] ^anchor_lang::system_program::assign$
