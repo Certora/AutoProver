@@ -176,6 +176,9 @@ class CommonTools:
     get_cvl_recipe = ToolDisplay(
         lambda p: f"Retrieving CVL recipe: {p.get('id', '?')}", "CVL recipe",
     )
+    get_cvlr_recipe = ToolDisplay(
+        lambda p: f"Retrieving CVLR recipe: {p.get('id', '?')}", "CVLR recipe",
+    )
 
     # -- Grouped display bundles ---------------------------------------------
     # Each corresponds to a capability provider (builder / service).
@@ -206,6 +209,7 @@ class CommonTools:
         """Display entries for tools from ``kb_tools()``."""
         return {
             "get_cvl_recipe": CommonTools.get_cvl_recipe,
+            "get_cvlr_recipe": CommonTools.get_cvlr_recipe,
         }
 
     @staticmethod
