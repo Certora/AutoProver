@@ -14,6 +14,7 @@ from pathlib import Path
 
 import tomlkit
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from tomlkit.container import OutOfOrderTableProxy
 from tomlkit.exceptions import TOMLKitError
 from tomlkit.items import InlineTable, Item, Table
 
@@ -107,6 +108,11 @@ def read_manifest(path: Path) -> Manifest:
 #: A table's name, one key per level: ``("package", "metadata", "certora")``.
 type TablePath = tuple[str, ...]
 
+#: What a table path can lead to. A table whose sub-tables are declared apart from it, as
+#: ``[package]`` is when ``[package.metadata.solana]`` follows ``[lints]``, reads back as an
+#: ``OutOfOrderTableProxy``; edits made through it land in the fragment that holds the key.
+_Table = Table | InlineTable | OutOfOrderTableProxy
+
 #: A value :class:`ManifestEditor` writes. A mapping is written as an inline table.
 type TomlValue = str | bool | Sequence[str] | Mapping[str, str | bool]
 
@@ -197,12 +203,12 @@ class ManifestEditor:
     def _add_table(self, table: TablePath, body: Sequence[TableItem], *, note: str) -> None:
         if self._find(table) is not None:
             raise ManifestConflict(f"[{'.'.join(table)}] already exists")
-        parent: tomlkit.TOMLDocument | Table = self._document
+        parent: tomlkit.TOMLDocument | Table | OutOfOrderTableProxy = self._document
         for name in table[:-1]:
             if name not in parent:
-                parent.add(name, tomlkit.table(is_super_table=True))
+                parent[name] = tomlkit.table(is_super_table=True)
             found = parent[name]
-            if not isinstance(found, Table):
+            if not isinstance(found, Table | OutOfOrderTableProxy):
                 raise ManifestConflict(f"{name} in [{'.'.join(table)}] is not a table")
             parent = found
         created = tomlkit.table()
@@ -214,22 +220,20 @@ class ManifestEditor:
                 case (key, value):
                     created.add(key, _item(value))
         created.add(tomlkit.nl())
-        parent.add(table[-1], created)
+        parent[table[-1]] = created
 
-    def _find(self, table: TablePath) -> Table | InlineTable | None:
+    def _find(self, table: TablePath) -> _Table | None:
         container: object = self._document
         for name in table:
-            if not isinstance(container, tomlkit.TOMLDocument | Table | InlineTable):
+            if not isinstance(container, tomlkit.TOMLDocument | _Table):
                 return None
             if name not in container:
                 return None
             container = container[name]
-        return container if isinstance(container, Table | InlineTable) else None
+        return container if isinstance(container, _Table) else None
 
 
-def _insert(
-    container: Table | InlineTable, table: TablePath, key: str, value: TomlValue, *, note: str
-) -> None:
+def _insert(container: _Table, table: TablePath, key: str, value: TomlValue, *, note: str) -> None:
     if key in container:
         raise ManifestConflict(f"[{'.'.join(table)}] already has {key}")
     container[key] = _item(value)

@@ -29,15 +29,26 @@ from composer.spec.util import string_hash
 #:
 #: ``prover_args`` has none of the ``-solanaOptimistic*`` flags: they are unsound, and they do not
 #: fix the [3308] they were meant to.
+#:
+#: ``-solanaTACSoundSignedMath`` is on because without it a ``u64`` compared against a constant at
+#: or above ``2^63`` (``u64::MAX``) is modelled as a comparison against a negative number, so no
+#: ``u64`` can equal ``u64::MAX``. The fixes that make the flag affordable alongside
+#: ``-solanaTACMathInt`` are on the Prover's master branch and not yet released, hence
+#: ``prover_version``.
+#:
+#: TODO: remove ``prover_version`` once the Prover releases those fixes. The Solana AutoProver must
+#: not ship with it.
 BASE_CONF: Conf = {
     "smt_timeout": "6000",
     "rule_sanity": "basic",
+    "prover_version": "master",
     "prover_args": [
         "-unsatCoresForAllAsserts true",
         "-solanaSkipCallRegInst true",
         "-solanaTACOptimize 2",
         "-solanaStackSize 8192",
         "-solanaTACMathInt true",
+        "-solanaTACSoundSignedMath true",
     ],
 }
 
@@ -108,9 +119,21 @@ def conf_history(tunable: TunableConf) -> tuple[str, ...]:
 
 #: The platform-tools release every build uses. The prover does not apply ``cargo_tools_version``
 #: itself: it reaches ``cargo certora-sbf`` only on the CLI's own build path, and this backend owns
-#: the build. One release serves every target because the reference set pins one platform
-#: generation (:class:`~composer.spec.cvlr.reference.PlatformGeneration`).
-PLATFORM_TOOLS_VERSION = "v1.43"
+#: the build.
+#:
+#: One release serves every Solana platform generation. v1.53 ships rustc and cargo 1.89. The
+#: older v1.43 shipped 1.79, whose cargo cannot parse an edition-2024 manifest, and the SDK 3
+#: crates' lockfiles are full of them. The SDK 2.2 vault builds under v1.53 too.
+PLATFORM_TOOLS_VERSION = "v1.53"
+
+#: The host Rust toolchain every cargo command of a CVLR run uses, whatever the target's
+#: ``rust-toolchain.toml`` pins. The pin is for the project's own builds: host checks and Anza's SBF
+#: toolchain. The program this backend verifies is compiled by the platform tools' rustc whatever the
+#: pin says, and so is its ``cargo check`` (:func:`~composer.cargo.sbf.sbf_check`). The host
+#: toolchain only runs ``cargo metadata`` and the cargo that launches ``cargo certora-sbf``.
+#: Following the pin instead fails wherever the runtime user cannot write the rustup home, as in a
+#: container image: a toolchain the image lacks cannot be installed, and cargo does not start.
+HOST_RUST_TOOLCHAIN = "1.90.0"
 
 
 #: The cargo feature that compiles the verification module into the program. The scaffold writes

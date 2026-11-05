@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from collections.abc import Iterable
 
 from composer.cargo.metadata import Workspace
-from composer.spec.cvlr.reference import ChainReference, NamespacePattern, PathAlias
+from composer.spec.cvlr.reference import ChainReference, PathAlias
 
 _log = logging.getLogger(__name__)
 
@@ -129,15 +129,11 @@ def dialect_for(workspace: Workspace, reference: ChainReference) -> PathDialect:
     Aliases whose crate the target does not resolve are dropped. On an older generation this
     returns a dialect that changes nothing.
     """
-    aliases: list[PathAlias] = []
-    for alias in reference.platform.path_aliases:
-        match alias:
-            case PathAlias(canonical=canonical, actual=actual):
-                usable = tuple(a for a in actual if workspace.resolved(_crate_of(a)))
-                if usable:
-                    aliases.append(PathAlias(canonical, usable))
-            case NamespacePattern(canonical=canonical, actual=actual):
-                aliases.append(PathAlias(canonical, (actual,)))
+    aliases = [
+        PathAlias(alias.canonical, usable)
+        for alias in reference.platform.path_aliases
+        if (usable := tuple(a for a in alias.actual if workspace.resolved(_crate_of(a))))
+    ]
     dialect = PathDialect(tuple(aliases))
     _log.debug(
         "tuning-path dialect for %s: %d of %d aliases usable",
