@@ -372,6 +372,16 @@ class ComponentProperty(PropertyFormulation):
         return (self.component, self.title)
 
 
+class RunScopedProperty(ComponentProperty):
+    """A property a prioritized run checked at only some of the entry points it names.
+
+    The report's verdicts for it are about ``checked_at`` alone. ``excluded`` were left out
+    because the run formalized one component, not because of anything about the code, so the
+    property as extracted is not established by this run."""
+    checked_at: list[str]
+    excluded: list[str]
+
+
 class ChosenShared(BaseModel):
     """The shared property is one of the absorbed properties, exactly as its component extracted
     it."""
@@ -399,7 +409,7 @@ class HoistedClaim(BaseModel):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7"] = "3.7"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8"] = "3.8"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive" or
     #: "prioritized"). Absent on reports written before the mode existed, which are all
@@ -410,6 +420,10 @@ class AutoProverReport(BaseModel):
     #: Protocol-wide claims moved into a shared unit, with what each stands for. Empty for a
     #: backend without a shared unit, and on reports written before schema 3.4.
     hoisted: list[HoistedClaim] = Field(default_factory=list)
+    #: The pursued properties a prioritized run narrowed to its component's own entry points. Empty
+    #: for a comprehensive run, for a backend without a shared unit, and on reports written before
+    #: schema 3.8.
+    run_scoped: list[RunScopedProperty] = Field(default_factory=list)
     #: Plugins active for the run, as the manifest that feeds every per-component cache key.
     #: Without it a finished run leaves no record of which plugins participated, and whether an
     #: installed plugin was even loaded can only be inferred from the container image. Empty for

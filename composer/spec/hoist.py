@@ -124,7 +124,7 @@ def build_candidates(
     ]
 
 
-def _named(text: str, names: set[str]) -> set[str]:
+def named_entry_points(text: str, names: set[str]) -> set[str]:
     """The entry points in ``names`` that ``text`` names, each matched as a whole identifier."""
     return {
         name
@@ -169,7 +169,7 @@ def validate_plan(candidates: Sequence[HoistCandidate], plan: HoistPlan) -> str 
                     )
                 elif key in by_key:
                     home, prop = by_key[key]
-                    if not _named(prop.description, everyone - set(home.entry_points)):
+                    if not named_entry_points(prop.description, everyone - set(home.entry_points)):
                         problems.append(
                             f"The property chosen for {g.claim!r}, {key}, names no entry point "
                             f"outside its own component ({', '.join(home.entry_points)}). Only a "
@@ -188,8 +188,8 @@ def validate_plan(candidates: Sequence[HoistCandidate], plan: HoistPlan) -> str 
                 # also names instructions it excludes ("every handler except `delegate_stake`").
                 # So the property may not name anything no member names, and must keep a named
                 # entry point of every member.
-                named = [_named(m.description, everyone) for m in members]
-                stated = _named(prop.description, everyone)
+                named = [named_entry_points(m.description, everyone) for m in members]
+                stated = named_entry_points(prop.description, everyone)
                 if extra := stated - set().union(*named):
                     problems.append(
                         f"The property synthesized for {g.claim!r} names entry points no member "

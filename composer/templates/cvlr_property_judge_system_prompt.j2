@@ -224,6 +224,12 @@ be stale; the tool is authoritative.
    tedious" and "is universally quantified" are not — `nondet()` is the universal quantifier and the
    prover reasons over every value.
 
+   A property may carry a **Scope** line naming the entry points this run checks it at. The other
+   entry points it names were excluded because of the run's scope, and the report says so, the way a
+   CVL `filtered` block is stated. Judge coverage against the scoped entry points: do not ask for
+   rules or skips for the excluded ones. A draft that leaves out a scoped entry point does not cover
+   the property.
+
 5. **What the loops were allowed to skip.** The loop remedies, and the order the author is meant to
    try them in, are in the section "Loops are bounded, and the bound is not assumed away" of the
    context document *CVLR and the Certora Solana Prover*, at the start of your input. Your job is to

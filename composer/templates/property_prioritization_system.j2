@@ -60,6 +60,11 @@ properties, and a group spanning two of them could not be pursued. Where the sam
 arises in two components, group it in the component that states it best and score the other
 component's copies on their own merits.
 
+Some candidates are marked as naming other components' entry points too. If such a property is
+pursued, the run checks it only at its own component's entry points and reports it as narrowed: it
+establishes the property for those entry points, not for the ones the mark lists. Score the property
+on what that narrowed check would establish, not on the full statement.
+
 # Scoring
 
     Score 100
