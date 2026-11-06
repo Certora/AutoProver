@@ -797,6 +797,17 @@ default view, so that the two apps look and behave alike. The panel is also wher
 settings would go. Moving the run mode behind it should keep Prioritized as the default, as the
 Solidity form does.
 
+**U50. The dashboard does not show a narrowed property's scope.** A prioritized CVLR run checks a
+property that names other components' entry points only at its own component's
+(`prioritize.scope_to_unit`, `ScopedPropertyFormulation`). The report records each narrowing in
+`run_scoped` (schema 3.8): the component, the title, `checked_at` and `excluded`. zeus-saas does
+not read that field, so a narrowed property's verdicts look like any other property's, and a
+balance floor verified at `withdraw` alone reads as the floor holding across the program. The
+report view should mark each narrowed property, list the entry points it was checked at and the
+ones it was not, and say that the exclusion is the run's scope rather than a finding about the
+code. The run overview could say how many pursued properties were narrowed. This should ship with,
+or before, the first prioritized Solana runs that users see.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
