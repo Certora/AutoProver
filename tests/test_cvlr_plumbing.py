@@ -159,22 +159,44 @@ def test_an_older_cargo_that_reports_only_kind_still_names_the_lib_target():
     assert lend.lib.builds_shared_object
 
 
+def _registry_package(name: str) -> dict:
+    return {
+        "id": f"registry+https://github.com/rust-lang/crates.io-index#{name}@0.1.0",
+        "name": name,
+        "version": "0.1.0",
+        "manifest_path": f"/home/u/.cargo/registry/src/idx/{name}-0.1.0/Cargo.toml",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "features": {},
+        "targets": [{"name": name, "kind": ["lib"], "crate_types": ["lib"], "src_path": f"/reg/{name}/src/lib.rs"}],
+    }
+
+
 def test_the_linked_graph_follows_normal_dependencies_only():
     """A dev or build dependency is never linked into the library, and neither is what another
-    member depends on."""
+    member depends on. A normal dependency of a normal dependency is."""
     lend, root, cvlr, log = (p["id"] for p in _METADATA["packages"])
     payload = json.loads(json.dumps(_METADATA))
+    transitive, dev_only = (_registry_package(name) for name in ("cvlr-asserts", "dev-helper"))
+    payload["packages"].extend((transitive, dev_only))
     payload["resolve"] = {
         "nodes": [
-            {"id": lend, "deps": [{"pkg": cvlr, "dep_kinds": [{"kind": None}]}]},
-            {"id": cvlr, "deps": [{"pkg": log, "dep_kinds": [{"kind": "build"}]}]},
+            {"id": lend, "deps": [
+                {"pkg": cvlr, "dep_kinds": [{"kind": None}]},
+                {"pkg": dev_only["id"], "dep_kinds": [{"kind": "dev"}]},
+            ]},
+            {"id": cvlr, "deps": [
+                {"pkg": transitive["id"], "dep_kinds": [{"kind": None}]},
+                {"pkg": log, "dep_kinds": [{"kind": "build"}]},
+            ]},
             {"id": root, "deps": [{"pkg": log, "dep_kinds": [{"kind": None}]}]},
         ]
     }
     workspace = _workspace(payload)
     lending = workspace.member("example-lending")
     assert lending is not None
-    assert [p.name for p in workspace.linked_into(lending)] == ["example-lending", "cvlr"]
+    assert [p.name for p in workspace.linked_into(lending)] == [
+        "example-lending", "cvlr", "cvlr-asserts",
+    ]
 
 
 def test_a_git_source_is_split_into_repository_reference_and_commit():
@@ -525,28 +547,32 @@ def _platform_tools(root: Path, version: str, flavour: str) -> Path:
     return tools
 
 
-def test_the_sbf_check_runs_the_platform_tools_cargo_for_the_builds_target_and_profile(tmp_path):
-    """The host cannot always compile what the chain build does (a program's size asserts can fail
-    on x86_64's `u128` alignment). And the build is `--release`: in another profile the check would
-    share no host units with it."""
-    tools = _platform_tools(tmp_path, "v1.53", "platform-tools-certora")
-    check = sbf_check("v1.53", root=tmp_path)
+def _tools_of(check: CrossCheck, tools: Path) -> None:
+    """The check's cargo, compiler, and C tools are the ones in ``tools``, and it builds the
+    chain's target in the chain's profile."""
+    llvm = tools / "llvm" / "bin"
     assert check.cargo == tools / "rust" / "bin" / "cargo"
     assert check.args == ("--release", "--target", SBF_TARGET)
-
-
-def test_the_sbf_check_hands_build_scripts_the_builds_own_tools(tmp_path):
-    """`cargo certora-sbf` sets these. A build script that reruns when `CC` changes (blake3's) was
-    rebuilt, with 15 crates above it, every time the check and the build took turns."""
-    tools = _platform_tools(tmp_path, "v1.53", "platform-tools-certora")
-    llvm = tools / "llvm" / "bin"
-    assert sbf_check("v1.53", root=tmp_path).env == {
+    assert check.env == {
         "RUSTC": str(tools / "rust" / "bin" / "rustc"),
         "CC": str(llvm / "clang"),
         "AR": str(llvm / "llvm-ar"),
         "OBJDUMP": str(llvm / "llvm-objdump"),
         "OBJCOPY": str(llvm / "llvm-objcopy"),
     }
+
+
+def test_the_sbf_check_uses_the_platform_tools_flavour_that_has_cargo(tmp_path):
+    """The certora tree wins when both exist. The plain tree is what an install ships when it has
+    no certora tree. Either way the compiler and the C tools are that tree's: a build script that
+    reruns when ``CC`` changes was rebuilt, with every crate above it, each time the check and the
+    build took turns."""
+    certora = _platform_tools(tmp_path, "v1.53", "platform-tools-certora")
+    plain = _platform_tools(tmp_path, "v1.53", "platform-tools")
+    _tools_of(sbf_check("v1.53", root=tmp_path), certora)
+
+    certora.joinpath("rust/bin/cargo").unlink()
+    _tools_of(sbf_check("v1.53", root=tmp_path), plain)
 
 
 def test_the_sbf_check_without_platform_tools_says_which_version(tmp_path):
@@ -557,7 +583,8 @@ def test_the_sbf_check_without_platform_tools_says_which_version(tmp_path):
 
 @pytest.mark.asyncio
 async def test_a_session_checks_and_warms_with_the_cargo_its_check_runs(tmp_path, monkeypatch):
-    """A cache is warm only for the cargo that filled it, and a confined check is offline."""
+    """Warm fills the cache of the cargo the check runs, and the check's compiler joins the
+    toolchain env."""
     check = CrossCheck(cargo=Path("/pt/cargo"), args=("--target", "t"), env={"RUSTC": "/pt/rustc"})
     session = CargoSession(
         workdir=tmp_path, sandbox=SandboxConfig(provider="none"), toolchain="1.90.0",
@@ -1018,7 +1045,9 @@ async def test_the_build_script_runs_its_command_with_the_sessions_toolchain(tmp
     assert ran.stdout.strip() == "1.90.0"
 
 
-def test_reading_a_workspace_runs_cargo_with_the_toolchain_asked_for(tmp_path, monkeypatch):
+def test_reading_a_workspace_passes_its_toolchain_and_cargo_home_on(tmp_path, monkeypatch):
+    """No toolchain and no cargo home leaves the environment alone. Otherwise the child keeps the
+    parent's environment and gains the override, and a cargo home is created before cargo runs."""
     seen: list[dict[str, str] | None] = []
 
     def fake_run(args, **kwargs):
@@ -1027,29 +1056,28 @@ def test_reading_a_workspace_runs_cargo_with_the_toolchain_asked_for(tmp_path, m
 
     monkeypatch.setattr(metadata.shutil, "which", lambda _: "/usr/bin/cargo")
     monkeypatch.setattr(metadata.subprocess, "run", fake_run)
-    for toolchain in ("1.90.0", None):
-        metadata._cargo_metadata(
-            tmp_path, offline=True, features=(), toolchain=toolchain, cargo_home=None, timeout_s=5
-        )
-    with_toolchain, without = seen
-    assert with_toolchain is not None and with_toolchain["RUSTUP_TOOLCHAIN"] == "1.90.0"
-    assert without is None
-
-
-def test_reading_a_workspace_fetches_into_the_cargo_home_asked_for(tmp_path, monkeypatch):
-    seen: list[dict[str, str] | None] = []
-
-    def fake_run(args, **kwargs):
-        seen.append(kwargs.get("env"))
-        return subprocess.CompletedProcess(args, 1, "", "no manifest")
-
-    monkeypatch.setattr(metadata.shutil, "which", lambda _: "/usr/bin/cargo")
-    monkeypatch.setattr(metadata.subprocess, "run", fake_run)
+    monkeypatch.setenv("AUTOPROVER_METADATA_SENTINEL", "kept")
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
     home = tmp_path / "private" / "cargo"
-    metadata._cargo_metadata(
-        tmp_path, offline=True, features=(), toolchain=None, cargo_home=home, timeout_s=5
-    )
-    (env,) = seen
-    assert env is not None and env["CARGO_HOME"] == str(home)
+
+    def read(*, toolchain: str | None, cargo_home: Path | None) -> None:
+        metadata._cargo_metadata(
+            tmp_path, offline=True, features=(), toolchain=toolchain,
+            cargo_home=cargo_home, timeout_s=5,
+        )
+
+    read(toolchain=None, cargo_home=None)
+    read(toolchain="1.90.0", cargo_home=None)
+    read(toolchain=None, cargo_home=home)
+    untouched, with_toolchain, with_home = seen
+    assert untouched is None
+    assert with_toolchain is not None
+    assert with_toolchain["RUSTUP_TOOLCHAIN"] == "1.90.0"
+    assert with_toolchain["AUTOPROVER_METADATA_SENTINEL"] == "kept"
+    assert with_toolchain.get("CARGO_HOME") != str(home)
+    assert with_home is not None
+    assert with_home["CARGO_HOME"] == str(home)
+    assert "RUSTUP_TOOLCHAIN" not in with_home
+    assert with_home["AUTOPROVER_METADATA_SENTINEL"] == "kept"
     assert home.is_dir()
 

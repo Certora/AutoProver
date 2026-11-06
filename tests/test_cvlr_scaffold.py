@@ -848,11 +848,10 @@ async def test_preflight_resolves_the_verification_graph_from_the_packages_own_d
 
 
 @pytest.mark.asyncio
-async def test_preflight_reads_the_project_with_the_host_toolchain_not_its_pin(
-    tmp_path, fake_cargo
-):
-    """A project's rust-toolchain.toml names a toolchain the Solana image may not have, and its
-    runtime user cannot install one, so cargo would not start."""
+async def test_preflight_asks_cargo_for_the_host_toolchain(tmp_path, fake_cargo):
+    """Every metadata read passes the host toolchain. Left unset, rustup would follow the
+    project's rust-toolchain.toml, which a Solana image may not be able to install. An unconfined
+    read does not redirect the cargo home."""
     from composer.spec.cvlr.conf import HOST_RUST_TOOLCHAIN
 
     workspace, _ = _project(
@@ -863,24 +862,27 @@ async def test_preflight_reads_the_project_with_the_host_toolchain_not_its_pin(
         tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
     )
     assert fake.toolchains and set(fake.toolchains) == {HOST_RUST_TOOLCHAIN}
+    assert set(fake.cargo_homes) == {None}
 
 
 @pytest.mark.asyncio
 async def test_a_confined_preflight_fetches_into_the_cargo_home_the_gate_warms(
     tmp_path, fake_cargo
 ):
-    """A confined install's shared CARGO_HOME is not the runtime user's to write, so the reads
-    fetch where the gate's warm step will look."""
-    from composer.sandbox.recipes import sandbox_cargo_home
+    """The reads fetch into the cargo home the gate's session warms. A confined install's shared
+    cargo home is not the runtime user's to write."""
+    from composer.cargo.session import CargoSession
 
     workspace, _ = _project(
         tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, package_dir="programs/prog"
     )
     fake = fake_cargo(workspace)
+    sandbox = SandboxConfig(provider="launcher")
     await preflight.prepare_workspace(
-        tmp_path, reference=SOLANA_V2, sandbox=SandboxConfig(provider="launcher"), package="prog"
+        tmp_path, reference=SOLANA_V2, sandbox=sandbox, package="prog"
     )
-    assert fake.cargo_homes and set(fake.cargo_homes) == {sandbox_cargo_home(tmp_path)}
+    session = CargoSession(workdir=tmp_path, sandbox=sandbox)
+    assert fake.cargo_homes and set(fake.cargo_homes) == {session.cargo_home}
 
 
 @pytest.mark.asyncio

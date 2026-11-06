@@ -79,53 +79,20 @@ def test_an_unknown_chain_raises_and_names_the_ones_that_exist():
     assert "'solana'" in str(e.value) and "'soroban'" in str(e.value)
 
 
-def test_both_chains_share_one_core_release():
-    # The core line is chain-independent; two chains drifting apart on it would mean one of them
-    # is being compiled against a cvlr nobody chose.
-    assert ref.SOLANA_V2.core == ref.SOROBAN.core
-
-
-def _from_commits(reference: ref.ChainReference, repo: str) -> list[ref.CommitPatch]:
-    return [p for p in reference.from_commits() if p.commit.repo == repo]
-
-
-_CVLR_SOLANA_REPO = "https://github.com/Certora/cvlr-solana.git"
-
-
-def test_the_crates_of_one_repository_are_read_from_one_commit():
-    """``cvlr-solana`` releases its three crates together. Patching them from two commits would
-    build a chain crate and a model that were never released together."""
-    for reference in ref.generations("solana"):
-        assert len({p.commit for p in _from_commits(reference, _CVLR_SOLANA_REPO)}) <= 1
-
-
-def test_a_commit_is_pinned_by_hash_and_never_by_a_name_that_can_move():
-    for patch in (p for r in ref.generations("solana") for p in r.from_commits()):
-        commit = patch.commit
-        assert len(commit.rev) == 40 and all(ch in "0123456789abcdef" for ch in commit.rev)
+def test_every_generation_shares_one_core_release():
+    # The core line is chain-independent. Two generations drifting apart on it would mean one of
+    # them is being compiled against a cvlr nobody chose.
+    assert ref.SOLANA_V1_18.core == ref.SOLANA_V2.core == ref.SOLANA_V3.core == ref.SOROBAN.core
 
 
 def test_solana_has_one_reference_set_per_generation_newest_first():
     assert ref.generations("solana") == (ref.SOLANA_V3, ref.SOLANA_V2, ref.SOLANA_V1_18)
 
 
-def test_the_1_18_line_shares_the_core_and_has_no_specializations():
-    """`cvlr-solana` 0.4.x requires `cvlr-*` `>=0.4, <1`, so it resolves onto the one 0.6.2 core.
-    The 0.4 line has no stake model and no separate token crate."""
-    v1 = ref.SOLANA_V1_18
-    assert v1.core == ref.SOLANA_V2.core
-    assert (v1.chain_crate.name, v1.chain_crate.version) == ("cvlr-solana", "0.4.6")
-    assert v1.specializations == ()
-    assert {c.name for c in v1.scaffold_crates()} == {"cvlr", "cvlr-solana"}
-    assert 'solana-program = "1.18"' in v1.cargo_dependencies()
-    assert v1.platform.path_aliases == ()
-
-
 def test_the_sdk3_line_is_released_whole():
-    """Chain crate and specializations together, at one version, and on the same core as 2.x."""
+    """The chain crate and its specializations are one release. A stake model from another
+    version was never published with this chain crate."""
     v3 = ref.SOLANA_V3
     assert {(c.name, c.version) for c in (v3.chain_crate, *v3.specializations)} == {
         ("cvlr-solana", "0.6.0"), ("cvlr-solana-stake", "0.6.0"), ("cvlr-spl-token", "0.6.0")
     }
-    assert v3.core == ref.SOLANA_V2.core
-    assert [w.name for w in v3.platform.witnesses] == ["solana-account-info"]

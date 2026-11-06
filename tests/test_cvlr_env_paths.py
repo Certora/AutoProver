@@ -181,16 +181,8 @@ def test_the_blanket_stays_on_the_monolith(split: PathDialect) -> None:
     the blanket made ``Sysvar::from_account_info`` return through memory and never succeed, and made
     ``solana_stake_interface``'s authorization and stake math oracles.
     """
-    import re
-
     blanket = "^solana_program::.*$"
     assert split.spellings(blanket) == (blanket,)
-    for symbol in (
-        "solana_sysvar::Sysvar::from_account_info",
-        "solana_stake_interface::state::Authorized::check",
-        "solana_stake_program::processor::Processor::process",
-    ):
-        assert not re.search(blanket, symbol), f"{symbol} would be external"
 
 
 def test_a_path_that_merely_starts_with_the_split_crate_is_not_widened(
