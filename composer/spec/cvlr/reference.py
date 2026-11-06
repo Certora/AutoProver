@@ -515,11 +515,13 @@ def _soroban_line(sdk: str, minimum: str, rev: str) -> ChainReference:
     )
 
 
-#: ``cvlr-soroban`` branch ``soroban-25.1.1``.
-SOROBAN_V25 = _soroban_line("25", "25.1.1", "faf7fb826f395cc0573a0ce674b7e4099cdf6f57")
+#: ``cvlr-soroban`` branch ``soroban-25.1.1``. From this commit (#20) ``#[rule]`` ends every rule with
+#: ``cvlr_vacuity_check!()``.
+SOROBAN_V25 = _soroban_line("25", "25.1.1", "e69d7ac8cb67b9852c105e8fb083b7f1814b3afb")
 
-#: ``cvlr-soroban`` branch ``soroban-22.0.8``.
-SOROBAN_V22 = _soroban_line("22", "22.0.8", "d00c0ab7499407bab4be0993176cbaf96d183461")
+#: ``cvlr-soroban`` branch ``soroban-22.0.8``. From this commit (#21) ``#[rule]`` ends every rule with
+#: ``cvlr_vacuity_check!()``.
+SOROBAN_V22 = _soroban_line("22", "22.0.8", "f8ffb5cf1dc7d5c4e5767db833d441f68fc4f7bf")
 
 #: The newest Soroban line, for callers with no project in hand: the corpus builders and the crate
 #: reference, which describe current CVLR rather than what one target resolves.

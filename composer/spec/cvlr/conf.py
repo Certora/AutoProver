@@ -281,8 +281,10 @@ def delivered_conf(
 #: solver sees, such as a cycle of comparisons or a storage read that disagrees with the write.
 #: A ``cvlr_satisfy!`` reachability rule is still the only check that covers both.
 #:
-#: TODO: back to ``basic`` once cvlr-soroban's ``#[rule]`` emits ``cvlr_vacuity_check!()`` and the
-#: wasm prover checks that marker before optimization, as the Solana prover does.
+#: TODO: back to ``basic`` once the wasm prover checks the ``cvlr_vacuity_check!()`` marker before
+#: optimization, as the Solana prover does. cvlr-soroban's ``#[rule]`` emits the marker from the
+#: commits :data:`~composer.spec.cvlr.reference.SOROBAN_V22` and ``SOROBAN_V25`` pin; the prover
+#: side is EVMVerifier's ``cnandi/soroban-cvlr-vacuity``, not yet merged.
 SOROBAN_BASE_CONF: Conf = {
     "smt_timeout": "6000",
     "rule_sanity": "advanced",
