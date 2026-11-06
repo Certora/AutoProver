@@ -808,6 +808,65 @@ ones it was not, and say that the exclusion is the run's scope rather than a fin
 code. The run overview could say how many pursued properties were narrowed. This should ship with,
 or before, the first prioritized Solana runs that users see.
 
+U51 to U55 come from a prioritized benchmark run on a Solana lending program's liquidity layer
+(dev cloud, 2026-11-05): 53 rules, 20 Prover jobs, 6 of them halted. Each is general.
+
+**U51. A finding's severity does not distinguish code-reachable from deployed.** U36 asks whether
+the program can reach a counterexample's pre-state. It does not ask whether the deployment does.
+On the benchmark, a claimed finding needed a mode the program allows any configured protocol to
+use, but the protocol's published verification work says only one program uses it, and in a way
+that never produces the state. The author called it high, and it had no way to know otherwise:
+nothing it reads describes the deployed configuration. The report should give a finding's
+reachability as one of: from any state the handlers allow, only under configuration an
+administrator would have to choose, or not shown. The severity should follow from that, not from
+the impact alone. The design document is where a user could state the deployment's configuration
+(which protocols use which modes, which admin settings are live). The Solana form takes no threat
+model yet (U49), and that document is the natural home for it.
+
+**U52. A rule that pins a scale factor at its initial value hides unit bugs.** Every accrual rule
+on the benchmark assumed both exchange prices were at their initial value of 1.0 ("prices at their
+initial value", bounded for tractability). At 1.0, a raw amount and its face value are equal. So the
+run could not see a defect that mixes the two, and one was in the benchmarked code: the supply ratio
+compared raw with-interest supply against face-value interest-free supply, published as M-04 in
+Certora's second Jupiter Lend report (*Formal Verification, Jupiter Lend, January–March 2026*,
+`lend-certora-fv-2.pdf` in `jup-ag/docs/static/files/audits`) and fixed upstream after that
+release. The author's operate rules pinned prices at 1.25 and 1.5, but ran in the same second, so
+they never reached the accrual. Guidance for the author and the judge: a domain pin that makes two
+quantities coincide (a price at its precision, a ratio at 1, two decimals equal) is a restriction
+to lift, not a domain. At least one rule over the code that converts between them should run with
+the factor away from its identity value. The judge's domain check (item 2) could name the pattern.
+
+**U53. Repeated halts on the same rules do not change the author's approach.** The benchmark's
+author sent the same timing-out rules back five times in a row; every one of those jobs halted at
+the 25-minute limit. U32 returned each halted job's finished verdicts, and the Prover's note said
+to simplify or split the rules that timed out. The author kept editing them in place for about
+2.5 hours, without skipping, splitting or isolating them, and never tried `give_up`. It recovered
+only when it deleted them (U54). klend run 4 showed the same pattern. After a second consecutive
+halt in which the same rules have no verdict, `verify_rules` should refuse to resubmit them alongside
+the rest. The author would then have to isolate them in their own job (U34 would make that a selection),
+narrow them, or account for them. The refusal message is a prompt, so it should name the rules and
+the three options.
+
+**U54. A rule dropped after it reached the Prover leaves no trace in the report.** Skips are
+recorded per property. A rule is only checked for belonging to some property. On the benchmark,
+the author ended the halts of U53 by deleting the three rules for an `operate` that both
+withdraws and borrows, including the path that merges the two payouts into one transfer. Their
+properties still mapped to other rules, so `result` accepted the unit, the report lists nothing as
+skipped, and the component reads as complete with one code path unverified. The run knows every
+rule that ever received a verdict (the stamps' history). A rule in that set that is missing from the
+final spec, above all one whose last verdict was TIMEOUT, should either be accounted for by the
+author before `result` (why it was dropped, and what still covers its path) or appear in the report
+as dropped with its last verdict. The judge should see the list.
+
+**U55. A preflight refusal does not reach the cloud UI.** The benchmark's first run stopped in
+preflight about 40 seconds in, on a scaffold `Blocked` entry (the anchor-lang double resolution, fixed in
+31c81906). The UI showed the run as failed with no reason. The only record was a `PreflightFailed`
+traceback in the executor's CloudWatch log, which a user cannot read. `PreflightFailed` already
+carries a reason meant for the project's owner, with each blocked item's problem and resolution.
+The Solana executor (AIAutoProver `s3_autoprove_solana`) should write it where the workflow's
+status is shown, the same way a run's report is. This is the preflight counterpart of the deferred
+fix for a Prover job's FAILED reason.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
