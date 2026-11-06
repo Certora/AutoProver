@@ -384,6 +384,50 @@ delivered again, and cost more.
 
 The next liquidation run should wait for U44, and will be the first to exercise U48. P-07 waits on U45.
 
+## Run 3, liquidations a third time (2026-11-05): faster and cheaper, with the same wall
+
+The same unit, input and budget, run after U44 (where a timed-out rule stood), U42 (a skip no
+longer stales a Prover stamp), U48 (account validation inlined) and the callee case of the stand-in
+guidance. Counterexample analysis also worked for the first time on this benchmark: in the pilot
+and the rerun, every analysis call failed on a malformed request.
+
+| | Pilot (2026-11-02) | Rerun (2026-11-04) | Third (2026-11-05) |
+|---|---|---|---|
+| Wall clock | 3h 52m | 5h 05m | 2h 31m |
+| Spend (log estimate) | about $27 | about $47 | about $30 |
+| Prover jobs | 8, 2h 44m | 15, 3h 11m | 5, 1h 11m |
+| Rules | 36: 35 verified, 1 marked | 34, all verified | 42: 40 verified, 2 marked |
+| Properties skipped | 11 | 9 | 12 |
+
+- **The stuck-rule lines were read.** The first job timed out on six rules, and the report said
+  where each one stood: the deleveraging and close-factor rules spent 89 to 93% of their branching
+  in the 256-bit division, and the three eligibility rules, stuck in static analysis in the pilot,
+  reached the solver with path counts between 2^1063 and 2^1183. The author's skip reasons quote those figures. There was no editor round trip on
+  logging, and the run needed a third of the rerun's Prover jobs.
+- **A stand-in was tried where it applies, and replaced.** The floor on the liquidator's net
+  proceeds only consumes the redeemed amount and the protocol fee. The author wrote `nondet()`
+  stand-ins for both, constraining the fee only by the `max(fee, 1)` floor in its code. That did not
+  clear the rule, because the 256-bit translation error sits in the caller itself, on both of its
+  branches. The author then had the check extracted verbatim and proved it directly, which needs no
+  stand-in. The delivered harness has three verbatim extractions and no stand-ins.
+- **Two marked failures, both reachable, both untriaged.** The pilot's (in the bad-debt region the
+  bonus is not capped by either reserve's maximum), and a new one: on the order path the bonus comes
+  from the order's own range and is never capped by the reserves' maxima. The author notes that this
+  property and the order-bonus property conflict on that path. Either may be the design.
+- **Account validation now runs.** Two rules drive Anchor's `try_accounts` for the deleveraging and
+  socialize-loss handlers and verify the owner and market bindings, which U48 had left external.
+  The `has_one` binding on the liquidation handler's accounts hit a pointer-analysis error instead.
+- **U42 did not come up.** No skip was recorded beside a Prover run, so all five runs submitted.
+
+**P-07 to P-10 are where they were.** P-07 is skipped: the eligibility decision is made from the
+divisions the stuck-rule lines point at. Of P-08, the debt write-down matching the reserve's
+accounting and the floor on net proceeds are proved; that seized collateral stays within the
+repaid value times one plus the bonus is not, because `calculate_liquidation` times out. Its
+stuck-rule line puts 89% of the branching in the division and 7% in the close-factor computation,
+not in one callee, so a callee stand-in would not have cleared it. The remaining liquidation
+properties are blocked by the same division. That is U45, the narrower fixed-point type the
+published report used, and it is the next lever for this unit.
+
 ## Grading it
 
 Decided before the run, so the result stays falsifiable:

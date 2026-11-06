@@ -646,13 +646,21 @@ the eligibility result, so a stand-in for the callee was the move. The section s
 the function a rule drives, so the author never looked one call down. It now says to sort by what the
 rule asserts over, and its example adds a timed-out callee.
 
-**~~U44. A TIMEOUT does not say what the Prover was stuck on.~~** — **built (2026-11-05, not yet
-exercised by a run).** `cloud_results` now fetches the statistics file of every rule without a
+*Used on the third run (2026-11-05), then replaced.* The author wrote stand-ins for the redeem and
+the protocol fee under the net-proceeds floor, a property that only consumes them. The rule still
+failed translation, because the 256-bit code is in the caller itself, and a verbatim extraction of
+the check proved it instead. Where the remaining liquidation properties time out, the stuck-rule
+lines (U44) put the time in the division across the function rather than in one callee, so that
+wall is U45's.
+
+**~~U44. A TIMEOUT does not say what the Prover was stuck on.~~** — **built (2026-11-05).** `cloud_results` now fetches the statistics file of every rule without a
 verdict (a halted job leaves a cut-off rule `RUNNING`, which the parse reads as `TIMEOUT`), and the
 prover report ends with one line per timed-out rule: the phase, the path count, and the top two
 functions by share of branching and of nonlinear operations. A local run already has the files.
 Checked against the pilot's halted job, the lines name the four rules stuck in static analysis and
 the 256-bit division at 86–96 % in the rest. The author's stand-in section says how to read them.
+*Used on its first run (2026-11-05):* the liquidation run's skip reasons quote the lines, with no
+guess at logging, and the run needed 5 Prover jobs where the rerun needed 15.
 What was found: the Prover writes per-rule statistics
 (`rule_live_statistics_*.json`, linked from each rule's `LiveCheckInfo` in the tree view): the
 phase the rule reached, its path count, and the functions that dominate its branching and its
@@ -767,8 +775,8 @@ select them, run them through the CVLR verify path, and judge per property which
 The API and dashboard would need the same per-kind lifting as U46, and the dashboard's flat
 evaluate price. Left until after U46.
 
-**~~U48. A generic impl's account validation stayed external.~~** — **fixed (2026-11-04, not yet
-exercised by a run).** The Anchor inlining layer inlines `<.. as anchor_lang::Accounts<..>>::try_accounts`
+**~~U48. A generic impl's account validation stayed external.~~** — **fixed (2026-11-04; on the
+third liquidation run two `try_accounts` rules verified the owner and market bindings).** The Anchor inlining layer inlines `<.. as anchor_lang::Accounts<..>>::try_accounts`
 with a directive anchored at `$`. The Prover numbers a name that several symbols share, `_0`, `_1`
 and so on, and the bare name is then not a symbol (`as_the_prover_names` in `composer/cargo/symbols.py`).
 `AccountLoader<T>`'s validation is generic and was monomorphized three times in the lending benchmark,
