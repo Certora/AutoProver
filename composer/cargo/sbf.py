@@ -37,7 +37,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, ValidationError
 
-from composer.cargo.session import CargoSession, CompileFailed, WarmFailed
+from composer.cargo.session import CargoSession, CompileFailed, CrossCheck, WarmFailed
 from composer.sandbox.recipes import PLATFORM_TOOLS_ROOT
 
 _log = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ _log = logging.getLogger(__name__)
 #: Certora's tool, not ``cargo-build-sbf``: it pins the platform-tools version
 #: and prints the build manifest.
 SBF_SUBCOMMAND = "certora-sbf"
+SBF_TARGET = "sbpf-solana-solana"
 
 DEFAULT_BUILD_TIMEOUT_S: int = 1800  # 30 minutes
 
@@ -188,12 +189,17 @@ class SbfBuild:
         ``--no-rustup`` is required. Without it the tool registers a
         ``certora-solana`` rustup toolchain and writes ``RUSTUP_HOME``, which
         is read-only under confinement.
+
+        ``--platform-tools-root`` is passed rather than left to the tool's
+        default, because the launcher drops ``$CERTORA_PLATFORM_TOOLS_ROOT``.
         """
         args = [
             "cargo",
             SBF_SUBCOMMAND,
             "--json",
             "--no-rustup",
+            "--platform-tools-root",
+            str(PLATFORM_TOOLS_ROOT),
             "--manifest-path",
             str(self.manifest_path),
         ]
@@ -206,6 +212,10 @@ class SbfBuild:
 
 def platform_tools_installed(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> bool:
     return (root / version).is_dir()
+
+
+#: The directories one platform-tools version unpacks into. v1.53 ships only the first.
+PLATFORM_TOOLS_FLAVOURS = ("platform-tools-certora", "platform-tools")
 
 
 def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> tuple[Path, ...]:
@@ -222,9 +232,39 @@ def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> 
     """
     return tuple(
         cargo
-        for flavour in ("platform-tools-certora", "platform-tools")
+        for flavour in PLATFORM_TOOLS_FLAVOURS
         if (cargo := root / version / flavour / "rust" / "bin" / "cargo").is_file()
     )
+
+
+def sbf_check(tools_version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> CrossCheck:
+    """``cargo check`` for the target and profile ``cargo certora-sbf`` builds, using that
+    version's cargo, rustc, and the C tools it passes to build scripts.
+
+    From rustc 1.77, ``u128`` is 16-byte aligned on x86_64, so a layout assertion that holds under
+    the SBF compiler can fail on the host. The check shares the build's target directory, profile,
+    and tools, so a build script or proc-macro compiled for one stays valid for the other.
+
+    Raises :class:`PlatformToolsMissing` when ``tools_version`` has no cargo under ``root``.
+    """
+    for flavour in PLATFORM_TOOLS_FLAVOURS:
+        tools = root / tools_version / flavour
+        cargo = tools / "rust" / "bin" / "cargo"
+        if not cargo.is_file():
+            continue
+        llvm = tools / "llvm" / "bin"
+        return CrossCheck(
+            cargo=cargo,
+            args=("--release", "--target", SBF_TARGET),
+            env={
+                "RUSTC": str(tools / "rust" / "bin" / "rustc"),
+                "CC": str(llvm / "clang"),
+                "AR": str(llvm / "llvm-ar"),
+                "OBJDUMP": str(llvm / "llvm-objdump"),
+                "OBJCOPY": str(llvm / "llvm-objcopy"),
+            },
+        )
+    raise PlatformToolsMissing(tools_version)
 
 
 async def _warm_for_the_build_cargo(
@@ -301,6 +341,8 @@ async def write_build_script(
                 "cwd": str(session.workdir.resolve()),
                 "argv_prefix": spec["argv_prefix"],
                 "argv": build.argv(),
+                # The prover runs the script in its own environment, so the toolchain is stored here.
+                "env": session.toolchain_env,
                 "timeout_s": spec["timeout_s"],
             },
             indent=2,

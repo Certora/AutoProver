@@ -1,8 +1,10 @@
 """CVLR metadata and the prover conf, with no toolchain, network, or LLM.
 
 Nothing here shells out to cargo or submits a job. What is checked is the parse of
-``cargo metadata`` and ``Cargo.toml``, the conf a tunable conf renders to, and the keys one
-submission adds.
+``cargo metadata`` and ``Cargo.toml``, the conf a tunable conf renders to and the keys one
+submission adds, the argument vector a build is given, and the build script handed to the prover.
+``tests/test_cvlr_end_to_end.py`` submits a real build and compares the verdicts against a
+checked-in file. It is ``expensive``.
 """
 
 import json
@@ -34,20 +36,23 @@ from composer.cargo.metadata import (
 from composer.prover import conf as prover_conf
 from composer.spec.cvlr import conf as cvlr_conf
 from composer.spec.cvlr.crates import Absent, CvlrSources
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA_V2
 from composer.cargo.sbf import (
     BUILD_TIMEOUT_ENV,
     DEFAULT_BUILD_TIMEOUT_S,
     MalformedBuildManifest,
+    PlatformToolsMissing,
+    SBF_TARGET,
     Built,
     build_command_path,
     parse_manifest as parse_build_manifest,
     platform_tools_cargos,
     resolved_build_timeout_s,
     SbfBuild,
+    sbf_check,
     write_build_script,
 )
-from composer.cargo.session import CargoSession, CompileFailed
+from composer.cargo.session import CargoSession, CompileFailed, CrossCheck
 from composer.diagnostics.timing import (
     RunSummary,
     install_run_summary,
@@ -101,19 +106,19 @@ _METADATA = {
             "targets": [{"name": "root", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/w/src/lib.rs"}],
         },
         {
-            "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr@0.6.1",
+            "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr@0.6.2",
             "name": "cvlr",
-            "version": "0.6.1",
-            "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-0.6.1/Cargo.toml",
+            "version": "0.6.2",
+            "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-0.6.2/Cargo.toml",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "features": {},
             "targets": [{"name": "cvlr", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/reg/cvlr/src/lib.rs"}],
         },
         {
-            "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr-log@0.6.1",
+            "id": "registry+https://github.com/rust-lang/crates.io-index#cvlr-log@0.6.2",
             "name": "cvlr-log",
-            "version": "0.6.1",
-            "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-log-0.6.1/Cargo.toml",
+            "version": "0.6.2",
+            "manifest_path": "/home/u/.cargo/registry/src/idx/cvlr-log-0.6.2/Cargo.toml",
             "source": "registry+https://github.com/rust-lang/crates.io-index",
             "features": {},
             "targets": [{"name": "cvlr_log", "kind": ["lib"], "crate_types": ["lib"], "src_path": "/reg/cvlr-log/src/lib.rs"}],
@@ -152,6 +157,46 @@ def test_an_older_cargo_that_reports_only_kind_still_names_the_lib_target():
     lend = _workspace(payload).member("example-lending")
     assert lend is not None and lend.lib is not None
     assert lend.lib.builds_shared_object
+
+
+def _registry_package(name: str) -> dict:
+    return {
+        "id": f"registry+https://github.com/rust-lang/crates.io-index#{name}@0.1.0",
+        "name": name,
+        "version": "0.1.0",
+        "manifest_path": f"/home/u/.cargo/registry/src/idx/{name}-0.1.0/Cargo.toml",
+        "source": "registry+https://github.com/rust-lang/crates.io-index",
+        "features": {},
+        "targets": [{"name": name, "kind": ["lib"], "crate_types": ["lib"], "src_path": f"/reg/{name}/src/lib.rs"}],
+    }
+
+
+def test_the_linked_graph_follows_normal_dependencies_only():
+    """A dev or build dependency is never linked into the library, and neither is what another
+    member depends on. A normal dependency of a normal dependency is."""
+    lend, root, cvlr, log = (p["id"] for p in _METADATA["packages"])
+    payload = json.loads(json.dumps(_METADATA))
+    transitive, dev_only = (_registry_package(name) for name in ("cvlr-asserts", "dev-helper"))
+    payload["packages"].extend((transitive, dev_only))
+    payload["resolve"] = {
+        "nodes": [
+            {"id": lend, "deps": [
+                {"pkg": cvlr, "dep_kinds": [{"kind": None}]},
+                {"pkg": dev_only["id"], "dep_kinds": [{"kind": "dev"}]},
+            ]},
+            {"id": cvlr, "deps": [
+                {"pkg": transitive["id"], "dep_kinds": [{"kind": None}]},
+                {"pkg": log, "dep_kinds": [{"kind": "build"}]},
+            ]},
+            {"id": root, "deps": [{"pkg": log, "dep_kinds": [{"kind": None}]}]},
+        ]
+    }
+    workspace = _workspace(payload)
+    lending = workspace.member("example-lending")
+    assert lending is not None
+    assert [p.name for p in workspace.linked_into(lending)] == [
+        "example-lending", "cvlr", "cvlr-asserts",
+    ]
 
 
 def test_a_git_source_is_split_into_repository_reference_and_commit():
@@ -220,7 +265,7 @@ def test_every_copy_of_a_crate_the_graph_resolves_twice_is_reported():
     older = json.loads(json.dumps(payload["packages"][2]))
     older.update(id=f"{older['source']}#cvlr@0.4.1", version="0.4.1")
     payload["packages"].append(older)
-    assert [c.version for c in _workspace(payload).resolved("cvlr")] == ["0.6.1", "0.4.1"]
+    assert [c.version for c in _workspace(payload).resolved("cvlr")] == ["0.6.2", "0.4.1"]
 
 
 def _cargo_answers(monkeypatch, answer):
@@ -311,21 +356,21 @@ def test_a_manifest_cargo_would_refuse_is_malformed(text):
 def test_the_cvlr_source_roots_are_the_crate_directories_the_build_resolved():
     sources = CvlrSources.of(_workspace(_METADATA))
     assert [(c.name, c.version) for c in sources.crates] == [
-        ("cvlr", "0.6.1"),
-        ("cvlr-log", "0.6.1"),
+        ("cvlr", "0.6.2"),
+        ("cvlr-log", "0.6.2"),
     ]
     assert sources.roots() == (
-        Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.1"),
-        Path("/home/u/.cargo/registry/src/idx/cvlr-log-0.6.1"),
+        Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.2"),
+        Path("/home/u/.cargo/registry/src/idx/cvlr-log-0.6.2"),
     )
 
 
 def test_two_copies_of_one_version_are_ordered_the_same_whatever_order_cargo_lists_them():
-    """A registry release and a git checkout of it both resolve as ``cvlr 0.6.1``."""
+    """A registry release and a git checkout of it both resolve as ``cvlr 0.6.2``."""
     registry = CratePackage(
         name="cvlr",
-        version="0.6.1",
-        manifest_path=Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.1/Cargo.toml"),
+        version="0.6.2",
+        manifest_path=Path("/home/u/.cargo/registry/src/idx/cvlr-0.6.2/Cargo.toml"),
         lib=None,
         features=(),
         source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
@@ -348,20 +393,20 @@ def test_a_project_on_the_reference_core_but_without_the_chain_crate_reports_tha
     """Two different statements, and only one of them stops a run: an old ``cvlr-solana`` and no
     ``cvlr-solana`` at all. They are separate types so a caller cannot conflate them."""
     sources = CvlrSources.of(_workspace(_METADATA))
-    gaps = {g.crate: g for g in sources.gaps(SOLANA)}
+    gaps = {g.crate: g for g in sources.gaps(SOLANA_V2)}
     assert "cvlr" not in gaps, "the fixture pins the reference core, so it is not a gap"
     assert isinstance(gaps["cvlr-solana"], Absent)
     assert "is not a dependency of this project" in gaps["cvlr-solana"].describe()
-    assert sources.mismatched(SOLANA) == (), "absence is not something to refuse over"
+    assert sources.mismatched(SOLANA_V2) == (), "absence is not something to refuse over"
 
 
 def test_an_older_cvlr_than_the_pin_is_a_mismatch_that_stops_the_run():
     payload = json.loads(json.dumps(_METADATA))
     payload["packages"][2]["version"] = "0.4.1"
     sources = CvlrSources.of(_workspace(payload))
-    mismatched = {g.crate: g for g in sources.mismatched(SOLANA)}
+    mismatched = {g.crate: g for g in sources.mismatched(SOLANA_V2)}
     assert mismatched["cvlr"].resolved == "0.4.1"
-    assert mismatched["cvlr"].reference == "0.6.1"
+    assert mismatched["cvlr"].reference == "0.6.2"
 
 
 def test_an_older_cvlr_beside_the_pinned_one_is_still_a_mismatch():
@@ -369,7 +414,7 @@ def test_an_older_cvlr_beside_the_pinned_one_is_still_a_mismatch():
     older = json.loads(json.dumps(payload["packages"][2]))
     older.update(id=f"{older['source']}#cvlr@0.4.1", version="0.4.1")
     payload["packages"].append(older)
-    (mismatch,) = CvlrSources.of(_workspace(payload)).mismatched(SOLANA)
+    (mismatch,) = CvlrSources.of(_workspace(payload)).mismatched(SOLANA_V2)
     assert (mismatch.crate, mismatch.resolved) == ("cvlr", "0.4.1")
 
 
@@ -495,6 +540,76 @@ def test_a_directory_without_the_binary_is_not_offered(tmp_path):
     assert platform_tools_cargos("v1.43", root=tmp_path) == ()
 
 
+def _platform_tools(root: Path, version: str, flavour: str) -> Path:
+    tools = root / version / flavour
+    (tools / "rust" / "bin").mkdir(parents=True)
+    (tools / "rust" / "bin" / "cargo").touch()
+    return tools
+
+
+def _tools_of(check: CrossCheck, tools: Path) -> None:
+    """The check's cargo, compiler, and C tools are the ones in ``tools``, and it builds the
+    chain's target in the chain's profile."""
+    llvm = tools / "llvm" / "bin"
+    assert check.cargo == tools / "rust" / "bin" / "cargo"
+    assert check.args == ("--release", "--target", SBF_TARGET)
+    assert check.env == {
+        "RUSTC": str(tools / "rust" / "bin" / "rustc"),
+        "CC": str(llvm / "clang"),
+        "AR": str(llvm / "llvm-ar"),
+        "OBJDUMP": str(llvm / "llvm-objdump"),
+        "OBJCOPY": str(llvm / "llvm-objcopy"),
+    }
+
+
+def test_the_sbf_check_uses_the_platform_tools_flavour_that_has_cargo(tmp_path):
+    """v1.53's certora tree is used when it has a cargo. The plain tree is used when that cargo is
+    absent. The compiler and the C tools come from the same tree. A build script that reruns when
+    ``CC`` changes would rebuild, along with every crate that depends on it, each time check and
+    build alternate in one target directory."""
+    certora = _platform_tools(tmp_path, "v1.53", "platform-tools-certora")
+    plain = _platform_tools(tmp_path, "v1.53", "platform-tools")
+    _tools_of(sbf_check("v1.53", root=tmp_path), certora)
+
+    certora.joinpath("rust/bin/cargo").unlink()
+    _tools_of(sbf_check("v1.53", root=tmp_path), plain)
+
+
+def test_the_sbf_check_without_platform_tools_says_which_version(tmp_path):
+    (tmp_path / "v1.53" / "platform-tools-certora").mkdir(parents=True)
+    with pytest.raises(PlatformToolsMissing, match="v1.53"):
+        sbf_check("v1.53", root=tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_a_session_checks_and_warms_with_the_cargo_its_check_runs(tmp_path, monkeypatch):
+    """Warm fills the cache of the cargo the check runs, and the check's compiler joins the
+    toolchain env."""
+    check = CrossCheck(cargo=Path("/pt/cargo"), args=("--target", "t"), env={"RUSTC": "/pt/rustc"})
+    session = CargoSession(
+        workdir=tmp_path, sandbox=SandboxConfig(provider="none"), toolchain="1.90.0",
+        check_with=check,
+    )
+    calls: list[tuple[str, list[str], dict | None]] = []
+
+    async def record(program, args, files, **kwargs):
+        from composer.sandbox.command import CommandResult
+
+        calls.append((program, args, kwargs.get("env_overlay")))
+        return CommandResult(exit_code=0, stdout="", stderr="")
+
+    monkeypatch.setattr("composer.cargo.session.run_local_command", record)
+    await session.warm()
+    await session.check(features=("certora",))
+
+    (warm_program, warm_args, _), (program, args, env) = calls
+    assert warm_program == program == "/pt/cargo"
+    assert warm_args[0] == "fetch"
+    assert args[:4] == ["check", "--quiet", "--target", "t"]
+    assert env == {"RUSTUP_TOOLCHAIN": "1.90.0", "RUSTC": "/pt/rustc"}
+    assert session.already_warmed("/pt/cargo") and not session.already_warmed("cargo")
+
+
 def test_warming_is_tracked_per_binary_not_per_session(tmp_path):
     """Two cargos do not share a git cache. One of them being warm says nothing about the other."""
     session = CargoSession(workdir=tmp_path, sandbox=SandboxConfig())
@@ -522,6 +637,17 @@ def test_the_build_never_touches_rustup():
     ``RUSTUP_HOME``. That directory is read-only under confinement, and the
     failure names neither rustup nor the sandbox."""
     assert "--no-rustup" in _build().argv()
+
+
+def test_the_build_names_the_platform_tools_root(monkeypatch):
+    """The launcher drops ``$CERTORA_PLATFORM_TOOLS_ROOT``, so a root the tool would not find by
+    default reaches it only on the command line."""
+    from composer.cargo import sbf
+
+    root = Path("/opt/autoprove/solana")
+    monkeypatch.setattr(sbf, "PLATFORM_TOOLS_ROOT", root)
+    argv = _build().argv()
+    assert argv[argv.index("--platform-tools-root") + 1] == str(root)
 
 
 class TestResolvedBuildTimeout:
@@ -879,3 +1005,81 @@ async def test_a_prover_run_is_accounted_for():
     assert summary.prover_total_calls == 1
     assert summary.phases[0].final_link == "https://prover.certora.com/output/1/2"
     assert summary.phases[0].prover_reported_ms == 4200
+
+
+# --------------------------------------------------------------------------------------------
+# the host toolchain
+
+
+_PRINT_TOOLCHAIN = ["-c", "import os; print(os.environ.get('RUSTUP_TOOLCHAIN', '-'))"]
+
+
+@pytest.mark.asyncio
+async def test_a_session_runs_every_command_with_its_toolchain(tmp_path):
+    """The child sees the session's toolchain. A Solana image cannot install the one named in
+    ``rust-toolchain.toml``."""
+    session = replace(_unconfined(tmp_path), toolchain="1.90.0")
+    for run in (session.run_unconfined, session.run_confined):
+        result = await run(sys.executable, _PRINT_TOOLCHAIN, timeout_s=30)
+        assert result.stdout.strip() == "1.90.0"
+
+
+@pytest.mark.asyncio
+async def test_a_session_with_no_toolchain_follows_the_project(tmp_path, monkeypatch):
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
+    result = await _unconfined(tmp_path).run_unconfined(sys.executable, _PRINT_TOOLCHAIN, timeout_s=30)
+    assert result.stdout.strip() == "-"
+
+
+@pytest.mark.asyncio
+async def test_the_build_script_runs_its_command_with_the_sessions_toolchain(tmp_path, monkeypatch):
+    """certoraRun starts the script with its own environment, so the toolchain has to be on the
+    command."""
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
+    session = replace(_unconfined(tmp_path), toolchain="1.90.0")
+    script = await write_build_script(session, _build(), into=_outside(tmp_path), name="unit")
+    command_file = build_command_path(script)
+    command = json.loads(command_file.read_text())
+    assert command["env"] == {"RUSTUP_TOOLCHAIN": "1.90.0"}
+    command["argv"] = [sys.executable, *_PRINT_TOOLCHAIN]
+    command_file.write_text(json.dumps(command))
+    ran = subprocess.run([str(script), "--json"], capture_output=True, text=True, check=True)
+    assert ran.stdout.strip() == "1.90.0"
+
+
+def test_reading_a_workspace_passes_its_toolchain_and_cargo_home_on(tmp_path, monkeypatch):
+    """No toolchain and no cargo home leaves the environment alone. Otherwise the child keeps the
+    parent's environment and gains the override, and a cargo home is created before cargo runs."""
+    seen: list[dict[str, str] | None] = []
+
+    def fake_run(args, **kwargs):
+        seen.append(kwargs.get("env"))
+        return subprocess.CompletedProcess(args, 1, "", "no manifest")
+
+    monkeypatch.setattr(metadata.shutil, "which", lambda _: "/usr/bin/cargo")
+    monkeypatch.setattr(metadata.subprocess, "run", fake_run)
+    monkeypatch.setenv("AUTOPROVER_METADATA_SENTINEL", "kept")
+    monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
+    home = tmp_path / "private" / "cargo"
+
+    def read(*, toolchain: str | None, cargo_home: Path | None) -> None:
+        metadata._cargo_metadata(
+            tmp_path, offline=True, features=(), toolchain=toolchain,
+            cargo_home=cargo_home, timeout_s=5,
+        )
+
+    read(toolchain=None, cargo_home=None)
+    read(toolchain="1.90.0", cargo_home=None)
+    read(toolchain=None, cargo_home=home)
+    untouched, with_toolchain, with_home = seen
+    assert untouched is None
+    assert with_toolchain is not None
+    assert with_toolchain["RUSTUP_TOOLCHAIN"] == "1.90.0"
+    assert with_toolchain["AUTOPROVER_METADATA_SENTINEL"] == "kept"
+    assert with_toolchain.get("CARGO_HOME") != str(home)
+    assert with_home is not None
+    assert with_home["CARGO_HOME"] == str(home)
+    assert "RUSTUP_TOOLCHAIN" not in with_home
+    assert with_home["AUTOPROVER_METADATA_SENTINEL"] == "kept"
+    assert home.is_dir()
+

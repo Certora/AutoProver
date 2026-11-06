@@ -24,8 +24,8 @@ def test_the_chains_are_exactly_the_pipelines_rust_chains():
 def test_every_cvlr_crate_is_pinned_to_an_exact_release():
     # A range would let a resolver move the corpus's ground truth without an edit here, and the
     # compile gate would then be testing something nobody chose.
-    for chain, r in ref.REFERENCE_SET.items():
-        for crate in r.crates():
+    for chain, generations in ref.REFERENCE_SET.items():
+        for crate in (c for r in generations for c in r.crates()):
             assert crate.dependency_line().startswith(f'{crate.name} = "='), (chain, crate)
             assert crate.version[0].isdigit(), (chain, crate)
 
@@ -33,52 +33,65 @@ def test_every_cvlr_crate_is_pinned_to_an_exact_release():
 def test_the_platform_is_a_line_not_a_release():
     # The platform generation is about the target. An exact pin would claim a patch level that
     # was never compiled.
-    for chain, r in ref.REFERENCE_SET.items():
-        assert r.platform.sdk_crates, chain
-        for crate in r.platform.sdk_crates:
-            assert crate.dependency_line() == f'{crate.name} = "{crate.line}"'
-            assert "=" not in crate.line
+    for chain, generations in ref.REFERENCE_SET.items():
+        for r in generations:
+            assert r.platform.sdk_crates, chain
+            for crate in r.platform.sdk_crates:
+                assert crate.dependency_line() == f'{crate.name} = "{crate.line}"'
+                assert "=" not in crate.line
 
 
 def test_the_dependency_block_carries_the_platform_too():
     # Without it a probe cannot name AccountInfo, so an entry that mentions one would fail the
     # gate for a missing import rather than for anything about CVLR.
-    block = ref.SOLANA.cargo_dependencies()
-    assert 'cvlr = "=0.6.1"' in block
-    assert 'cvlr-solana = "=0.5.0"' in block
+    block = ref.SOLANA_V2.cargo_dependencies()
+    assert 'cvlr = "=0.6.2"' in block
+    assert 'cvlr-solana = "=0.5.1"' in block
     assert 'solana-program = "2.2"' in block
 
 
 def test_the_solana_choice_records_the_platform_it_implies():
-    # cvlr-solana 0.5.0 requires solana-program 2.2, and each Solana generation has its own
+    # cvlr-solana 0.5.x requires solana-program 2.2, and each Solana generation has its own
     # AccountInfo. Changing the chain crate without changing this label pairs the wrong types.
-    assert ref.SOLANA.chain_crate == ref.CrateRelease("cvlr-solana", "0.5.0")
-    assert "2.x" in ref.SOLANA.platform.label
+    assert ref.SOLANA_V2.chain_crate == ref.CrateRelease("cvlr-solana", "0.5.1")
+    assert "2.x" in ref.SOLANA_V2.platform.label
 
 
 def test_the_spl_token_model_is_part_of_the_reference_set():
-    # On crates.io at 0.5.0, the same version as the chain crate it was split from. Leaving it
-    # off the reference set would keep the scaffold from pinning it.
-    assert ref.CrateRelease("cvlr-spl-token", "0.5.0") in ref.SOLANA.specializations
-    assert ref.SOLANA.unpublished == ()
+    # Pinned with the chain crate, at the same version. Left off this list, the scaffold does not
+    # pin it.
+    assert ref.CrateRelease("cvlr-spl-token", "0.5.1") in ref.SOLANA_V2.specializations
+    assert ref.SOLANA_V2.unpublished == ()
 
 
 def test_a_fresh_project_is_pinned_the_whole_reference_set():
     # The scaffold is what writes dependencies, and it does not add one later. A specialization
     # left out of this list is a crate the project cannot name.
-    assert ref.SOLANA.scaffold_crates() == ref.SOLANA.crates()
-    assert {c.name for c in ref.SOLANA.scaffold_crates()} == {
+    assert ref.SOLANA_V2.scaffold_crates() == ref.SOLANA_V2.crates()
+    assert {c.name for c in ref.SOLANA_V2.scaffold_crates()} == {
         "cvlr", "cvlr-solana", "cvlr-solana-stake", "cvlr-spl-token",
     }
 
 
 def test_an_unknown_chain_raises_and_names_the_ones_that_exist():
     with pytest.raises(ValueError, match="no CVLR reference set for chain 'evm'") as e:
-        ref.reference_for("evm")
+        ref.generations("evm")
     assert "'solana'" in str(e.value) and "'soroban'" in str(e.value)
 
 
-def test_both_chains_share_one_core_release():
-    # The core line is chain-independent; two chains drifting apart on it would mean one of them
-    # is being compiled against a cvlr nobody chose.
-    assert ref.SOLANA.core == ref.SOROBAN.core
+def test_every_generation_shares_one_core_release():
+    # Every chain and every Solana generation is compiled against this same cvlr.
+    assert ref.SOLANA_V1_18.core == ref.SOLANA_V2.core == ref.SOLANA_V3.core == ref.SOROBAN.core
+
+
+def test_solana_has_one_reference_set_per_generation_newest_first():
+    assert ref.generations("solana") == (ref.SOLANA_V3, ref.SOLANA_V2, ref.SOLANA_V1_18)
+
+
+def test_the_sdk3_line_is_released_whole():
+    """The chain crate and its specializations are one release. A stake model from another
+    version was never published with this chain crate."""
+    v3 = ref.SOLANA_V3
+    assert {(c.name, c.version) for c in (v3.chain_crate, *v3.specializations)} == {
+        ("cvlr-solana", "0.6.0"), ("cvlr-solana-stake", "0.6.0"), ("cvlr-spl-token", "0.6.0")
+    }
