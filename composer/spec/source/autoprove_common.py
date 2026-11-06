@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 
 from composer.diagnostics.timing import RunSummary
-from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, PropertySetOptions, RAGDBOptions
 from composer.input.parsing import add_extra_context_args, add_protocol_args
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.pipeline.core import CorePipelineResult
@@ -45,7 +45,7 @@ _logger = logging.getLogger(__name__)
 # Args
 # ---------------------------------------------------------------------------
 
-class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
+class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, PropertySetOptions, Protocol):
     project_root: str
     main_contract: str
     system_doc: str | None
@@ -90,6 +90,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--interactive", action="store_true", help="Interactively refine the security properties after extraction")
     parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'threat' model (text or pdf) with which to seed the property extraction process")
     add_extra_context_args(parser)
+    add_protocol_args(parser, PropertySetOptions)
     parser.add_argument("--max-bug-rounds", type=int, default=DEFAULT_MAX_BUG_ROUNDS, help=f"Maximum number of property-inference rounds run per component; a round runs only if the previous one found a new property (default: {DEFAULT_MAX_BUG_ROUNDS})")
     # One budget, two spellings: the file shapes spend across phases, the scalar
     # sets the pool alone. argparse reports taking both, and renders the choice in

@@ -133,6 +133,9 @@ class ExtractionFailure[U: FeatureUnit](NamedTuple):
     unit: U
     error: BaseException
 
+    def describe(self) -> str:
+        return f"{self.unit.display_name}: {self.error}"
+
 
 class FinalProperties(BaseModel):
     """A component's property batch as it left the property pipeline — after

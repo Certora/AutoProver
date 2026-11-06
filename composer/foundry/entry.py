@@ -24,7 +24,7 @@ from typing import Annotated, AsyncIterator, Awaitable, Callable, Protocol, cast
 from composer.core.user import get_uid
 from composer.diagnostics.timing import RunSummary
 from composer.input.parsing import Arg, add_extra_context_args, add_protocol_args
-from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions, PropertySetOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
 from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
@@ -60,7 +60,7 @@ class FoundryRAGDBOptions(RAGDBOptions, Protocol):
     )]
 
 
-class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, Protocol):
+class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, PropertySetOptions, Protocol):
     project_root: str
     main_contract: str
     system_doc: str | None
@@ -150,6 +150,7 @@ def _build_parser() -> argparse.ArgumentParser:
     budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
     add_extra_context_args(parser)
+    add_protocol_args(parser, PropertySetOptions)
     parser.set_defaults(threat_model=None)
     return parser
 
