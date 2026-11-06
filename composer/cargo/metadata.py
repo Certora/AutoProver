@@ -33,8 +33,8 @@ _LIB_CRATE_TYPES = frozenset({"lib", "rlib", "dylib", "cdylib", "staticlib", "pr
 
 #: On a cold cache this resolves (and may download) the whole dependency graph, so it gets as long
 #: as a cold ``cargo fetch`` (:data:`composer.cargo.session.WARM_TIMEOUT_S`). A confined run reads
-#: into a fresh per-run ``CARGO_HOME``, so every run's first read is cold: a large Anchor program's
-#: took over seven minutes.
+#: into a fresh per-run ``CARGO_HOME``, so every run's first read is cold, and a cold read of a
+#: large program can exceed five minutes.
 METADATA_TIMEOUT_S = 900
 
 

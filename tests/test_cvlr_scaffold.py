@@ -309,6 +309,21 @@ def test_a_program_that_cannot_turn_its_entrypoint_off_turns_its_allocator_off(t
     assert again.changes == ()
 
 
+@pytest.mark.parametrize(
+    ("source", "calls"),
+    [
+        ("entrypoint!\n    (process_instruction);\n", True),
+        ("// entrypoint!(process_instruction);\n", False),
+        ("/* entrypoint!(process_instruction); */\n", False),
+    ],
+)
+def test_the_entrypoint_call_is_found_across_lines_and_not_in_comments(tmp_path, source, calls):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "entrypoint.rs").write_text(source)
+    plan, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    assert ("custom-heap" in _features(plan)) is calls
+
+
 def test_a_heap_switch_the_package_already_declares_is_enabled_not_redeclared(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "entrypoint.rs").write_text(ENTRYPOINT)

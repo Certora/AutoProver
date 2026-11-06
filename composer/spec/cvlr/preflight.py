@@ -157,6 +157,7 @@ async def select_package(
     reference = select_generation(workspace, member, candidates)
     if reference is None:
         linked = workspace.linked_into(member)
+        # An ordered set: the refusal names the witnesses in candidate order.
         witnesses = dict.fromkeys(w.name for r in candidates for w in r.platform.witnesses)
         builds = [
             f"{name} {', '.join(c.version for c in copies)}"
@@ -165,7 +166,7 @@ async def select_package(
         ]
         supported = "; ".join(f"{r.platform.label} ({r.line()})" for r in candidates)
         raise PreflightFailed(
-            f"{member.name} is on no Solana platform generation this build supports. It builds "
+            f"{member.name} is on no platform generation this build supports. It builds "
             f"{', '.join(builds) or 'none of the platform crates that identify one'}. Supported: "
             f"{supported}."
         )
@@ -209,8 +210,10 @@ async def prepare_workspace(
     ``reference`` is the set rather than a chain name because every function this calls takes the
     set.
     """
-    # The cargo home the gate's warm step fills (CargoSession.cargo_home), so what these reads fetch
-    # is not fetched again.
+    # The cargo home the gate's warm step fills (CargoSession.cargo_home), so the registry crates
+    # these reads fetch are not fetched again. Git sources are: these reads run the host cargo, and
+    # the warm step's platform-tools cargo does not see the host cargo's git checkouts
+    # (composer.cargo.sbf.platform_tools_cargos).
     cargo_home = sandbox_cargo_home(project_root) if sandbox.enabled else None
     workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     member = _pick_package(workspace, package)

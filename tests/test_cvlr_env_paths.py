@@ -85,13 +85,13 @@ def _workspace(*resolved: str) -> Workspace:
 @pytest.fixture
 def split() -> PathDialect:
     """The dialect a post-split target gets."""
-    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), SOLANA_V2)
+    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), PROGRAM, SOLANA_V2)
 
 
 @pytest.fixture
 def monolithic() -> PathDialect:
     """The dialect a 1.18 target gets, where the canonical paths are already the right ones."""
-    return dialect_for(_workspace("solana-program"), SOLANA_V1_18)
+    return dialect_for(_workspace("solana-program"), PROGRAM, SOLANA_V1_18)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -179,9 +179,7 @@ def test_the_blanket_stays_on_the_monolith(split: PathDialect) -> None:
 
     A non-inlined function is external: it returns an arbitrary value and writes nothing. Widened,
     the blanket made ``Sysvar::from_account_info`` return through memory and never succeed, and made
-    ``solana_stake_interface``'s authorization and stake math oracles. On the stake program that
-    cost 29 of 50 skipped properties and a program edit in six of seven components for every
-    ``Clock`` or ``Rent`` read. Projects verified on this generation run the blanket unwidened.
+    ``solana_stake_interface``'s authorization and stake math oracles.
     """
     import re
 
@@ -224,7 +222,7 @@ def test_a_target_without_the_split_crates_keeps_the_canonical_spelling(
 
 
 def test_a_chain_with_no_split_gets_a_dialect_that_changes_nothing() -> None:
-    dialect = dialect_for(_workspace("soroban-sdk"), SOROBAN)
+    dialect = dialect_for(_workspace("soroban-sdk"), PROGRAM, SOROBAN)
     assert dialect.aliases == ()
     assert dialect.spellings("^soroban_sdk::Env::storage$") == ("^soroban_sdk::Env::storage$",)
 
@@ -554,7 +552,7 @@ def _inlined_by_a_specific_directive(text: str, symbol: str) -> bool:
 
 
 def test_anchor_1_1_error_conversions_are_spelled_as_the_error_crate() -> None:
-    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), SOLANA_V3)
+    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), PROGRAM, SOLANA_V3)
     assert dialect.spellings(
         "^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::ErrorCode>>::from$"
     ) == (f"^{ERROR_CODE_FROM}$",)
@@ -562,7 +560,23 @@ def test_anchor_1_1_error_conversions_are_spelled_as_the_error_crate() -> None:
 
 def test_anchor_1_0_keeps_the_canonical_error_spelling() -> None:
     """Anchor 1.0.x is on the SDK 3 crates too, but its errors are still in ``anchor_lang``."""
-    dialect = dialect_for(_workspace(*SPLIT_CRATES), SOLANA_V3)
+    dialect = dialect_for(_workspace(*SPLIT_CRATES), PROGRAM, SOLANA_V3)
+    pattern = "^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::AnchorError>>::from$"
+    assert dialect.spellings(pattern) == (pattern,)
+
+
+def test_an_error_crate_the_program_does_not_link_keeps_the_canonical_spelling() -> None:
+    """A sibling member or a dev-dependency resolving ``anchor-lang-error`` is not in the 1.0
+    program, so its error paths stay in ``anchor_lang``."""
+    workspace = _workspace(*SPLIT_CRATES)
+    sibling = Workspace(
+        root=workspace.root,
+        target_directory=workspace.target_directory,
+        members=workspace.members,
+        packages=(*workspace.packages, _registry("anchor-lang-error")),
+        links=workspace.links,
+    )
+    dialect = dialect_for(sibling, PROGRAM, SOLANA_V3)
     pattern = "^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::AnchorError>>::from$"
     assert dialect.spellings(pattern) == (pattern,)
 
@@ -576,6 +590,6 @@ def test_the_anchor_1_1_dialect_inlines_the_error_conversion_the_program_calls()
         if line.strip() and not line.startswith("#")
     ]
     assert ERROR_CODE_FROM in symbols
-    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), SOLANA_V3)
+    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), PROGRAM, SOLANA_V3)
     assert not _inlined_by_a_specific_directive(compose_env(INLINING), ERROR_CODE_FROM)
     assert _inlined_by_a_specific_directive(compose_env(INLINING, dialect=dialect), ERROR_CODE_FROM)

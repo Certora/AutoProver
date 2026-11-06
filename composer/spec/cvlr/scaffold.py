@@ -101,8 +101,12 @@ NO_ENTRYPOINT_FEATURE = CargoFeature("no-entrypoint")
 CUSTOM_HEAP_FEATURE = CargoFeature("custom-heap")
 
 #: An invocation of the SDK's ``entrypoint!`` or ``entrypoint_no_alloc!``, which both install the
-#: allocator.
-_ENTRYPOINT_MACRO = re.compile(r"\bentrypoint(?:_no_alloc)?![ \t]*[(\[{]")
+#: allocator. Searched with comments removed (:data:`_COMMENT`).
+_ENTRYPOINT_MACRO = re.compile(r"\bentrypoint(?:_no_alloc)?!\s*[(\[{]")
+
+#: A Rust line or block comment. Block comments nest in Rust; a nested one leaves its tail behind,
+#: which only matters if that tail spells a macro call.
+_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -507,13 +511,12 @@ def _check_pins(
 ) -> None:
     """Refuse a project that is on a CVLR release other than the one this build is pinned to.
 
-    One line is supported per platform generation, and ``reference`` is the one for this
-    project's (:func:`select_generation`). Everything this scaffold writes belongs to it: the pins,
-    the specializations added beside them, and the env files :mod:`composer.spec.cvlr.tuning`
-    composes. A project already on another line cannot be given those without putting two CVLR
-    generations in one graph, which does not compile. This scaffold used to resolve that by deferring to the project's pin and
-    withholding the specializations; a run set up that way is on a configuration nothing else
-    here is built for, so it is refused instead.
+    One line is supported per platform generation, and ``reference`` is the set
+    :func:`select_generation` picked for this project. Everything this scaffold writes belongs to
+    it: the pins, the specializations added beside them, and the env files
+    :mod:`composer.spec.cvlr.tuning` composes. A project already on another line cannot be given
+    those without putting two CVLR generations in one graph, which does not compile, so it is
+    refused.
 
     Two readings, because neither alone covers the project. The resolved graph is exact and
     settles a crate some member already depends on. The manifests settle a crate declared in
@@ -609,7 +612,7 @@ def _calls_entrypoint(package: CratePackage) -> bool:
     """Whether ``package``'s own sources invoke the SDK's entrypoint macro."""
     source = package.root / "src"
     return any(
-        _ENTRYPOINT_MACRO.search(path.read_text(errors="replace"))
+        _ENTRYPOINT_MACRO.search(_COMMENT.sub(" ", path.read_text(errors="replace")))
         for path in source.rglob("*.rs")
         if not path.is_relative_to(source / "certora")
     )
@@ -896,7 +899,7 @@ def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _Pl
             plan.add_manifest_edit(
                 path,
                 AddTable(("patch", "crates-io", patch.name), (*preamble, *commit.patch_body())),
-                f"read {patch.name} {patch.version} from {commit.repo} at {commit.rev[:12]} "
+                f"read {patch.name} {patch.version} from {commit.repo} at {commit.rev} "
                 f"until it is on crates.io",
             )
             preamble = ()
@@ -912,7 +915,7 @@ def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _Pl
         ):
             plan.add_satisfied(
                 f"{patch.name} {patch.version} is already read from {commit.repo} at "
-                f"{commit.rev[:12]}"
+                f"{commit.rev}"
             )
         else:
             elsewhere = ", ".join(
@@ -960,7 +963,7 @@ def plan_scaffold(
     relative = _project_relative(package.root, workspace.root)
     plan = _PlanBuilder(workspace.root)
     inherit = plan.read(Path("Cargo.toml")).workspace is not None
-    dialect = dialect_for(workspace, reference)
+    dialect = dialect_for(workspace, package, reference)
 
     _plan_workspace_manifest(reference, plan)
     _plan_harness(package, relative, dialect, plan)

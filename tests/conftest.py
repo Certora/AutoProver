@@ -569,8 +569,8 @@ def read_from_commit(reference: ChainReference, commit: GitCommit) -> ChainRefer
     """
     return dataclasses.replace(
         reference,
-        chain_crate=dataclasses.replace(reference.chain_crate, unpublished=commit),
+        chain_crate=dataclasses.replace(reference.chain_crate, commit=commit),
         specializations=tuple(
-            dataclasses.replace(c, unpublished=commit) for c in reference.specializations
+            dataclasses.replace(c, commit=commit) for c in reference.specializations
         ),
     )

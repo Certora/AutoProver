@@ -69,7 +69,7 @@ class CrateRelease:
     version: str
     #: Where cargo reads the release from while crates.io does not have it. ``None`` for a
     #: release on crates.io.
-    unpublished: GitCommit | None = None
+    commit: GitCommit | None = None
 
     def dependency_line(self) -> str:
         """A ``Cargo.toml`` dependency line. Exact (``=version``), not a caret range.
@@ -92,9 +92,9 @@ def commit_patches(crates: Iterable[CrateRelease]) -> tuple[CommitPatch, ...]:
     """The patches that read these releases from their commits. Empty for releases that are all on
     crates.io."""
     return tuple(
-        CommitPatch(crate.name, crate.version, crate.unpublished)
+        CommitPatch(crate.name, crate.version, crate.commit)
         for crate in crates
-        if crate.unpublished is not None
+        if crate.commit is not None
     )
 
 
