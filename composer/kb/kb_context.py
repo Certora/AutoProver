@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 type _ContextLoader = Callable[[], str]
 
-#: Where a CVL recipe's action lies, so an agent can tell whether the fix is in its action space.
+#: Where the CVL fix is made: the spec, the prover configuration, or the source.
 type CvlChannel = Literal["CVL", "CONF", "EDIT"]
 
 
@@ -24,9 +24,11 @@ def _one_or_many(v: object) -> object:
 
 
 class KBRecipe[C: str](BaseModel):
-    """A recipe's index entry. Generic over its channel vocabulary because a channel names a tool
-    the reading agent has, and two agent families do not have the same tools — a shared union would
-    validate a recipe pointing at an action its readers cannot take."""
+    """One recipe in an index.
+
+    ``C`` is the channel names for one agent family. A channel is a tool that family has, so each
+    family keeps its own set.
+    """
 
     id: str
     name: str
@@ -38,13 +40,11 @@ class KBRecipe[C: str](BaseModel):
 
 
 class IndexModel[C: str](BaseModel):
-    #: Forbidden so that prose added to the index file fails to load rather than being dropped: the
-    #: agent sees only what ``kb_index.j2`` renders.
+    #: Unknown keys are an error. The agent only sees what ``kb_index.j2`` renders, so prose added
+    #: to the YAML would be dropped on load.
     model_config = ConfigDict(extra="forbid")
 
-    #: What each channel means for the agent reading it. Rendered with the index: a channel tells a
-    #: stuck agent whether the fix is in its action space, which it cannot do if only the index file
-    #: says what the name means.
+    #: Rendered with the index. This is where the agent reads what each channel means.
     channels: dict[C, str]
     recipes: list[KBRecipe[C]]
 
@@ -57,9 +57,9 @@ class IndexModel[C: str](BaseModel):
 
 
 class RecipeIndexParams(TypedDict):
-    #: Widened: the template only prints a channel, and the vocabulary was already enforced when
-    #: the index was validated. Keeping it narrow here would make the params type generic, which
-    #: the template fuzzer cannot resolve (``composer/meta/resolver.py``).
+    #: ``KBRecipe[str]`` because the template only prints the channel name. The vocabulary is
+    #: checked when the index loads, and ``composer.meta.resolver`` cannot resolve a generic
+    #: params type.
     recipes: Sequence[KBRecipe[str]]
     channels: Mapping[str, str]
     kb_retrieval_name: str
@@ -78,9 +78,7 @@ class ContextSpec:
 
 @dataclass(frozen=True)
 class RecipeSet[C: str]:
-    """The on-demand half of a bundle: an index that goes in front of every agent, and bodies
-    fetched by id. A family acquires one when it has recipes to serve; until then it has none, and
-    that is the whole of the difference."""
+    """The recipe index shown to every agent in the family, and the bodies fetched by id."""
 
     tool_name: str
     index_resource: str
@@ -90,22 +88,20 @@ class RecipeSet[C: str]:
 
 @dataclass(frozen=True)
 class KnowledgeBundle[C: str]:
-    """One agent family's practice knowledge: context documents that go in front of every agent,
-    and optionally a recipe set.
+    """Context documents for one agent family, and a recipe set when the family has recipes.
 
-    Frozen because the loaders below are memoized on the bundle, and every document is read once per
-    process. That is also the bundle's defining constraint: it is a *cacheable prefix*, so nothing
-    in it may vary per run. Per-run material belongs in the agent's own prompt.
+    Frozen so the loaders can be memoized on the bundle. Each document is read once per process.
+    Anything that changes between runs belongs in the agent's own prompt.
     """
 
-    #: Names the manual this family's knowledge sits beside, in the recipe index preamble.
+    #: The manual name used in the recipe index preamble.
     label: str
     specs: tuple[ContextSpec, ...]
     recipes: RecipeSet[C] | None = None
 
 
-# Not memoized, unlike the public entry points below: ``functools.cache`` erases a generic return
-# type, and every caller is itself cached, so this parses at most twice per recipe set.
+# Not cached. ``functools.cache`` erases the generic return type. Every caller is cached, so
+# this runs at most twice per recipe set.
 def _kb_model[C: str](recipes: RecipeSet[C]) -> IndexModel[C]:
     index_text = (files() / "resources" / recipes.index_resource).read_text()
     return recipes.parse_index(yaml.safe_load(index_text))
@@ -144,8 +140,10 @@ def _recipe_index_document[C: str](label: str, recipes: RecipeSet[C]) -> str:
 
 @cache
 def context_documents[C: str](bundle: KnowledgeBundle[C]) -> tuple[str, ...]:
-    """The bundle's documents, the recipe index last. The index is appended rather than listed
-    among ``specs`` because it is rendered from the bundle rather than read from a file."""
+    """The bundle's documents, with the recipe index last.
+
+    Specs are loaded from files. The index is rendered from the bundle, so it is appended here.
+    """
     titled = [(s.title, s.loader()) for s in bundle.specs]
     if bundle.recipes is not None:
         titled.append(
@@ -164,10 +162,12 @@ Title: {title}
 
 
 def with_context[C: str](bundle: KnowledgeBundle[C], prompt: "PromptInput") -> "PromptInput":
-    """The bundle's context documents (cache marker on the trailing block; the TTL is whatever the
-    builder's cache manager applies) followed by ``prompt`` — the standard initial-prompt shape for
-    an agent in that family. Goes through the initial prompt rather than ``front_matter`` so the
-    documents survive summarization rebuilds."""
+    """The bundle's documents, a cache marker, then ``prompt``.
+
+    The marker ends the cached prefix. The cache TTL comes from the builder's cache manager.
+    The documents sit in the initial prompt, so a summarization rebuild keeps them.
+    ``front_matter`` does not survive those rebuilds.
+    """
     rest = prompt if isinstance(prompt, list) else [prompt]
     return [*context_documents(bundle), CacheMarker, *rest]
 
@@ -205,11 +205,10 @@ def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
     return with_context(CVL_BUNDLE, prompt)
 
 
-#: Where a CVLR recipe's action lies. Taken from the author's tool list rather than from the shape
-#: of the artifact, because a channel's job is to tell a stuck agent whether the fix is in its
-#: action space: RULE is ``put_harness``, MOCK is ``summarize_for_prover``, EDIT is ``code_editor``,
-#: CONF is ``adjust_prover_config`` (the loop bound and ``optimistic_loop``, and nothing else), and
-#: SKIP is ``record_skip`` — the honest terminal channel, which CVL has no peer for.
+#: Each name is one of the author's tools. The channel says which tool can make the fix.
+#: ``RULE`` is ``put_harness``. ``MOCK`` is ``summarize_for_prover``. ``EDIT`` is ``code_editor``.
+#: ``CONF`` is ``adjust_prover_config``, and only for the loop bound and ``optimistic_loop``.
+#: ``SKIP`` is ``record_skip``.
 type CvlrChannel = Literal["RULE", "MOCK", "EDIT", "CONF", "SKIP"]
 
 CVLR_RECIPES = RecipeSet[CvlrChannel](
@@ -226,13 +225,12 @@ _CVLR_SPECS = (
     ),
 )
 
-#: For the agents that hold ``get_cvlr_recipe``: the author and the judge. The channel legend names
-#: the author's tools, as where a fix lies; the judge reads it to tell whether a rule took that fix.
+#: For the author and the judge, which both have ``get_cvlr_recipe``. The legend names the author's
+#: tools, and the judge uses it to see where a fix was made.
 CVLR_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", recipes=CVLR_RECIPES, specs=_CVLR_SPECS)
 
-#: The same facts without the recipe index, for a reader that cannot retrieve a recipe. The index
-#: says "retrieve the pointed file before acting", and its channels name the author's tools, so for
-#: any other reader it is an instruction it cannot follow about tools it does not have.
+#: The same facts, without the recipe index, for an agent that cannot call ``get_cvlr_recipe``.
+#: The index tells its reader to fetch a recipe and names the author's tools.
 CVLR_FACTS_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", specs=_CVLR_SPECS)
 
 

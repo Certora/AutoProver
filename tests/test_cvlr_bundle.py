@@ -29,8 +29,7 @@ def test_shipped_text_has_no_template_syntax():
 
 
 def test_the_index_says_what_each_channel_means():
-    """A channel tells a stuck agent whether the fix is in its action space. The legend has to be
-    in the rendered index, where the agent reads it."""
+    """The agent reads the legend from the rendered index."""
     index = context_documents(CVLR_BUNDLE)[-1]
     for name, meaning in _kb_model(CVLR_RECIPES).channels.items():
         assert f"`{name}`" in index
@@ -45,16 +44,15 @@ def test_every_recipe_resolves():
 
 
 def test_the_facts_bundle_is_the_same_facts_without_the_index():
-    """For the readers with no `get_cvlr_recipe`. The index tells its reader to retrieve a file and
-    names the author's tools in its channels, so it is only for an agent that can act on it; the
-    facts are the same document either way, so the two cannot drift."""
+    """An agent that cannot call ``get_cvlr_recipe`` gets the facts only. Both bundles load the
+    same facts document."""
     assert context_documents(CVLR_FACTS_BUNDLE) == context_documents(CVLR_BUNDLE)[:1]
     assert "get_cvlr_recipe" not in "".join(context_documents(CVLR_FACTS_BUNDLE))
 
 
 def test_the_index_names_the_recipe_tool():
-    """The display table is indexed by tool name when the tool is built. The index tells the agent
-    to call that same name."""
+    """Building the tool looks its name up in the display table. The index tells the agent to call
+    that name."""
     (tool,) = kb_tools(CVLR_BUNDLE)
     assert tool.name in CommonTools.kb_displays()
     assert tool.name in context_documents(CVLR_BUNDLE)[-1]

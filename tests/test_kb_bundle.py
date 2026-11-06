@@ -25,8 +25,7 @@ from composer.kb.knowledge_base import kb_tools
 
 
 def _stub_bundle() -> KnowledgeBundle[CvlChannel]:
-    """A second bundle over CVL's own resources: enough to tell what a bundle contributes to its
-    rendering from what the resources do."""
+    """A second bundle. It reuses CVL's recipes and carries its own label and one spec."""
     return KnowledgeBundle[CvlChannel](
         label="STUB",
         recipes=CVL_RECIPES,
@@ -35,17 +34,15 @@ def _stub_bundle() -> KnowledgeBundle[CvlChannel]:
 
 
 def test_a_bundle_renders_its_own_documents_and_its_own_label():
-    """The index is appended after the specs. Its preamble names this bundle's manual."""
     docs = context_documents(_stub_bundle())
     assert "Title: Stub Facts" in docs[0]
     index = docs[-1]
     assert "Title: STUB Recipes" in index
-    # A second bundle that still said "CVL" here would send its agents to the wrong corpus.
+    # The preamble names this bundle's manual. A hardcoded CVL would point at the wrong corpus.
     assert "the STUB manual" in index and "the CVL manual" not in index
 
 
 def test_the_context_is_a_cached_prefix():
-    """Read once per process, then a cache marker, then the run's own prompt."""
     bundle = _stub_bundle()
     docs = context_documents(bundle)
     assert with_context(bundle, "the run") == [*docs, CacheMarker, "the run"]
@@ -53,8 +50,8 @@ def test_the_context_is_a_cached_prefix():
 
 
 def test_a_channel_outside_the_vocabulary_is_rejected():
-    """A channel names a tool the reading agent has. A vocabulary wide enough for two agent
-    families would validate a recipe pointing at an action its readers cannot take."""
+    """``SKIP`` is not a CVL channel. The legend lists every CVL channel, so the failure is the
+    channel itself."""
     legend = {"CVL": "c", "CONF": "c", "EDIT": "e"}
     with pytest.raises(ValidationError) as raised:
         IndexModel[CvlChannel].model_validate(
@@ -67,8 +64,7 @@ def test_a_channel_outside_the_vocabulary_is_rejected():
 
 
 def test_a_recipe_channel_missing_from_the_legend_is_rejected():
-    """The rendered legend is how the agent learns what a channel means, so a recipe may only use a
-    channel the legend explains."""
+    """The agent learns what a channel means from the rendered legend."""
     with pytest.raises(ValidationError, match="does not explain"):
         IndexModel[CvlChannel].model_validate(
             {"channels": {"CVL": "c"},
@@ -78,8 +74,7 @@ def test_a_recipe_channel_missing_from_the_legend_is_rejected():
 
 
 def test_prose_in_the_index_file_is_rejected_rather_than_dropped():
-    """Only what the template renders reaches the agent, so a preamble in the file would be a
-    second copy nobody reads."""
+    """The agent only sees what the template renders. A preamble in the file would have no reader."""
     with pytest.raises(ValidationError):
         IndexModel[CvlChannel].model_validate(
             {"title": "t", "channels": {"CVL": "c"}, "recipes": []}
@@ -87,8 +82,7 @@ def test_prose_in_the_index_file_is_rejected_rather_than_dropped():
 
 
 def test_the_recipe_tool_name_comes_from_the_recipe_set():
-    """The description names the bundle. The tool name does not: a stub over CVL's recipes keeps
-    the CVL tool, and the description is filled in from the label after the class exists."""
+    """The tool name comes from the recipe set. The description is filled from the bundle label."""
     (tool,) = kb_tools(_stub_bundle())
     assert tool.name == CVL_RECIPES.tool_name
     assert tool.description is not None and "STUB recipe" in tool.description
@@ -99,8 +93,8 @@ def test_an_unknown_recipe_id_is_a_miss():
 
 
 def test_a_recipe_file_that_is_not_there_is_a_miss():
-    """The packaged index has no dangling path, so this substitutes one. A missing file is a miss
-    when the agent asks."""
+    """The packaged index points only at files that exist, so this index names one that does not.
+    The loader reports a miss when the agent asks."""
     recipes = RecipeSet[CvlChannel](
         tool_name=CVL_RECIPES.tool_name,
         index_resource=CVL_RECIPES.index_resource,
@@ -115,8 +109,8 @@ def test_a_recipe_file_that_is_not_there_is_a_miss():
 
 
 def test_a_bundle_without_recipes_contributes_no_tool_and_no_index():
-    """A family acquires recipes after it has knowledge worth indexing. Until then the tool would
-    answer every id with a miss, and the index document would advertise it."""
+    """A bundle with no recipes has no tool and no index. An empty tool would miss for every id,
+    and the index would offer that tool."""
     facts_only = KnowledgeBundle[CvlChannel](
         label="STUB", specs=(ContextSpec(title="Stub Facts", loader=lambda: "x"),)
     )
