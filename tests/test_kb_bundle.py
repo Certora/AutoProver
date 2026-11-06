@@ -1,27 +1,25 @@
-"""A knowledge bundle is a record, and a second one is an instance of it.
+"""What a knowledge bundle carries, and what stays separate between two of them.
 
-`composer/kb/kb_context.py` held one agent family's knowledge as module constants. These tests are
-the executable spec for adding another: what a bundle has to carry, and what stays separate between
-two of them. The one thing worth stating outright is the constraint that makes the bundle cheap —
-its documents are read once per process and sit behind a cache marker, so nothing in one may vary
-per run.
+The documents are a cacheable prefix: the same text on every call, then a cache marker, then the
+run's own prompt.
 """
-
-from importlib.resources import files
 
 import pytest
 from pydantic import ValidationError
 
+from graphcore.graph import CacheMarker
+
 from composer.kb.kb_context import (
-    CVL_BUNDLE,
     CVL_RECIPES,
+    KB_INDEX_TEMPLATE,
     ContextSpec,
     CvlChannel,
     IndexModel,
     KnowledgeBundle,
-    _kb_model,
+    RecipeSet,
     context_documents,
     kb_loader,
+    with_context,
 )
 from composer.kb.knowledge_base import kb_tools
 
@@ -37,24 +35,21 @@ def _stub_bundle() -> KnowledgeBundle[CvlChannel]:
 
 
 def test_a_bundle_renders_its_own_documents_and_its_own_label():
+    """The index is appended after the specs. Its preamble names this bundle's manual."""
     docs = context_documents(_stub_bundle())
-    assert [d for d in docs if "Title: Stub Facts" in d], "the bundle's own spec is missing"
-    index = next(d for d in docs if "Title: STUB Recipes" in d)
-    # The preamble points at a manual by name; a second bundle inheriting "CVL" there would send
-    # its agents to the wrong corpus.
+    assert "Title: Stub Facts" in docs[0]
+    index = docs[-1]
+    assert "Title: STUB Recipes" in index
+    # A second bundle that still said "CVL" here would send its agents to the wrong corpus.
     assert "the STUB manual" in index and "the CVL manual" not in index
 
 
-def test_the_recipe_index_is_last():
-    """It is appended by the builder rather than listed among the specs, because every bundle has
-    exactly one and it is rendered from the bundle rather than read from a file."""
-    assert "Recipes" in context_documents(_stub_bundle())[-1]
-
-
-def test_two_bundles_do_not_share_their_loaded_index():
-    cvl, stub = context_documents(CVL_BUNDLE), context_documents(_stub_bundle())
-    assert len(cvl) == 4 and len(stub) == 2
-    assert "CVL Baseline Knowledge" not in stub[0]
+def test_the_context_is_a_cached_prefix():
+    """Read once per process, then a cache marker, then the run's own prompt."""
+    bundle = _stub_bundle()
+    docs = context_documents(bundle)
+    assert with_context(bundle, "the run") == [*docs, CacheMarker, "the run"]
+    assert context_documents(bundle) is docs
 
 
 def test_a_channel_outside_the_vocabulary_is_rejected():
@@ -91,17 +86,32 @@ def test_prose_in_the_index_file_is_rejected_rather_than_dropped():
         )
 
 
-def test_the_recipe_tool_takes_its_name_and_description_from_the_bundle():
+def test_the_recipe_tool_name_comes_from_the_recipe_set():
+    """The description names the bundle. The tool name does not: a stub over CVL's recipes keeps
+    the CVL tool, and the description is filled in from the label after the class exists."""
     (tool,) = kb_tools(_stub_bundle())
-    assert tool.name == "get_cvl_recipe"
+    assert tool.name == CVL_RECIPES.tool_name
     assert tool.description is not None and "STUB recipe" in tool.description
 
 
-def test_the_loader_resolves_an_id_to_its_file_and_nothing_else():
-    loader = kb_loader(CVL_RECIPES)
-    assert loader("no-such-recipe") is None
-    some = _kb_model(CVL_RECIPES).recipes[0]
-    assert loader(some.id) == (files("composer.kb") / "resources" / some.file).read_text()
+def test_an_unknown_recipe_id_is_a_miss():
+    assert kb_loader(CVL_RECIPES)("no-such-recipe") is None
+
+
+def test_a_recipe_file_that_is_not_there_is_a_miss():
+    """The packaged index has no dangling path, so this substitutes one. A missing file is a miss
+    when the agent asks."""
+    recipes = RecipeSet[CvlChannel](
+        tool_name=CVL_RECIPES.tool_name,
+        index_resource=CVL_RECIPES.index_resource,
+        parse_index=lambda _raw: IndexModel[CvlChannel].model_validate(
+            {"channels": {"CVL": "c"},
+             "recipes": [{"id": "MISSING", "name": "n", "triggers": [],
+                          "file": "recipes/no-such-file.md", "channel": "CVL"}]}
+        ),
+        index_template=KB_INDEX_TEMPLATE,
+    )
+    assert kb_loader(recipes)("MISSING") is None
 
 
 def test_a_bundle_without_recipes_contributes_no_tool_and_no_index():
