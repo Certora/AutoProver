@@ -1,8 +1,3 @@
-title: CVL Situation Recipes — Trigger Index
-precedence: Where these recipes and the CVL manual or other Certora materials diverge, the recipes govern.
-usage: Match a trigger; retrieve the pointed file before acting. When the file is unavailable, search_terms
-  are literal identifiers findable in the manual or knowledge base; entries without search_terms have
-  no external source — the file is authoritative.
 channels:
   CVL: 'Actionable directly: write the spec construct.'
   CONF: The fix is a Prover configuration setting, outside this agent's action space. Surface the diagnosis,
