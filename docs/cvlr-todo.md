@@ -808,6 +808,27 @@ ones it was not, and say that the exclusion is the run's scope rather than a fin
 code. The run overview could say how many pursued properties were narrowed. This should ship with,
 or before, the first prioritized Solana runs that users see.
 
+**U51. A cloud job that never leaves the queue is reported as a failed job.** `cloud_results` polls
+a job for `runtime_bound + 5 min` (`prover/core.py`, `poll_timeout`), counted from submission, so
+queue time uses up the budget meant for the Prover's runtime. On the 2026-11-06 stake run
+(`70635f3a`) an EC2 throttling incident in us-west-2 kept job `01413cbd` `RUNNABLE` for over 25
+minutes. The poll timed out, `poll_job`'s `TimeoutError` became `CloudJobError(JobStatus.UNKNOWN)`,
+and the author was told "Prover cloud job did not produce results (status UNKNOWN). The job and its
+failure output are at …" (`cloud_job_failure_message`). Nothing says the job never started, so the
+author cannot tell an infrastructure delay from a halt on its own rules. It resubmitted, but it
+could as well have cut or weakened rules that were never run. The abandoned job is not cancelled,
+so it runs for nothing once capacity returns.
+
+The fix has three parts, all in shared code (`prover/cloud.py`, `prover/core.py`), so CVL runs get
+it too:
+
+- Count the runtime bound from the first `RUNNING` status. Bound queue time separately and
+  generously, or not at all.
+- Make "never started" an outcome of its own rather than `UNKNOWN`. The text should say how long the
+  job waited, that this is an infrastructure delay and not a verdict, and that the same draft should
+  be resubmitted unchanged.
+- Cancel a job the poll gives up on, if the cloud API allows it.
+
 U51 to U55 come from a prioritized benchmark run on a Solana lending program's liquidity layer
 (dev cloud, 2026-11-05): 53 rules, 20 Prover jobs, 6 of them halted. Each is general.
 
