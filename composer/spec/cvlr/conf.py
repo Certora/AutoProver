@@ -110,18 +110,16 @@ def conf_history(tunable: TunableConf) -> tuple[str, ...]:
 #: itself: it reaches ``cargo certora-sbf`` only on the CLI's own build path, and this backend owns
 #: the build.
 #:
-#: One release serves every Solana platform generation. v1.53 ships rustc and cargo 1.89. The
-#: older v1.43 shipped 1.79, whose cargo cannot parse an edition-2024 manifest, and the SDK 3
-#: crates' lockfiles are full of them. The SDK 2.2 vault builds under v1.53 too.
+#: One release serves every Solana platform generation. v1.53 ships rustc and cargo 1.89. v1.43
+#: shipped cargo 1.79, which cannot parse an edition-2024 manifest, and the SDK 3 lockfiles contain
+#: those.
 PLATFORM_TOOLS_VERSION = "v1.53"
 
-#: The host Rust toolchain every cargo command of a CVLR run uses, whatever the target's
-#: ``rust-toolchain.toml`` pins. The pin is for the project's own builds: host checks and Anza's SBF
-#: toolchain. The program this backend verifies is compiled by the platform tools' rustc whatever the
-#: pin says, and so is its ``cargo check`` (:func:`~composer.cargo.sbf.sbf_check`). The host
-#: toolchain only runs ``cargo metadata`` and the cargo that launches ``cargo certora-sbf``.
-#: Following the pin instead fails wherever the runtime user cannot write the rustup home, as in a
-#: container image: a toolchain the image lacks cannot be installed, and cargo does not start.
+#: Host Rust toolchain for every cargo command in a CVLR run, in place of the project's
+#: ``rust-toolchain.toml``. The program and its ``cargo check`` are compiled by the platform-tools
+#: rustc (:func:`~composer.cargo.sbf.sbf_check`). This toolchain runs ``cargo metadata`` and the
+#: cargo that launches ``cargo certora-sbf``. A container's rustup home is read-only, so a toolchain
+#: the image does not have cannot be installed, and cargo does not start.
 HOST_RUST_TOOLCHAIN = "1.90.0"
 
 

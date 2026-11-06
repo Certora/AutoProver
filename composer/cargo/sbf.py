@@ -45,7 +45,6 @@ _log = logging.getLogger(__name__)
 #: Certora's tool, not ``cargo-build-sbf``: it pins the platform-tools version
 #: and prints the build manifest.
 SBF_SUBCOMMAND = "certora-sbf"
-#: The target triple ``cargo certora-sbf`` builds for.
 SBF_TARGET = "sbpf-solana-solana"
 
 DEFAULT_BUILD_TIMEOUT_S: int = 1800  # 30 minutes
@@ -239,13 +238,12 @@ def platform_tools_cargos(version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> 
 
 
 def sbf_check(tools_version: str, *, root: Path = PLATFORM_TOOLS_ROOT) -> CrossCheck:
-    """A ``cargo check`` of what ``cargo certora-sbf`` builds: its target and profile, with its
-    cargo, its compiler and the C tools it hands build scripts.
+    """``cargo check`` for the target and profile ``cargo certora-sbf`` builds, using that
+    version's cargo, rustc, and the C tools it passes to build scripts.
 
-    The host cannot always stand in for the chain. A program's own layout assertions can hold on
-    SBF and fail on x86_64, where ``u128`` is 16-byte aligned from rustc 1.77 on. The check also
-    shares the build's target directory: with the build's environment and profile, the host units
-    (build scripts, proc-macros) one compiles are fresh for the other.
+    From rustc 1.77, ``u128`` is 16-byte aligned on x86_64, so a layout assertion that holds under
+    the SBF compiler can fail on the host. The check shares the build's target directory, profile,
+    and tools, so a build script or proc-macro compiled for one stays valid for the other.
 
     Raises :class:`PlatformToolsMissing` when ``tools_version`` has no cargo under ``root``.
     """
@@ -343,8 +341,7 @@ async def write_build_script(
                 "cwd": str(session.workdir.resolve()),
                 "argv_prefix": spec["argv_prefix"],
                 "argv": build.argv(),
-                # The prover runs the script with its own environment, so the session's toolchain
-                # has to travel with the command.
+                # The prover runs the script in its own environment, so the toolchain is stored here.
                 "env": session.toolchain_env,
                 "timeout_s": spec["timeout_s"],
             },

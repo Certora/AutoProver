@@ -563,10 +563,10 @@ def _tools_of(check: CrossCheck, tools: Path) -> None:
 
 
 def test_the_sbf_check_uses_the_platform_tools_flavour_that_has_cargo(tmp_path):
-    """The certora tree wins when both exist. The plain tree is what an install ships when it has
-    no certora tree. Either way the compiler and the C tools are that tree's: a build script that
-    reruns when ``CC`` changes was rebuilt, with every crate above it, each time the check and the
-    build took turns."""
+    """v1.53's certora tree is used when it has a cargo. The plain tree is used when that cargo is
+    absent. The compiler and the C tools come from the same tree. A build script that reruns when
+    ``CC`` changes would rebuild, along with every crate that depends on it, each time check and
+    build alternate in one target directory."""
     certora = _platform_tools(tmp_path, "v1.53", "platform-tools-certora")
     plain = _platform_tools(tmp_path, "v1.53", "platform-tools")
     _tools_of(sbf_check("v1.53", root=tmp_path), certora)
@@ -1016,7 +1016,8 @@ _PRINT_TOOLCHAIN = ["-c", "import os; print(os.environ.get('RUSTUP_TOOLCHAIN', '
 
 @pytest.mark.asyncio
 async def test_a_session_runs_every_command_with_its_toolchain(tmp_path):
-    """Whatever the project's rust-toolchain.toml pins: the Solana image cannot install it."""
+    """The child sees the session's toolchain. A Solana image cannot install the one named in
+    ``rust-toolchain.toml``."""
     session = replace(_unconfined(tmp_path), toolchain="1.90.0")
     for run in (session.run_unconfined, session.run_confined):
         result = await run(sys.executable, _PRINT_TOOLCHAIN, timeout_s=30)
@@ -1032,7 +1033,8 @@ async def test_a_session_with_no_toolchain_follows_the_project(tmp_path, monkeyp
 
 @pytest.mark.asyncio
 async def test_the_build_script_runs_its_command_with_the_sessions_toolchain(tmp_path, monkeypatch):
-    """certoraRun runs the script with its own environment, not the session's."""
+    """certoraRun starts the script with its own environment, so the toolchain has to be on the
+    command."""
     monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
     session = replace(_unconfined(tmp_path), toolchain="1.90.0")
     script = await write_build_script(session, _build(), into=_outside(tmp_path), name="unit")

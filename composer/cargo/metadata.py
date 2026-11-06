@@ -31,10 +31,9 @@ from composer.cargo.features import CargoFeature
 #: examples are never the verification target.
 _LIB_CRATE_TYPES = frozenset({"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"})
 
-#: On a cold cache this resolves (and may download) the whole dependency graph, so it gets as long
-#: as a cold ``cargo fetch`` (:data:`composer.cargo.session.WARM_TIMEOUT_S`). A confined run reads
-#: into a fresh per-run ``CARGO_HOME``, so every run's first read is cold, and a cold read of a
-#: large program can exceed five minutes.
+#: A cold read resolves the graph and may download it. A confined run uses a fresh per-run
+#: ``CARGO_HOME``, so the first read of a run is cold, and a large program can take more than five
+#: minutes. Same budget as :data:`composer.cargo.session.WARM_TIMEOUT_S`.
 METADATA_TIMEOUT_S = 900
 
 

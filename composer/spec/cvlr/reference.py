@@ -13,9 +13,8 @@ the chain's own SDK that a chain crate is built against, such as ``solana-progra
 
 Exact versions, not ranges. The core and the chain crates are versioned separately, so "latest"
 can pair a new core with an old chain crate. A bump is an edit here, and it moves every project
-this build sets up: what is named here is the one CVLR line supported per platform generation, the
-way a Prover release ships one CVL. That is why :mod:`composer.spec.cvlr.scaffold` refuses a project
-already on a different line rather than deferring to it.
+this build sets up. Each platform generation has one CVLR line.
+:mod:`composer.spec.cvlr.scaffold` refuses a project that is already on a different line.
 
 A chain crate is bound to one platform generation, and each generation has its own ``AccountInfo``.
 ``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.x with 2.2, and 0.6.x with the
@@ -38,37 +37,29 @@ from composer.spec.cvlr.forks import ANCHOR_FORK, FIXED_FORK, ForkOverride
 
 @dataclass(frozen=True)
 class GitCommit:
-    """The commit a release was cut from, read in place of crates.io until the release is published.
+    """A commit cargo fetches in place of a crates.io release.
 
-    The project still declares the crates.io spelling (``=version``), so the pin gate reads it as
-    it reads any release. A ``[patch.crates-io]`` entry redirects where cargo fetches it. Cargo
-    applies a patch only when the patched crate's version meets the requirement, so a commit at
-    any other version fails the build instead of standing in for the release.
-
-    A commit, not a tag or a branch: either can be moved, and the reference set names what was
-    compiled.
+    The project still declares the crates.io requirement (``=version``). A ``[patch.crates-io]``
+    entry points the fetch at this commit. Cargo applies the patch only when the commit's crate
+    version meets that requirement. The revision is a commit hash, because a tag or a branch can
+    move.
     """
 
     repo: str
     rev: str
 
     def patch_body(self) -> tuple[tuple[str, str], ...]:
-        """The body of the crate's ``[patch.crates-io.<crate>]`` table."""
         return (("git", self.repo), ("rev", self.rev))
 
     def patch_line(self, crate: str) -> str:
-        """The crate's entry in a ``[patch.crates-io]`` table, as one line."""
         return f'{crate} = {{ git = "{self.repo}", rev = "{self.rev}" }}'
 
 
 @dataclass(frozen=True)
 class CrateRelease:
-    """One crate at one released version."""
-
     name: str
     version: str
-    #: Where cargo reads the release from while crates.io does not have it. ``None`` for a
-    #: release on crates.io.
+    #: ``None`` when the release is on crates.io. Otherwise the commit cargo fetches.
     commit: GitCommit | None = None
 
     def dependency_line(self) -> str:
@@ -81,7 +72,7 @@ class CrateRelease:
 
 @dataclass(frozen=True)
 class CommitPatch:
-    """One crate cargo reads from a commit: an entry in a ``[patch.crates-io]`` table."""
+    """One ``[patch.crates-io]`` entry."""
 
     name: str
     version: str
@@ -89,8 +80,7 @@ class CommitPatch:
 
 
 def commit_patches(crates: Iterable[CrateRelease]) -> tuple[CommitPatch, ...]:
-    """The patches that read these releases from their commits. Empty for releases that are all on
-    crates.io."""
+    """Patches for the releases that name a commit. Empty when every release is on crates.io."""
     return tuple(
         CommitPatch(crate.name, crate.version, crate.commit)
         for crate in crates
@@ -228,25 +218,22 @@ class ChainReference:
         return "\n".join(lines)
 
     def from_commits(self) -> tuple[CommitPatch, ...]:
-        """The crates of :meth:`crates` that cargo reads from a commit rather than crates.io."""
         return commit_patches(self.crates())
 
 
 #: The core line, shared by every chain. ``cvlr-spec`` (``cvlr_spec!``, ``cvlr_rules!``,
 #: ``cvlr_lemma!``) is a dependency of ``cvlr``, so a target names one crate and gets the
-#: parametric-rule layer with it. 0.6.2 is the first release with the public API documented and
-#: with ``#[rule]`` recording each rule in the ``.cvlr_rules`` section.
+#: parametric-rule layer with it.
 _CORE = CrateRelease("cvlr", "0.6.2")
 
-#: ``cvlr-solana`` 0.5.1: 0.5.0 with the public API documented and the ``rt`` feature fixed. The
-#: three crates of that repository are released together, at one version.
+#: ``cvlr-solana`` 0.5.1. The three crates of that repository are released together, at one version.
 SOLANA_V2 = ChainReference(
     core=_CORE,
     chain_crate=CrateRelease("cvlr-solana", "0.5.1"),
     specializations=(
         CrateRelease("cvlr-solana-stake", "0.5.1"),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
-        # summaries. Split out of the chain crate, and released with it.
+        # summaries.
         CrateRelease("cvlr-spl-token", "0.5.1"),
     ),
     forks=(ANCHOR_FORK, FIXED_FORK),
@@ -254,9 +241,9 @@ SOLANA_V2 = ChainReference(
         # The last line published as one ``solana-program`` crate. v3 is only the split crates.
         label="solana-program 2.x",
         sdk_crates=(CrateRequirement("solana-program", "2.2"),),
-        # ``solana-account-info`` first: it defines ``AccountInfo`` and exists on both 2.x and 3.x.
-        # ``solana-program`` is the fallback for 1.x, which predates the split and defines the
-        # type inside the monolith, so a 1.x target reads as off this generation, not as on none.
+        # ``solana-account-info`` comes first: it defines ``AccountInfo``, and both 2.x and 3.x have
+        # the crate. ``solana-program`` covers a target that still defines the type in the monolith.
+        # A 1.x copy is another generation of that witness, so the platform gate refuses the 2.x line.
         witnesses=(
             CrateRequirement("solana-account-info", "2.3"),
             CrateRequirement("solana-program", "2.2"),
@@ -288,22 +275,20 @@ SOLANA_V2 = ChainReference(
                     "solana_cpi::invoke_signed_unchecked",
                 ),
             ),
-            # Not aliased: `solana_program::instruction::get_stack_height` is still a function in
-            # the monolith on this generation, and `solana_program::poseidon` does not exist here
-            # under any spelling. Rewriting either would hide a directive that does not apply.
+            # `solana_program::instruction::get_stack_height` stays in the monolith on this
+            # generation, and `solana_program::poseidon` does not exist here, so neither is aliased.
+            # Rewriting either would point a directive at a symbol that is not there.
             #
-            # Nor is the never-inline blanket `solana_program::.*`. It matches only what stayed in
-            # the monolith, so the split crates are analyzed. That is what projects verified on
-            # this generation run, and what their specs depend on: a non-inlined function is
-            # external, returning an arbitrary value and writing nothing, so
-            # `Sysvar::from_account_info` never returns `Ok` and the program's domain interface
-            # crates (`solana_stake_interface`) become oracles.
+            # The never-inline blanket `solana_program::.*` matches only what stayed in the
+            # monolith, so the split crates are analyzed. A non-inlined function is external: an
+            # arbitrary return value, and no writes. Widening the blanket made
+            # `Sysvar::from_account_info` never return `Ok`, and made `solana_stake_interface`
+            # an oracle.
         ),
     ),
 )
 
-#: ``cvlr-solana`` 0.6.0, the SDK 3 line: 0.5.1 ported to the split ``solana-*`` 3.x crates, with
-#: both specializations.
+#: ``cvlr-solana`` 0.6.0, for the split ``solana-*`` 3.x crates.
 SOLANA_V3 = replace(
     SOLANA_V2,
     chain_crate=CrateRelease("cvlr-solana", "0.6.0"),
@@ -312,12 +297,10 @@ SOLANA_V3 = replace(
         CrateRelease("cvlr-spl-token", "0.6.0"),
     ),
     platform=PlatformGeneration(
-        # No `solana-program` at all: every platform type is in its own crate.
+        # Every platform type lives in its own crate.
         label="solana-* 3.x",
         sdk_crates=(CrateRequirement("solana-account-info", "3"),),
         witnesses=(CrateRequirement("solana-account-info", "3.0"),),
-        # Read off the stake program's demangled symbols (`tests/data/stake_sdk3_sbf_symbols.txt`).
-        # Most are the 2.x spellings. Three are not:
         path_aliases=(
             PathAlias("solana_program::account_info", ("solana_account_info",)),
             # `Pubkey` is `solana-address`'s `Address`, which `solana-pubkey` re-exports. The
@@ -333,39 +316,35 @@ SOLANA_V3 = replace(
             PathAlias("solana_program::hash", ("solana_hash",)),
             PathAlias("solana_program::system_program", ("solana_sdk_ids::system_program",)),
             PathAlias("solana_program::incinerator", ("solana_sdk_ids::incinerator",)),
-            # No monolith, so no second spelling: the facade's own `invoke_signed_unchecked`
-            # is gone with it.
+            # Only `solana_cpi::invoke_signed_unchecked` exists.
             PathAlias(
                 "solana_program::program::invoke_signed_unchecked",
                 ("solana_cpi::invoke_signed_unchecked",),
             ),
-            # `invoke`, `invoke_signed` and `set_return_data` were real functions in the 2.x
-            # monolith. They are `solana-cpi`'s now.
+            # `invoke`, `invoke_signed`, and `set_return_data` live in `solana-cpi`.
             PathAlias("solana_program::program", ("solana_cpi",)),
             PathAlias(
                 "solana_program::instruction::get_stack_height",
                 ("solana_instruction::syscalls::get_stack_height",),
             ),
             PathAlias("solana_program::poseidon", ("solana_poseidon",)),
-            # The never-inline blanket `solana_program::.*` is not aliased, as on 2.x. Here it
-            # matches nothing, so the whole SDK is analyzed. `solana_get_sysvar::get_sysvar`, the
-            # generic sysvar read `StakeHistorySysvar` goes through, needs no tuning: the syscall
-            # under it is modelled.
+            # The never-inline blanket `solana_program::.*` is left as written. It matches nothing
+            # on this generation, so the split crates are analyzed. `solana_get_sysvar::get_sysvar`,
+            # which `StakeHistorySysvar` calls, needs no alias: the syscall under it is modelled.
             #
-            # Not a platform crate: Anchor 1.1.0 moved `anchor_lang::error` into the
-            # `anchor-lang-error` crate. The anchor blanket `^.*anchor_lang.*$` still matches it,
-            # so without this the `Error` conversions are opaque. An opaque conversion on a
-            # constructor's error path leaves the `Ok` payload's pointers without provenance, and
-            # the first dereference fails with [3003]. Anchor 1.0.x has no such crate and keeps
-            # the canonical spelling.
+            # Anchor 1.1.0 moved `anchor_lang::error` into the `anchor-lang-error` crate. The
+            # anchor blanket `^.*anchor_lang.*$` still matches that crate, so the `Error`
+            # conversions stay opaque without this alias. An opaque conversion on a constructor's
+            # error path leaves the `Ok` payload's pointers without provenance, and the first
+            # dereference fails with [3003]. Anchor 1.0.x has no `anchor-lang-error` crate, so the
+            # canonical spelling stays.
             PathAlias("anchor_lang::error::", ("anchor_lang_error::",)),
         ),
     ),
 )
 
-#: ``cvlr-solana`` 0.4.6, the release for ``solana-program`` 1.18 (branch ``v0.4``): 0.4.5 with
-#: the public API documented and the ``rt`` feature fixed. It requires ``cvlr-*`` ``>=0.4, <1``,
-#: so it resolves onto the shared 0.6.2 core with one copy of each core crate.
+#: ``cvlr-solana`` 0.4.6, for ``solana-program`` 1.18. It requires ``cvlr-*`` ``>=0.4, <1``, so
+#: cargo resolves it onto the shared 0.6.2 core, one copy of each core crate.
 SOLANA_V1_18 = ChainReference(
     core=_CORE,
     chain_crate=CrateRelease("cvlr-solana", "0.4.6"),
@@ -391,9 +370,7 @@ SOROBAN = ChainReference(
     platform=PlatformGeneration(
         label="soroban-sdk 22.x",
         sdk_crates=(CrateRequirement("soroban-sdk", "22"),),
-        # Soroban has one SDK crate, so the declared crate and the witness are the same. Spelled
-        # out because that is a fact about this platform. On Solana the witness list names a crate
-        # this generation does not declare.
+        # One SDK crate, so the declared crate and the witness are the same.
         witnesses=(CrateRequirement("soroban-sdk", "22"),),
     ),
 )

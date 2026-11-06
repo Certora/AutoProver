@@ -37,8 +37,7 @@ SPLIT_CRATES = (
     "solana-sdk-ids",
     "solana-cpi",
     "solana-instruction",
-    # No alias names these. The vault resolves them, and its symbol table below has symbols in
-    # them.
+    # The vault resolves these, and the symbol table below has symbols in them. No alias names them.
     "solana-program-entrypoint",
     "solana-sha256-hasher",
     "solana-system-interface",
@@ -425,8 +424,8 @@ def test_program_error_from_is_inlined_under_the_dialect(split: PathDialect) -> 
     assert "#[inline(never)] ^<solana_program_error::ProgramError" not in composite
 
 
-#: The SDK 3 counterpart of :data:`SYMBOLS_FIXTURE`: stake `main`, which has no `solana-program` at
-#: all. The SDK 3 alias table was read off it.
+#: Stake's ``main`` on SDK 3. It links no ``solana-program``. The SDK 3 aliases were measured from
+#: this file.
 SDK3_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "stake_sdk3_sbf_symbols.txt"
 
 
@@ -439,9 +438,8 @@ def _sdk3_symbols() -> tuple[str, ...]:
 
 
 def test_every_sdk3_alias_the_binary_exercises_names_a_path_it_defines() -> None:
-    """On SDK 3 the canonical spelling never appears, so an alias is exercised exactly when its
-    target does. The unexercised ones are stated: the list changing says something about the
-    fixture, or about an alias that has started to name nothing."""
+    """On SDK 3 the canonical spelling does not appear in the binary, so an alias is exercised when
+    its target spelling does. The aliases this binary never mentions are listed here."""
     symbols = _sdk3_symbols()
     unexercised = [
         alias.canonical
@@ -462,8 +460,8 @@ def test_every_sdk3_alias_the_binary_exercises_names_a_path_it_defines() -> None
 
 
 def test_the_sdk3_dialect_reaches_the_sysvar_reads_and_cpi_the_program_calls() -> None:
-    """Without the dialect, no platform directive reaches them: each is spelled `solana_program::`,
-    and the program has no such crate."""
+    """The tuning files spell these `solana_program::`, and the program has no such crate, so a
+    directive matches only after the dialect rewrites it."""
     import re
 
     symbols = _sdk3_symbols()
@@ -488,16 +486,13 @@ def test_the_sdk3_dialect_reaches_the_sysvar_reads_and_cpi_the_program_calls() -
     assert calls <= reached(starting_env("cvlr_inlining_core.txt", v3))
 
 
-#: The 1.18 counterpart: a crate on the monolith whose one rule calls each platform function the
-#: tuning files address.
+#: A 1.18 program. Its one rule calls each platform function the tuning files name.
 V1_18_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "solana_1_18_sbf_symbols.txt"
 
 
 def test_the_starting_files_address_1_18_symbols_as_spelled(monolithic: PathDialect) -> None:
-    """1.18 has no aliases because the starting files are written in its spelling. Every platform
-    function the binary links is matched by a directive that names it, and not only by a blanket:
-    a blanket alone would mean the specific directive no longer names a real symbol. The `fmt`
-    impls are the exception, and are meant to be."""
+    """1.18 uses the starting spelling, so it has no aliases. Each platform function this binary
+    links has a directive that names it. The `fmt` impls are matched only by a blanket."""
     import re
 
     symbols = [
@@ -525,7 +520,7 @@ def test_the_starting_files_address_1_18_symbols_as_spelled(monolithic: PathDial
 # Anchor's error crate
 
 
-#: The Anchor 1.1.0+ counterpart: `anchor_lang::error` is the `anchor-lang-error` crate there.
+#: An Anchor 1.1.0+ program. `anchor_lang::error` is the `anchor-lang-error` crate.
 ANCHOR_1_2_1_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "anchor_1_2_1_sbf_symbols.txt"
 
 ERROR_CODE_FROM = "<anchor_lang_error::Error as core::convert::From<anchor_lang_error::ErrorCode>>::from"
@@ -551,7 +546,7 @@ def test_anchor_1_1_error_conversions_are_spelled_as_the_error_crate() -> None:
 
 
 def test_anchor_1_0_keeps_the_canonical_error_spelling() -> None:
-    """Anchor 1.0.x is on the SDK 3 crates too, but its errors are still in ``anchor_lang``."""
+    """On SDK 3, Anchor 1.0.x still spells its errors as ``anchor_lang``."""
     dialect = dialect_for(_workspace(*SPLIT_CRATES), PROGRAM, SOLANA_V3)
     pattern = "^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::AnchorError>>::from$"
     assert dialect.spellings(pattern) == (pattern,)

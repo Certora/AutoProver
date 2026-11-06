@@ -200,8 +200,8 @@ def test_a_fresh_project_gets_the_whole_shape_and_a_second_run_gets_nothing(tmp_
     assert again.satisfied
 
 
-#: ``[package]`` split by another table, as solana-program-stake's program manifest has it. tomlkit
-#: reads such a table back as a proxy over its fragments rather than as a table.
+#: ``[package]`` split by another table, as the stake program's manifest has it. tomlkit reads that
+#: table back as a proxy over its fragments.
 SPLIT_PACKAGE = STANDALONE + """
 [lints]
 workspace = true
@@ -274,7 +274,7 @@ def test_a_package_with_no_entrypoint_feature_does_not_get_one_invented(tmp_path
     (features,) = [a for a in _additions(plan) if a.table == ("features",)]
     assert isinstance(features, AddEntries)
     assert "no-entrypoint" not in dict(features.entries)["certora"]
-    # Nor a heap switch: this crate has no entrypoint whose allocator would need one.
+    # This crate calls no entrypoint, so it gets no custom-heap either.
     assert "custom-heap" not in dict(features.entries)
 
 
@@ -589,8 +589,8 @@ def test_a_line_refusal_is_put_in_terms_the_project_author_can_act_on(
 
 
 def test_a_project_already_on_the_pinned_release_is_not_refused(tmp_path):
-    # The idempotence case, and the one the gate must not catch: `=0.6.2` is what the scaffold
-    # itself writes, and a bare `0.6.2` is the same release written by hand.
+    # `=0.6.2` is the requirement the scaffold writes. A bare `0.6.2` is the same release written
+    # by hand. Neither is a refusal.
     for requirement in ("=0.6.2", "0.6.2"):
         root = tmp_path / requirement
         manifest = STANDALONE.replace(
@@ -1092,7 +1092,7 @@ def test_a_project_already_reading_the_commit_is_left_as_it_is(tmp_path):
 
 
 def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
-    """Its entry is somebody's decision, and building on it verifies against a release this build
+    """The project's patch points somewhere else. Replacing it would verify a release this build
     does not pin."""
     crate = next(p for p in _UNPUBLISHED.from_commits() if p.name == "cvlr-solana")
     commit = crate.commit
@@ -1131,7 +1131,7 @@ def test_a_project_is_set_up_with_the_generation_it_is_on(
 
 
 def test_a_project_with_no_platform_crate_is_on_no_generation(tmp_path):
-    """Evidence is required: nothing linked says which generation this is."""
+    """A package that links no witness is on no generation."""
     workspace, package = _project(tmp_path, manifest=STANDALONE, platform=None)
     assert scaffold.select_generation(workspace, package, generations("solana")) is None
 
@@ -1147,8 +1147,8 @@ def test_an_sdk3_project_scaffolds_on_its_generation_and_is_refused_by_the_other
 
 
 def test_a_1_17_project_is_refused_by_the_1_18_generation(tmp_path):
-    """Before 2.0 a minor release is a generation: `cvlr-solana` 0.4's `^1.18` cannot resolve
-    against a `~1.17` target, and the refusal has to say that rather than leave it to cargo."""
+    """Before 2.0 a minor release is its own generation. `cvlr-solana` 0.4 requires `^1.18`, so a
+    1.17 target is refused here."""
     workspace, package = _project(
         tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, platform="1.17.18"
     )

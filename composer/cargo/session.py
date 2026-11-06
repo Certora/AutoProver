@@ -98,7 +98,7 @@ class CrossCheck:
     """``cargo check`` for another target, with a cargo and compiler rustup does not manage."""
 
     cargo: Path
-    #: What makes the check compile what the chain build compiles: the target, and the profile.
+    #: The chain build's target and profile.
     args: tuple[str, ...]
     #: The compiler and the tools build scripts reach for. They must be the chain build's own:
     #: a build script that reruns when one of them changes would otherwise be rebuilt, and every
@@ -123,7 +123,6 @@ class CargoSession:
     #: The rustup toolchain every cargo command in this session runs with, in place of the one the
     #: project's ``rust-toolchain.toml`` pins. ``None`` follows the project.
     toolchain: str | None = None
-    #: How :meth:`check` compiles.
     check_with: CheckWith = HostCheck()
     #: Keyed by the cargo binary. Two cargos do not share a git cache, so a
     #: cache filled by one is not warm for the other.
@@ -144,9 +143,11 @@ class CargoSession:
 
     @property
     def toolchain_env(self) -> dict[str, str]:
-        """What selects :attr:`toolchain` in a child's environment. rustup reads
-        ``RUSTUP_TOOLCHAIN`` ahead of a ``rust-toolchain.toml``; a cargo rustup does not manage
-        ignores it."""
+        """The environment that selects :attr:`toolchain`.
+
+        rustup reads ``RUSTUP_TOOLCHAIN`` before ``rust-toolchain.toml``. A cargo that rustup does
+        not manage ignores the variable.
+        """
         return {"RUSTUP_TOOLCHAIN": self.toolchain} if self.toolchain is not None else {}
 
     @property
@@ -176,8 +177,9 @@ class CargoSession:
     async def run_confined(
         self, program: str, args: list[str], *, timeout_s: int, env: Mapping[str, str] = {}
     ) -> CommandResult:
-        """Run a command in the workdir under this session's confinement, with ``env`` added to
-        the toolchain's.
+        """Run a command in the workdir under this session's confinement.
+
+        ``env`` is added to :meth:`toolchain_env`.
 
         If the configured provider cannot confine, this raises instead of falling
         back.
@@ -274,7 +276,7 @@ class CargoSession:
         manifest_dir: Path | None = None,
         timeout_s: int = CHECK_TIMEOUT_S,
     ) -> CompileRun:
-        """``cargo check`` as :attr:`check_with` says, confined. Fast enough to run on every write."""
+        """Confined ``cargo check``. Fast enough to run on every write."""
         match self.check_with:
             case HostCheck():
                 cross_args, env = (), {}

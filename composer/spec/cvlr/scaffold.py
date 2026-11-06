@@ -91,13 +91,13 @@ SHARED_OBJECT_TYPE = "cdylib"
 #: ``first_example`` has ``certora = []``.
 NO_ENTRYPOINT_FEATURE = CargoFeature("no-entrypoint")
 
-#: What keeps the SDK's ``entrypoint!`` from installing its global allocator. The macro's
-#: ``custom_heap_default!`` checks the *calling* crate's ``custom-heap`` feature, in ``solana-program``
-#: 2.x and ``solana-program-entrypoint`` 3.x alike. Enabled by ``certora`` for a package that calls
-#: the macro and has no ``no-entrypoint`` to turn off: stake's program calls ``entrypoint!``
-#: unconditionally. The program's bump allocator writes the heap at a fixed address, and a rule that
-#: also allocates through ``__rust_alloc`` fails with Prover error 3309, "Conflicting allocation/usage
-#: of heap memory".
+#: Keeps the SDK's ``entrypoint!`` from installing its global allocator. The macro's
+#: ``custom_heap_default!`` checks the calling crate's ``custom-heap`` feature, in ``solana-program``
+#: 2.x and in ``solana-program-entrypoint`` 3.x. ``certora`` enables it when the package calls the
+#: macro and does not declare ``no-entrypoint``. The stake program calls ``entrypoint!`` with no
+#: feature gate. The bump allocator writes the heap at a fixed address. A rule that also allocates
+#: through ``__rust_alloc`` then fails with Prover error 3309, "Conflicting allocation/usage of heap
+#: memory".
 CUSTOM_HEAP_FEATURE = CargoFeature("custom-heap")
 
 #: An invocation of the SDK's ``entrypoint!`` or ``entrypoint_no_alloc!``, which both install the
@@ -392,15 +392,15 @@ class _OffGeneration:
 def _read_platform(
     workspace: Workspace, package: CratePackage, reference: ChainReference
 ) -> _OnGeneration | _OffGeneration | None:
-    """Which generation ``package`` is on, as far as ``reference`` can tell; ``None`` when it links
+    """Which generation ``package`` is on, as far as ``reference`` can tell. ``None`` when it links
     none of the reference's witnesses.
 
-    The first witness the project resolves decides. Later ones are not consulted. The list is
-    most-specific first because a target on a newer generation resolves only the specific crate.
-    Falling through to a broader witness after a specific one has answered would undo that order.
-    Every copy of that witness linked into ``package`` has to be on the generation: one that is not
-    still meets CVLR's types wherever its dependents hand an account to a helper. A copy only
-    another member links, or only a dev-dependency pulls in, is never compiled with the harness.
+    The first witness the package resolves decides, and later witnesses are not consulted. The list
+    is most-specific first, because a newer generation resolves only the specific crate. Every copy
+    of that witness linked into ``package`` has to be on the generation. A copy from another
+    generation still meets CVLR's types when a dependent passes an account to a helper. A copy that
+    only another member links, or that only a dev-dependency pulls in, is not compiled with the
+    harness.
     """
     linked = workspace.linked_into(package)
     for witness in reference.platform.witnesses:
@@ -415,12 +415,10 @@ def _read_platform(
 def select_generation(
     workspace: Workspace, package: CratePackage, candidates: Sequence[ChainReference]
 ) -> ChainReference | None:
-    """The reference set in ``candidates`` for the platform generation ``package`` is on, or
-    ``None`` when it is on none of them.
+    """The reference set in ``candidates`` for the platform generation ``package`` is on.
 
-    Evidence is required: a package that links none of a reference's witnesses is not on that
-    generation. ``candidates`` come newest first (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`),
-    and the first match wins.
+    ``None`` when the package links none of their witnesses. ``candidates`` are newest first
+    (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`), and the first match wins.
     """
     return next(
         (
@@ -437,12 +435,11 @@ def _check_platform(
 ) -> None:
     """Refuse to pin a CVLR release the project's platform generation cannot use.
 
-    A target on ``solana-program`` 1.18 given ``cvlr-solana`` 0.5.x does not warn. It fails to
-    compile, because the two generations have different ``AccountInfo`` types and the chain
-    crate's helpers return the other one. The reference set already records which generation a
-    chain crate requires (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This is
-    where a project that is on a different one is caught, and it has to be caught before the pin
-    is written. :func:`_read_platform` is how the generation is read.
+    ``solana-program`` 1.18 and ``cvlr-solana`` 0.5.x have different ``AccountInfo`` types, and the
+    chain crate's helpers return the other generation's type, so that combination does not compile.
+    The reference records the generation a chain crate requires
+    (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This check runs before the pin is
+    written. :func:`_read_platform` reads the generation.
     """
     match _read_platform(workspace, package, reference):
         case _OffGeneration(witness=witness, builds=builds):
@@ -609,7 +606,10 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
 
 
 def _calls_entrypoint(package: CratePackage) -> bool:
-    """Whether ``package``'s own sources invoke the SDK's entrypoint macro."""
+    """Whether ``package``'s sources call ``entrypoint!`` or ``entrypoint_no_alloc!``.
+
+    ``src/certora`` is the harness, so those files are skipped.
+    """
     source = package.root / "src"
     return any(
         _ENTRYPOINT_MACRO.search(_COMMENT.sub(" ", path.read_text(errors="replace")))
@@ -619,9 +619,7 @@ def _calls_entrypoint(package: CratePackage) -> bool:
 
 
 def _entrypoint_switch(package: CratePackage) -> CargoFeature | None:
-    """The feature that keeps ``package``'s entrypoint, and the allocator it installs, out of a
-    verification build: ``no-entrypoint`` when the package declares it, else ``custom-heap`` when it
-    calls ``entrypoint!``, else nothing."""
+    """The feature that keeps this package's entrypoint allocator out of a verification build."""
     if NO_ENTRYPOINT_FEATURE in package.features:
         return NO_ENTRYPOINT_FEATURE
     if _calls_entrypoint(package):
@@ -875,17 +873,16 @@ def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuil
 
 
 def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
-    """Add ``[patch.crates-io]`` entries reading the reference set's unpublished releases from the
-    commits they were cut from (:class:`~composer.spec.cvlr.reference.GitCommit`).
+    """Add ``[patch.crates-io]`` entries for releases cargo reads from a commit
+    (:class:`~composer.spec.cvlr.reference.GitCommit`).
 
-    Only for the crates the project is given, and the crates each was released with. A patch for a
-    crate nothing depends on is one cargo warns about on every build.
+    The patches are the crates :meth:`~composer.spec.cvlr.reference.ChainReference.scaffold_crates`
+    gives the project. A patch for a crate nothing depends on makes cargo warn on every build.
 
-    A crate the project's patch table already names is checked against the resolved graph rather
-    than redirected again: a second entry for one crate is a manifest cargo refuses. The pinned
-    commit is satisfied. So is a crate the graph does not resolve yet, because the graph can
-    predate the table. Any other source blocks, since replacing the project's entry would replace
-    somebody's decision, and building on it would verify against a release this build does not pin.
+    A crate the project's patch table already names is checked against the resolved graph. Cargo
+    refuses a second entry for one crate. The pinned commit is recorded as satisfied. So is a crate
+    the graph does not resolve yet, because the graph can be older than the table. Any other source
+    blocks: replacing the project's entry would verify a release this build does not pin.
     """
     path = Path("Cargo.toml")
     patched = forks.already_patched(plan.read(path))

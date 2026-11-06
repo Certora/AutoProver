@@ -210,10 +210,10 @@ async def prepare_workspace(
     ``reference`` is the set rather than a chain name because every function this calls takes the
     set.
     """
-    # The cargo home the gate's warm step fills (CargoSession.cargo_home), so the registry crates
-    # these reads fetch are not fetched again. Git sources are: these reads run the host cargo, and
-    # the warm step's platform-tools cargo does not see the host cargo's git checkouts
-    # (composer.cargo.sbf.platform_tools_cargos).
+    # The cargo home the gate's warm fills (:attr:`composer.cargo.session.CargoSession.cargo_home`),
+    # so these reads reuse the registry crates it fetched. Git sources are fetched again: these
+    # reads use the host cargo, and the platform-tools cargo does not see the host cargo's git
+    # checkouts (:func:`composer.cargo.sbf.platform_tools_cargos`).
     cargo_home = sandbox_cargo_home(project_root) if sandbox.enabled else None
     workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     member = _pick_package(workspace, package)
@@ -270,9 +270,8 @@ async def gate_workspace(
 ) -> None:
     """Check that the scaffolded project compiles with the harness in, or fail the run.
 
-    ``cargo check`` for the SBF target (:func:`~composer.cargo.sbf.sbf_check`), not the build.
-    What this has to catch is a scaffold that does not compile. The build is a later gate, and
-    running it here would cost more than the failure it would be catching.
+    ``cargo check`` for the SBF target (:func:`~composer.cargo.sbf.sbf_check`). The full build
+    runs at a later gate.
     """
     try:
         check_with = sbf_check(PLATFORM_TOOLS_VERSION)

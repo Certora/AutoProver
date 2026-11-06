@@ -58,8 +58,8 @@ def test_the_solana_choice_records_the_platform_it_implies():
 
 
 def test_the_spl_token_model_is_part_of_the_reference_set():
-    # Released with the chain crate it was split from, at its version. Leaving it off the
-    # reference set would keep the scaffold from pinning it.
+    # Pinned with the chain crate, at the same version. Left off this list, the scaffold does not
+    # pin it.
     assert ref.CrateRelease("cvlr-spl-token", "0.5.1") in ref.SOLANA_V2.specializations
     assert ref.SOLANA_V2.unpublished == ()
 
@@ -80,8 +80,7 @@ def test_an_unknown_chain_raises_and_names_the_ones_that_exist():
 
 
 def test_every_generation_shares_one_core_release():
-    # The core line is chain-independent. Two generations drifting apart on it would mean one of
-    # them is being compiled against a cvlr nobody chose.
+    # Every chain and every Solana generation is compiled against this same cvlr.
     assert ref.SOLANA_V1_18.core == ref.SOLANA_V2.core == ref.SOLANA_V3.core == ref.SOROBAN.core
 
 
