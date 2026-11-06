@@ -14,7 +14,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple
 
 from certora_autosetup.utils.constants import DEFAULT_SOLC_VERSION, SolcConvention
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
@@ -38,6 +38,7 @@ from certora_autosetup.utils.solc_version_resolver import (
     pragma_admits,
     read_pragma_from_source_file,
     resolve_pragma_to_version,
+    solc_default_evm_version,
 )
 from certora_autosetup.utils.types import ContractHandle
 
@@ -296,9 +297,6 @@ class CompilationWorkaroundManager:
         # Installed compilers usable as a substitute, probed once (shutil.which +
         # subprocess per candidate) and reused across every pass of the loop.
         self._solc_candidates: Optional[List[Tuple[str, str]]] = None
-        # solc binary -> its default EVM version (None when the binary could not
-        # be run), probed once per binary.
-        self._default_evm_versions: Dict[str, Optional[str]] = {}
         # consumer -> [(lib_name, lib_path), ...] in insertion order. A second
         # firing for the same consumer (different missing library) regenerates the
         # consumer's harness covering every library it has needed so far.
@@ -1528,12 +1526,24 @@ class CompilationWorkaroundManager:
         # The prover requires the map to cover every file. Without a declared
         # version there is nothing seeded for the other contracts, so each one
         # gets the EVM version its own compiler would have used anyway.
-        cmap = updated_config_dict["compiler_map"]  # seeded for every contract
+        self._fill_default_evm_versions(emap, updated_config_dict["compiler_map"], contracts)
+        compilation_config.update(updated_config_dict)
+
+        with open(config_file, "w") as f:
+            json.dump(compilation_config, f, indent=2)
+
+        return updated_config_dict
+
+    def _fill_default_evm_versions(
+        self, emap: Dict[str, str], cmap: Mapping[str, str], contracts: List[ContractHandle]
+    ) -> None:
+        """Give each contract missing from ``emap`` the default EVM version of its
+        compiler in ``cmap``, which is seeded for every contract."""
         for c in contracts:
             if c.contract_name in emap:
                 continue
             solc_binary = cmap[c.contract_name]
-            default_evm = self._solc_default_evm_version(solc_binary)
+            default_evm = solc_default_evm_version(solc_binary)
             if default_evm is None:
                 self.log(
                     f"Cannot read the default EVM version of {solc_binary}; "
@@ -1542,12 +1552,6 @@ class CompilationWorkaroundManager:
                 )
                 continue
             emap[c.contract_name] = default_evm
-        compilation_config.update(updated_config_dict)
-
-        with open(config_file, "w") as f:
-            json.dump(compilation_config, f, indent=2)
-
-        return updated_config_dict
 
     def _apply_invalid_evm_version_workaround_to_config(
         self,
@@ -1751,9 +1755,10 @@ class CompilationWorkaroundManager:
         updated_config_dict: Dict,
         compilation_config: Dict,
         config_file: Path,
-        _contracts: List[ContractHandle],
+        contracts: List[ContractHandle],
     ) -> Dict:
-        """Substitute a missing versioned solc binary per the plan."""
+        """Substitute a missing versioned solc binary per the plan, and give the
+        moved contracts an entry in ``solc_evm_version_map`` when the conf has one."""
         # solc is seeded into compiler_map up front (see _seed_compile_maps), so
         # replace the bad binary there — every entry pinned to it — rather than
         # setting the scalar solc, which can't coexist with compiler_map. A
@@ -1765,6 +1770,12 @@ class CompilationWorkaroundManager:
         for name, replacement in plan.compliant.items():
             self.log(f"Falling back from '{plan.failed_solc}' to '{replacement}' for {name}", "WARNING")
             cmap[name] = replacement
+        # A contract whose compiler could not run has no entry in an EVM map
+        # filled with compiler defaults. Its new compiler supplies one.
+        emap = updated_config_dict.get("solc_evm_version_map")
+        if emap is not None:
+            self._fill_default_evm_versions(emap, cmap, contracts)
+            compilation_config["solc_evm_version_map"] = emap
 
         with open(config_file, "w") as f:
             json.dump(compilation_config, f, indent=2)
@@ -1839,39 +1850,6 @@ class CompilationWorkaroundManager:
         if solc_name.startswith("solc") and len(solc_name) > 4 and solc_name[4].isdigit():
             return f"0.{solc_name[4:]}"  # "solc8.34" -> "0.8.34"
         return None
-
-    def _solc_default_evm_version(self, solc_binary: str) -> Optional[str]:
-        """The default EVM version of ``solc_binary``, or None when the binary
-        cannot be run.
-
-        Read from the metadata of an empty contract compiled with no evmVersion
-        setting: solc records the version it used there. Every solc from 0.4.x on
-        does this, while the ``--help`` text that also names the default changed
-        format over the releases.
-        """
-        if solc_binary in self._default_evm_versions:
-            return self._default_evm_versions[solc_binary]
-        request = {
-            "language": "Solidity",
-            "sources": {"probe.sol": {"content": "contract Probe {}"}},
-            "settings": {"outputSelection": {"*": {"*": ["metadata"]}}},
-        }
-        evm_version: Optional[str] = None
-        try:
-            result = subprocess.run(
-                [solc_binary, "--standard-json"],
-                input=json.dumps(request),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=30,
-            )
-            metadata = json.loads(json.loads(result.stdout)["contracts"]["probe.sol"]["Probe"]["metadata"])
-            evm_version = metadata["settings"]["evmVersion"]
-        except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
-            pass
-        self._default_evm_versions[solc_binary] = evm_version
-        return evm_version
 
     @staticmethod
     def _get_plain_solc_version() -> Optional[str]:

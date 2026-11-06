@@ -23,7 +23,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@9f4e9fca49e370dace2c9cdfdb58aa87d59f1a30",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@c03be3aa9c1cbad4f89dddd0bf2f784bbe77f4bc",
     # >=3.14.4: GHSA-2g87-pp6c-29x5, GHSA-5wr8-gcqf-gqf3, GHSA-9xw5-w5jj-pvcg,
     # GHSA-cq5v-8q36-5273 and the other aiohttp advisories fixed in 3.14.0-3.14.4.
     "aiohttp>=3.14.4",
