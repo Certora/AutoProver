@@ -1,8 +1,8 @@
-from typing import Callable, Literal, Annotated, Mapping, Sequence, TypedDict, cast, TYPE_CHECKING
+from typing import Callable, Literal, Annotated, Mapping, Self, Sequence, TypedDict, cast, TYPE_CHECKING
 from functools import cache
 from importlib.resources import files
 from dataclasses import dataclass
-from pydantic import BaseModel, Field, BeforeValidator
+from pydantic import BaseModel, ConfigDict, Field, BeforeValidator, model_validator
 import yaml
 
 from graphcore.graph import CacheMarker
@@ -38,11 +38,22 @@ class KBRecipe[C: str](BaseModel):
 
 
 class IndexModel[C: str](BaseModel):
+    #: Forbidden so that prose added to the index file fails to load rather than being dropped: the
+    #: agent sees only what ``kb_index.j2`` renders.
+    model_config = ConfigDict(extra="forbid")
+
     #: What each channel means for the agent reading it. Rendered with the index: a channel tells a
     #: stuck agent whether the fix is in its action space, which it cannot do if only the index file
     #: says what the name means.
     channels: dict[C, str]
     recipes: list[KBRecipe[C]]
+
+    @model_validator(mode="after")
+    def _every_channel_has_a_meaning(self) -> Self:
+        unexplained = {c for r in self.recipes for c in r.channel} - self.channels.keys()
+        if unexplained:
+            raise ValueError(f"recipes use channels the legend does not explain: {sorted(unexplained)}")
+        return self
 
 
 class RecipeIndexParams(TypedDict):
@@ -215,7 +226,8 @@ _CVLR_SPECS = (
     ),
 )
 
-#: For the agents that hold ``get_cvlr_recipe``: the author and the judge.
+#: For the agents that hold ``get_cvlr_recipe``: the author and the judge. The channel legend names
+#: the author's tools, as where a fix lies; the judge reads it to tell whether a rule took that fix.
 CVLR_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", recipes=CVLR_RECIPES, specs=_CVLR_SPECS)
 
 #: The same facts without the recipe index, for a reader that cannot retrieve a recipe. The index

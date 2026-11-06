@@ -17,6 +17,7 @@ from composer.kb.kb_context import (
     context_documents,
     kb_loader,
 )
+from composer.kb.knowledge_base import kb_tools
 
 _RESOURCES = Path(__file__).parent.parent / "composer" / "kb" / "resources"
 _FACTS = _RESOURCES / "cvlr_baseline_facts.md"
@@ -71,10 +72,19 @@ def test_the_facts_bundle_is_the_same_facts_without_the_index():
 
 
 def test_the_author_is_told_sysvars_are_read_directly():
-    """With `Sysvar::from_account_info` analyzed rather than external, an author no longer needs to
-    split a handler to pass `Clock` or `Rent` in as a parameter. The recipe is what keeps an author
-    from reaching for that workaround out of habit."""
+    """On `solana-program` 2.2 and the split SDK 3 crates `Sysvar::from_account_info` is analyzed,
+    so an author there does not need to split a handler to pass `Clock` or `Rent` in as a
+    parameter. The recipe is what keeps an author from reaching for that workaround out of habit,
+    and says where it does not hold: on 1.18 the call is external."""
     (k3,) = [r for r in _kb_model(CVLR_RECIPES).recipes if r.id == "K3"]
     assert "from_account_info" in k3.search_terms
     text = kb_loader(CVLR_RECIPES)("K3")
     assert text is not None and "cvlr_assume!(*clock_info.key == sysvar::clock::id());" in text
+    assert "solana-program` 1.18" in text
+
+
+def test_the_recipe_tool_is_named_for_cvlr():
+    """The tool's display is looked up by name when the agent is built, so a name with no display
+    fails only then."""
+    (tool,) = kb_tools(CVLR_BUNDLE)
+    assert tool.name == "get_cvlr_recipe"

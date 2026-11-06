@@ -4,9 +4,6 @@ What is true of CVLR, of the Solana Prover, and of the programs they run against
 working on a CVLR verification — the author who writes rules, the judge who reviews them, the editor
 who changes the program under them.
 
-Nothing here is about one agent's tools or one run's configuration. Those belong to whichever agent
-has them, and are in that agent's own instructions.
-
 ## What a rule is
 
 Two forms, and the choice matters:
@@ -28,13 +25,11 @@ program — the two look identical — and if your version and the program's hav
 an operator, the report is wrong in the confident direction. Helpers, mocks, `Nondet` and `CvlrLog`
 implementations all belong in the harness. The state transition the property is *about* does not.
 
-At publish time you will declare, per rule, which program function it drives, spelled from the
-crate root — `crate::<program module>::<handler>`. That spelling is a requirement and the gate
-enforces it:
-this harness is a module *inside* the program's crate, so everything the program defines is reachable
-as `crate::…`, and a path rooted anywhere else names a dependency.
+The harness is a module *inside* the program's crate, so everything the program defines is reachable
+as `crate::…` — `crate::<program module>::<handler>` — and a path rooted anywhere else names a
+dependency.
 
-Which is the trap worth naming. A rule can drive a *library* function, verify cleanly, and read like
+A rule can drive a *library* function, verify cleanly, and read like
 a verification of the program. `cvlr_assume!(!accounts[1].is_signer); cvlr_assert!(Signer::try_from(&accounts[1]).is_err());`
 demonstrates that Anchor rejects a non-signer — true, and nothing whatever about the program you were
 given. If a property is enforced by a dependency rather than by the program's own code, that is a skip
@@ -47,22 +42,24 @@ property enforced by those declarations — the signer, `mut`, `has_one`, owner 
 program, and the rule for it drives that function. A rule that builds the accounts struct by hand
 never runs validation at all, so it cannot demonstrate one.
 
-If you cannot reach the program's own code, that is a result to report — see the escalation ladder
-in the task prompt. It is never a reason to move the rule onto something you can reach.
+If you cannot reach the program's own code, report that: name the program function and what stopped
+the rule reaching it. It is never a reason to move the rule onto something you can reach.
 
 ## Counterexamples are only as legible as your `clog!`s
 
-A violated rule comes back as a counterexample, and what you can see of it is exactly what you
-logged. **Log every value the assertion depends on, before the assertion**, using `clog!`. A rule
-that fails with nothing logged tells you that something is wrong and nothing about what; you will
-then spend a prover run — minutes — learning what one `clog!` would have told you. This is the single
-highest-return habit on this backend.
+A violated rule comes back as a counterexample: the call trace, the failing assertion's message, and
+its source location. The message says *which* assertion failed; the values it failed on are in the
+trace only where a `clog!` put them there. **Log every value the assertion depends on, before the
+assertion**, using `clog!`. A rule that fails with nothing logged tells you that something is wrong
+and nothing about what; you will then spend a prover run — minutes — learning what one `clog!` would
+have told you.
 
-If a type you assert over has no `CvlrLog` implementation, write one **in your own harness module**
-rather than formatting it by hand. `put_harness` replaces that module and nothing else: the sibling
-files the scaffold created (`log.rs`, `nondet.rs`, `mocks/`) exist for a human continuing this work
-by hand, and you have no tool that writes them — do not try. A trait impl may live anywhere in the
-crate as long as the *type* is this crate's own, which is true of everything you assert over here.
+The harness the scaffold writes is `src/certora/mod.rs` and `src/certora/specs/mod.rs`, inside the
+program's crate, and rules live in modules under `specs/`. If a type you assert over has no
+`CvlrLog` implementation, write one in the module that holds the rules rather than formatting it by
+hand. `CvlrLog` is CVLR's trait, so the orphan rule allows an impl only for a type the program's
+crate defines. For a type from another crate — `Clock`, an SDK or Anchor type — that has none, log
+its fields one by one.
 
 ## Assumptions are the sharpest tool and the easiest way to prove nothing
 
@@ -156,21 +153,21 @@ what follows is the order to work through first:
 2. **Ask whether the loop is even in your property's way.** A loop in a borsh deserialization path or
    a logging helper is not what the property is about; a summary for that function is the same trade
    as any other summary, with the same obligation to justify it.
-3. **Raise the bound, having tried the first two.** `adjust_prover_config` sets `loop_iter`. Cost
-   grows exponentially with it, so raise it to the smallest number the property needs and say in
-   the `why` what you bounded first and why it was not enough. Above 3 or 4 it grows faster than
-   the answer is usually worth; if the property genuinely needs more than that, a skip naming the
-   count you needed against the count you have is the more useful result.
-4. **Assume it, having established that no bound will do.** `adjust_prover_config` also sets
-   `optimistic_loop`, and this is the rung the first three do not reach: a trip count the analysis
-   cannot fix is not answered by constraining the inputs, by a summary, or by unrolling further —
-   the bound goes up and the reported iteration goes up with it, forever. Establish that it is that
+3. **Raise the bound, having tried the first two.** The bound is the conf's `loop_iter`. Cost
+   grows exponentially with it, so raise it to the smallest number the property needs and record
+   what you bounded first and why it was not enough. Above 3 or 4 it grows faster than the answer
+   is usually worth; if the property genuinely needs more than that, a skip naming the count you
+   needed against the count you have is the more useful result.
+4. **Assume it, having established that no bound will do.** This is `optimistic_loop`, the rung the
+   first three do not reach: a trip count the analysis cannot fix is not answered by constraining
+   the inputs, by a summary, or by unrolling further — the bound goes up and the reported iteration
+   goes up with it, forever. Establish that it is that
    case by moving the bound and reading what comes back, because a loop that discharges at 3 is not.
 
    What it costs is not confined to the loop you were fighting: **every rule in the unit's next
    submission is verified under the assumption**, so each of their verdicts becomes conditional on
    something nothing checked. A rule whose property *is* the loop's termination or its later
-   iterations proves nothing under it, and for that rule `record_skip` naming the loop is the honest
+   iterations proves nothing under it, and for that rule a skip naming the loop is the honest
    result. What it buys is the rest of the handler, which is otherwise unreachable.
 
 An unwinding violation reported as a property failure is a wrong answer, so read the counterexample
@@ -230,8 +227,8 @@ Two things to get right, because nothing else will catch either:
   reads back and does not need the sharing — for those, an impl returning a fresh unconstrained
   value is simpler and safer.
 * **One value per type means two accounts of that type are the same account.** If the handler takes
-  a source and a destination of the swapped type, this munge cannot express it — `record_skip`
-  rather than prove something about a program that cannot tell them apart.
+  a source and a destination of the swapped type, this munge cannot express it — skip it rather
+  than prove something about a program that cannot tell them apart.
 
 And the cost, which the judge will hold you to: with the deserializer gone, deserialization can no
 longer fail and never reads the bytes. Any property about *encoding* — a malformed account rejected,
@@ -243,13 +240,12 @@ from both. If the handler never indexes a collection, it is the second shape.
 
 **A munge is the most consequential thing in this run, so treat asking for one that way.** It changes
 the program the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the
-way is not what the property depends on; then the editor. Read the diff it hands back before you
-`commit_edit` it — an edit you do not commit is never applied, and `revert_to_edit` takes back one you
-did.
+way is not what the property depends on; then the editor. Read the diff it hands back before
+accepting it.
 
 The editor can refuse, and a refusal is information. If what a property needs is none of its nine
 kinds — a hand-unrolled loop, a restructured state machine, a shrunk collection — the editor will
-say so and name the kind it would have taken. `record_skip` and pass that on. That is a decision for a
+say so and name the kind it would have taken. Skip the property and pass that on. That is a decision for a
 person, and naming it is what makes the skip actionable.
 
 A munge is scoped to your unit. It is in your copy of the program and no other unit's, so it applies
@@ -393,6 +389,6 @@ in a cheap rule with a readable counterexample instead of a two-hour timeout wit
 cause is a missing slack term: the naive inequality ignores a rounding direction or a price movement,
 and the counterexample shows you which.
 
-If the rule still does not finish, `record_skip` naming the timeout, what you bounded, and what you
+If the rule still does not finish, skip it, naming the timeout, what you bounded, and what you
 lifted. A rule with no verdict is not a verification, and reporting it as one is worse than skipping
 it.

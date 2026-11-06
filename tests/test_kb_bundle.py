@@ -7,6 +7,8 @@ its documents are read once per process and sit behind a cache marker, so nothin
 per run.
 """
 
+from importlib.resources import files
+
 import pytest
 from pydantic import ValidationError
 
@@ -17,6 +19,7 @@ from composer.kb.kb_context import (
     CvlChannel,
     IndexModel,
     KnowledgeBundle,
+    _kb_model,
     context_documents,
     kb_loader,
 )
@@ -57,10 +60,34 @@ def test_two_bundles_do_not_share_their_loaded_index():
 def test_a_channel_outside_the_vocabulary_is_rejected():
     """A channel names a tool the reading agent has. A vocabulary wide enough for two agent
     families would validate a recipe pointing at an action its readers cannot take."""
+    legend = {"CVL": "c", "CONF": "c", "EDIT": "e"}
+    with pytest.raises(ValidationError) as raised:
+        IndexModel[CvlChannel].model_validate(
+            {"channels": legend,
+             "recipes": [{"id": "R0", "name": "n", "triggers": [], "file": "f.md",
+                          "channel": "SKIP"}]}
+        )
+    (error,) = raised.value.errors()
+    assert error["loc"][-2:] == ("channel", 0)
+
+
+def test_a_recipe_channel_missing_from_the_legend_is_rejected():
+    """The rendered legend is how the agent learns what a channel means, so a recipe may only use a
+    channel the legend explains."""
+    with pytest.raises(ValidationError, match="does not explain"):
+        IndexModel[CvlChannel].model_validate(
+            {"channels": {"CVL": "c"},
+             "recipes": [{"id": "R0", "name": "n", "triggers": [], "file": "f.md",
+                          "channel": "CONF"}]}
+        )
+
+
+def test_prose_in_the_index_file_is_rejected_rather_than_dropped():
+    """Only what the template renders reaches the agent, so a preamble in the file would be a
+    second copy nobody reads."""
     with pytest.raises(ValidationError):
         IndexModel[CvlChannel].model_validate(
-            {"recipes": [{"id": "R0", "name": "n", "triggers": [], "file": "f.md",
-                          "channel": "SKIP"}]}
+            {"title": "t", "channels": {"CVL": "c"}, "recipes": []}
         )
 
 
@@ -73,6 +100,8 @@ def test_the_recipe_tool_takes_its_name_and_description_from_the_bundle():
 def test_the_loader_resolves_an_id_to_its_file_and_nothing_else():
     loader = kb_loader(CVL_RECIPES)
     assert loader("no-such-recipe") is None
+    some = _kb_model(CVL_RECIPES).recipes[0]
+    assert loader(some.id) == (files("composer.kb") / "resources" / some.file).read_text()
 
 
 def test_a_bundle_without_recipes_contributes_no_tool_and_no_index():

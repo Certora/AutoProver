@@ -7,8 +7,10 @@
 work around it: split the handler so the sysvar arrives as a parameter, mock the read, or skip a
 property because the read "is external".
 
-**Formula:** none of those. Both forms are analyzed. Drive the handler as it is. When a rule needs
-the account and the syscall to agree, say so with one assumption:
+**Formula:** none of those, on a program built against `solana-program` 2.2 or the split SDK 3
+crates. There `Clock::get()`, `Rent::get()` and `from_account_info` are all analyzed: the sysvar
+types live in `solana-sysvar`, which the Prover inlines. Drive the handler as it is. When a rule
+needs the account and the syscall to agree, say so with one assumption:
 
 ```rust,ignore
 let accounts = Box::new(cvlr_deserialize_nondet_accounts());
@@ -47,10 +49,12 @@ A program that recomputes the reserve from `Rent` at each instruction, rather th
 stored value to state the property over. Stake on SDK 3 is one: `meta.rent_exempt_reserve` is
 deprecated there and ignored. Then the integer stand-in is the way to state it, not a fallback.
 
-**Failure symptom this replaces:** a skip or a munge whose reason says `Sysvar::from_account_info`
-is "treated as external" and never returns `Ok`. That was a tuning-file defect, since fixed. If the
-Prover's report lists it as external again, record that as the reason and stop. Do not rewrite the
-handler around it.
+**On `solana-program` 1.18** the sysvars are still inside `solana_program`, which the Prover does
+not inline apart from a short list. `Clock::get()`, `Rent::get()` and `Rent::minimum_balance` are on
+it; `from_account_info` is not. A call that is not inlined is external: it returns an unconstrained
+value and writes nothing, so `from_account_info` never returns a usable sysvar. The Prover's report
+names it among the external functions. When it does, skip the property, naming
+`Sysvar::from_account_info` as external, and stop. Do not rewrite the handler around it.
 
 **What this rests on:** Stake Pool's specs (`cvlr_initialize_rent_account`, the epoch props) and
 P-Token's (`cvlr_initialize_rent_account`, `cvlr_assume_rent_defaults`) read both sysvars this way.
