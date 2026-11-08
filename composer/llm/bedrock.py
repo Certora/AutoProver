@@ -7,7 +7,7 @@ endpoint (the native Anthropic Messages API, served at ``bedrock-mantle.{region}
 Model ids stay logical (``claude-opus-5-5``) everywhere outside the Bedrock chat client:
 CLI defaults, budgets, logs, pricing and usage records all key on them. Only the request
 sent to Bedrock carries the Bedrock id, and the model name a Bedrock response reports is
-mapped back before anything downstream sees it.
+replaced by the logical id the request was built from before anything downstream sees it.
 
 Bedrock has no Files API, so binary documents travel inline as base64 in every request
 that carries them, and Bedrock caps a request at 20 MB. Two byte budgets, measured on the
@@ -39,6 +39,7 @@ model itself lives in :mod:`composer.llm.bedrock_chat`.
 """
 
 import os
+from collections.abc import Mapping
 from typing import Literal
 
 import anthropic
@@ -154,13 +155,25 @@ TRANSIENT_ERROR_TYPES = frozenset({
 """Bedrock's names for the errors worth retrying. Most of them come with a status code that
 already says so; the names matter for an error reported inside an open stream, whose status
 is the stream's 200, and for ``ExpiredTokenException``, a 403 that the next request, signed
-with refreshed credentials, does not repeat. It assumes Mantle puts the exception name in the
-payload's ``error.type``; a payload with an Anthropic error type is classified by that."""
+with refreshed credentials, does not repeat. The name is read from the payload's
+``error.type``, or, for a payload without one, from the ``x-amzn-errortype`` response header
+(see :func:`aws_error_type`); a payload with an Anthropic error type is classified by that."""
+
+AWS_ERROR_TYPE_HEADER = "x-amzn-errortype"
+"""The response header in which AWS front ends name the exception behind an error response,
+as ``<ExceptionName>`` or ``<ExceptionName>:<detail>``."""
+
+
+def aws_error_type(headers: Mapping[str, str]) -> str | None:
+    """The exception name in the ``x-amzn-errortype`` header of an error response, without
+    any ``:`` suffix, or ``None`` when the header is absent or empty."""
+    name = headers.get(AWS_ERROR_TYPE_HEADER, "").partition(":")[0].strip()
+    return name or None
 
 
 def is_transient_error_type(error_type: str | None) -> bool:
-    """Whether ``error_type``, the ``error.type`` of an error payload, is a Bedrock exception
-    name in :data:`TRANSIENT_ERROR_TYPES`."""
+    """Whether ``error_type``, the exception name of an error response, is a Bedrock
+    exception name in :data:`TRANSIENT_ERROR_TYPES`."""
     return error_type in TRANSIENT_ERROR_TYPES
 
 
@@ -212,14 +225,3 @@ def to_bedrock_model_id(logical: str) -> str:
     if is_bedrock_model_id(logical):
         raise ValueError(f"{logical!r} is already a Bedrock model id, not a logical one")
     return f"{_BEDROCK_VENDOR}.{logical}"
-
-
-def to_logical_model_id(model_id: str) -> str:
-    """The logical id for a model name a Bedrock response reports. Names that carry no
-    Bedrock prefix pass through unchanged."""
-    resource = _arn_resource(model_id)
-    if resource is not None:
-        # ``inference-profile/us.anthropic.claude-x`` and ``foundation-model/anthropic.claude-x``
-        model_id = resource.rpartition("/")[2]
-    suffix = _vendor_qualified_suffix(model_id)
-    return suffix if suffix is not None else model_id

@@ -22,7 +22,7 @@ from composer.llm.anthropic import (
     uploader_for_backend,
 )
 from composer.llm.bedrock import (
-    BACKEND_ENV_VAR, is_bedrock_model_id, llm_backend, to_bedrock_model_id, to_logical_model_id,
+    BACKEND_ENV_VAR, is_bedrock_model_id, llm_backend, to_bedrock_model_id,
 )
 from composer.llm.bedrock_chat import ChatAnthropicBedrock
 from composer.llm.registry import get_provider_for
@@ -375,25 +375,53 @@ async def test_bedrock_uploader_inlines_binary(bedrock_env, tmp_path) -> None:
 @pytest.mark.parametrize("logical", [
     "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-fable-5-1",
 ])
-def test_model_id_round_trip(logical: str) -> None:
+def test_model_id_mapping(logical: str) -> None:
     bedrock_id = to_bedrock_model_id(logical)
     assert bedrock_id == f"anthropic.{logical}"
     assert is_bedrock_model_id(bedrock_id)
     assert not is_bedrock_model_id(logical)
-    assert to_logical_model_id(bedrock_id) == logical
 
 
-@pytest.mark.parametrize("reported, logical", [
-    ("anthropic.claude-opus-5-5", "claude-opus-5-5"),
-    ("us.anthropic.claude-opus-5-5", "claude-opus-5-5"),
-    ("global.anthropic.claude-sonnet-5-5", "claude-sonnet-5-5"),
-    ("arn:aws:bedrock:us-east-1:000000000000:inference-profile/us.anthropic.claude-opus-5-5",
-     "claude-opus-5-5"),
-    ("arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-5-5", "claude-opus-5-5"),
-    ("claude-opus-5-5", "claude-opus-5-5"),
-])
-def test_reported_model_name_is_normalized(reported: str, logical: str) -> None:
-    assert to_logical_model_id(reported) == logical
+# Whatever name Bedrock reports, the response carries the logical id the request was built
+# from: the client knows which model it asked for.
+_REPORTED_NAMES = [
+    "anthropic.claude-opus-5-5",
+    "anthropic.claude-opus-5-5-v1:0",
+    "us.anthropic.claude-opus-5-5",
+    "us.anthropic.claude-opus-5-5-v1:0",
+    "global.anthropic.claude-opus-5-5",
+    "arn:aws:bedrock:us-east-1:000000000000:inference-profile/us.anthropic.claude-opus-5-5-v1:0",
+    "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-5-5-v1:0",
+    "claude-opus-5-5",
+]
+
+
+@pytest.mark.parametrize("reported", _REPORTED_NAMES)
+@pytest.mark.asyncio
+async def test_reported_model_name_is_the_logical_id_when_streaming(
+    bedrock_env, monkeypatch, reported: str
+) -> None:
+    _mock_mantle(monkeypatch, lambda _: httpx.Response(
+        200, headers={"content-type": "text/event-stream"}, content=_stream_body(reported),
+    ))
+    msg = await _build().ainvoke("hi")
+    assert msg.response_metadata["model_name"] == _MODEL
+    assert get_normalized_token_usage(msg)["model_name"] == _MODEL
+
+
+@pytest.mark.parametrize("reported", _REPORTED_NAMES)
+@pytest.mark.asyncio
+async def test_reported_model_name_is_the_logical_id(
+    bedrock_env, monkeypatch, reported: str
+) -> None:
+    _mock_mantle(monkeypatch, lambda _: httpx.Response(200, json=json.loads(_json_body(reported))))
+    llm = ChatAnthropicBedrock(
+        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024, streaming=False,
+    )
+    msg = await llm.ainvoke("hi")
+    assert msg.response_metadata["model_name"] == _MODEL
+    assert msg.response_metadata["model"] == _MODEL
+    assert get_normalized_token_usage(msg)["model_name"] == _MODEL
 
 
 @pytest.mark.parametrize("model", [

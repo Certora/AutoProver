@@ -9,16 +9,18 @@ build requests and parse responses applies unchanged. This subclass changes five
 - inline documents are dropped, latest first, until the request fits the request budget,
   and a request that refers to a Files API upload fails before it is sent (see
   :func:`composer.llm.bedrock_inline.fit_request_to_budget`);
-- the model name a response reports is mapped back to the logical id, so usage records,
-  pricing and logs see the same name the run was configured with;
+- the model name a response reports is replaced by the chat model's own logical id, so usage
+  records, pricing and logs see the same name the run was configured with;
 - a failure to fetch the AWS credentials that sign a request is raised as an error that says
   whether retrying can help (see :class:`CredentialErrorMiddleware`).
 """
 
+import asyncio
 from functools import cached_property
 from typing import Any, override
 
 import anthropic
+import boto3
 import botocore.exceptions
 from langchain_anthropic import ChatAnthropic
 from langchain_anthropic._client_utils import (
@@ -27,25 +29,28 @@ from langchain_anthropic._client_utils import (
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatResult
-from pydantic import Field
+from pydantic import Field, PrivateAttr
 
 from composer.llm.bedrock import (
     BedrockCredentialRefreshError, BedrockCredentialsError, max_request_bytes,
-    to_bedrock_model_id, to_logical_model_id,
+    to_bedrock_model_id,
 )
-from composer.llm.bedrock_inline import fit_request_to_budget
+from composer.llm.bedrock_inline import DocumentKey, fit_request_to_budget
 
 # Response fields that name the model: ``model`` as Anthropic returns it, and
 # ``model_name``, which langchain copies it into.
 _MODEL_NAME_KEYS = ("model", "model_name")
 
 
-def _normalize_model_names(metadata: dict[str, Any] | None) -> None:
+def _normalize_model_names(metadata: dict[str, Any] | None, logical: str) -> None:
+    """Replace every model name in ``metadata`` with ``logical``. Bedrock reports the model
+    under a name of its own (vendor-qualified, versioned, geography-prefixed or an ARN), and
+    the request was built from ``logical``, so that is the model that answered."""
     if metadata is None:
         return
     for key in _MODEL_NAME_KEYS:
-        if isinstance(name := metadata.get(key), str):
-            metadata[key] = to_logical_model_id(name)
+        if isinstance(metadata.get(key), str):
+            metadata[key] = logical
 
 
 # Raised while botocore fetches credentials from a remote source (the container or instance
@@ -70,14 +75,40 @@ def _credential_error(exc: botocore.exceptions.BotoCoreError) -> anthropic.Anthr
     )
 
 
+def _no_credentials_error(exc: RuntimeError, aws_region: str) -> anthropic.AnthropicError | None:
+    """The error to raise for ``exc``, a ``RuntimeError`` from a request attempt, when the
+    default AWS credential chain has no credentials; ``None`` when it has some, so ``exc``
+    has another cause.
+
+    The SDK's signer raises a plain ``RuntimeError`` when its boto3 session resolves no
+    credentials. Resolving them again here, from the same chain, tells that case apart
+    without depending on the SDK's message, and costs nothing on requests that succeed."""
+    try:
+        credentials = boto3.Session(region_name=aws_region).get_credentials()
+    except botocore.exceptions.BotoCoreError as boto_exc:
+        return _credential_error(boto_exc)
+    if credentials is not None:
+        return None
+    return BedrockCredentialsError(
+        "Could not sign the Bedrock request: the default AWS credential chain has no "
+        "credentials (environment variables, shared config and credentials files, container "
+        "or instance role)"
+    )
+
+
 class CredentialErrorMiddleware(anthropic.Middleware):
-    """Turns a botocore error from SigV4 signing into a :class:`BedrockCredentialRefreshError`
-    or a :class:`BedrockCredentialsError`, chained to the original.
+    """Turns a failure of SigV4 signing into a :class:`BedrockCredentialRefreshError` or a
+    :class:`BedrockCredentialsError`, chained to the original: a botocore error while
+    credentials are fetched, or the ``RuntimeError`` the SDK raises when the default
+    credential chain has none.
 
     The Mantle clients sign each attempt before sending it, and the SDK leaves an error from
     signing as it is, so a passing failure to fetch credentials would otherwise end the
     request at once. The SDK runs middleware once per attempt, inside its retry loop, and
     retries a ``RetryableError`` as it does a dropped connection."""
+
+    def __init__(self, aws_region: str) -> None:
+        self._aws_region = aws_region
 
     @override
     def handle(self, request: anthropic.APIRequest, call_next: anthropic.CallNext) -> anthropic.APIResponse[Any]:
@@ -85,6 +116,10 @@ class CredentialErrorMiddleware(anthropic.Middleware):
             return call_next(request)
         except botocore.exceptions.BotoCoreError as exc:
             raise _credential_error(exc) from exc
+        except RuntimeError as exc:
+            if (error := _no_credentials_error(exc, self._aws_region)) is None:
+                raise
+            raise error from exc
 
     @override
     async def handle_async(
@@ -94,6 +129,13 @@ class CredentialErrorMiddleware(anthropic.Middleware):
             return await call_next(request)
         except botocore.exceptions.BotoCoreError as exc:
             raise _credential_error(exc) from exc
+        except RuntimeError as exc:
+            # Resolving credentials can block on a metadata endpoint, as the SDK's own
+            # signing does, so it runs off the event loop like that.
+            error = await asyncio.to_thread(_no_credentials_error, exc, self._aws_region)
+            if error is None:
+                raise
+            raise error from exc
 
 
 class ChatAnthropicBedrock(ChatAnthropic):
@@ -105,6 +147,10 @@ class ChatAnthropicBedrock(ChatAnthropic):
     max_request_bytes: int = Field(default_factory=max_request_bytes)
     """The serialized request size above which inline documents are left out."""
 
+    # The inline documents this model has warned about leaving out, so a document dropped
+    # from every request of a conversation is warned about once.
+    _omitted_documents: set[DocumentKey] = PrivateAttr(default_factory=set)
+
     def _mantle_params(self) -> dict[str, Any]:
         """The parent's client settings (timeout, retries, default headers) minus the
         Anthropic API key and base URL, which belong to the first-party endpoint. With no
@@ -115,7 +161,7 @@ class ChatAnthropicBedrock(ChatAnthropic):
             "aws_region": self.aws_region,
             "max_retries": params["max_retries"],
             "default_headers": params["default_headers"],
-            "middleware": [CredentialErrorMiddleware()],
+            "middleware": [CredentialErrorMiddleware(self.aws_region)],
         }
         if "timeout" in params:
             mantle["timeout"] = params["timeout"]
@@ -161,7 +207,7 @@ class ChatAnthropicBedrock(ChatAnthropic):
     ) -> dict:
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         payload["model"] = to_bedrock_model_id(payload["model"])
-        return fit_request_to_budget(payload, self.max_request_bytes)
+        return fit_request_to_budget(payload, self.max_request_bytes, self._omitted_documents)
 
     @override
     def _make_message_chunk_from_anthropic_event(
@@ -179,13 +225,13 @@ class ChatAnthropicBedrock(ChatAnthropic):
             block_start_event=block_start_event,
         )
         if chunk is not None:
-            _normalize_model_names(chunk.response_metadata)
+            _normalize_model_names(chunk.response_metadata, self.model)
         return chunk, block_start
 
     @override
     def _format_output(self, data: Any, **kwargs: Any) -> ChatResult:
         result = super()._format_output(data, **kwargs)
-        _normalize_model_names(result.llm_output)
+        _normalize_model_names(result.llm_output, self.model)
         for generation in result.generations:
-            _normalize_model_names(generation.message.response_metadata)
+            _normalize_model_names(generation.message.response_metadata, self.model)
         return result

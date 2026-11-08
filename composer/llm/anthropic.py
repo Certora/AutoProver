@@ -23,7 +23,7 @@ from composer.llm.provider import (
 from composer.llm.pricing import PriceProvider, price_provider_for
 from composer.llm.bedrock import (
     MAX_TOKENS_ENV_VAR, llm_backend, bedrock_region, max_document_bytes, max_output_tokens,
-    max_request_bytes, is_transient_error_type,
+    max_request_bytes, aws_error_type, is_transient_error_type,
 )
 from composer.llm.bedrock_inline import INLINE_MEDIA_TYPES, base64_size, omitted_document_block
 from .types import CacheLevel
@@ -375,7 +375,8 @@ class AnthropicService(ProviderServiceBase):
         On Bedrock the same statuses carry the same meaning (429 throttling and model
         not ready, 500, 503, 408 model timeout; 400 validation, 403 access denied and
         404 unknown model are deterministic). Bedrock's exception names for transient
-        errors count as well (``composer.llm.bedrock.TRANSIENT_ERROR_TYPES``), and so
+        errors count as well (``composer.llm.bedrock.TRANSIENT_ERROR_TYPES``, read from the
+        payload or, failing that, the ``x-amzn-errortype`` header), and so
         does any ``RetryableError``, which is how a passing failure to fetch the AWS
         credentials that sign a request reaches here once the SDK's retries are spent."""
         if isinstance(exc, (anthropic.APIConnectionError, anthropic.RetryableError)):
@@ -392,6 +393,10 @@ class AnthropicService(ProviderServiceBase):
             # status code carries none of the meaning and the class stays the base
             # APIStatusError. The transient/deterministic split lives in the payload.
             error_type = payload_error_type(exc.body)
+            if error_type is None:
+                # AWS front ends may answer with a body that has no ``error.type`` and name
+                # the exception in a response header instead.
+                error_type = aws_error_type(exc.response.headers)
             return error_type in RETRYABLE_ERROR_TYPES or is_transient_error_type(error_type)
         return False
 

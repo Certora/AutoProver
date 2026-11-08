@@ -269,6 +269,38 @@ def test_everything_dropped_when_text_alone_is_over_budget() -> None:
     assert fitted["messages"][2]["content"][0]["content"][1]["type"] == "text"
 
 
+def _omission_logs(caplog, name: str) -> list[int]:
+    """The levels of the records that report leaving ``name`` out."""
+    return [r.levelno for r in caplog.records if f"{name!r} out of" in r.getMessage()]
+
+
+def test_omitted_document_is_warned_about_once_per_reported_set(caplog) -> None:
+    payload = _payload(_inline("a.pdf", 3000), tool_docs=(_inline("b.pdf", 3000),))
+    reported: set = set()
+    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
+        for _ in range(3):
+            # A fresh copy each time, as each request rebuilds its payload.
+            fit_request_to_budget(copy.deepcopy(payload), 500, reported)
+    assert _omission_logs(caplog, "a.pdf") == [logging.WARNING, logging.DEBUG, logging.DEBUG]
+    assert _omission_logs(caplog, "b.pdf") == [logging.WARNING, logging.DEBUG, logging.DEBUG]
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
+        # A new set, as a new chat model has, warns again.
+        fit_request_to_budget(payload, 500, set())
+        # Without a set, every omission is a warning.
+        fit_request_to_budget(payload, 500)
+    assert _omission_logs(caplog, "a.pdf") == [logging.WARNING, logging.WARNING]
+
+
+def test_documents_with_the_same_title_are_reported_separately(caplog) -> None:
+    reported: set = set()
+    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
+        fit_request_to_budget(_payload(_inline("a.pdf", 3000)), 500, reported)
+        fit_request_to_budget(_payload(_inline("a.pdf", 4000)), 500, reported)
+    assert _omission_logs(caplog, "a.pdf") == [logging.WARNING, logging.WARNING]
+
+
 def test_same_block_object_twice_is_counted_per_position() -> None:
     """The ordinal, not object identity, picks what to drop: a block object that the
     conversation holds twice is dropped only where the budget needs it."""
@@ -418,6 +450,27 @@ async def test_request_over_budget_reaches_bedrock_with_document_omitted(
     (tool_result,) = body["messages"][-1]["content"]
     assert tool_result["content"][-1]["type"] == "text"
     assert "'spec.pdf'" in tool_result["content"][-1]["text"]
+
+
+@pytest.mark.asyncio
+async def test_chat_model_warns_once_about_a_document_every_request_omits(
+    bedrock_env, monkeypatch, tmp_path, caplog
+) -> None:
+    _mock_mantle(monkeypatch)
+    (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
+    tool_msg = await _read_document_message(tmp_path, "spec.pdf")
+    system = {"type": "text", "text": "You are a verifier."}
+
+    llm = ChatAnthropicBedrock(
+        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        max_request_bytes=20_000, streaming=True,
+    )
+    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
+        for _ in range(3):
+            await llm.ainvoke(_conversation(system, tool_msg))
+    assert _omission_logs(caplog, "spec.pdf") == [
+        logging.WARNING, logging.DEBUG, logging.DEBUG,
+    ]
 
 
 @pytest.mark.asyncio

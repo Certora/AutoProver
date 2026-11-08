@@ -206,7 +206,7 @@ use the `bedrock-mantle:Model` condition key. The account must also have access 
 
 **Model ids stay logical.** `--model`, budgets, logs, pricing and the usage records in `job_info.json` all use
 the Anthropic model ids (`claude-opus-5-5`). Only the request sent to Bedrock carries the Bedrock id
-(`anthropic.claude-opus-5-5`), and the model name in a Bedrock response is mapped back to the logical id. Do not pass a
+(`anthropic.claude-opus-5-5`), and the model name in a Bedrock response is replaced by the logical id. Do not pass a
 Bedrock id to `--model`.
 
 **max_tokens.** Bedrock reserves a request's `max_tokens` against the account's tokens-per-minute quota before the
@@ -217,14 +217,16 @@ requests therefore cap `max_tokens` at `AUTOPROVER_BEDROCK_MAX_TOKENS`. A turn t
 pipeline gives the model) is sent inline as base64 in every request of the conversation that carries it, with its
 prompt-cache marker kept. Bedrock rejects a request over 20 MB, and base64 makes a file about a third larger. A
 document over `AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES` is replaced by a short text note naming it. When a request is
-over `AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES`, documents are replaced the same way, latest first, until it fits. Each
-replacement is logged as a warning. Binary files other than PDFs are always replaced by such a note on Bedrock. A
-thread started on the Anthropic API that refers to a Files API upload cannot continue on Bedrock: its first Bedrock
-request fails with an error naming the file.
+over `AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES`, documents are replaced the same way, latest first, until it fits. The
+first replacement of each document is logged as a warning, later ones of the same document at DEBUG. Binary files
+other than PDFs are always replaced by such a note on Bedrock. A thread started on the Anthropic API that refers to a
+Files API upload cannot continue on Bedrock: its first Bedrock request fails with an error naming the file.
 
 **Docker.** `scripts/autoprove` and `scripts/docker-compose.yml` pass `AUTOPROVER_LLM_BACKEND`, the region variables,
-the Bedrock limits above and `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` from your shell into
-the container. `~/.aws` is not mounted, so for a profile or SSO session export its credentials first:
+the Bedrock limits above, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`,
+`AWS_BEARER_TOKEN_BEDROCK` / `ANTHROPIC_AWS_API_KEY` and `ANTHROPIC_BEDROCK_MANTLE_BASE_URL` from your shell into the
+container. `scripts/autoprove` stops before it builds anything unless a region is set and either the AWS keys or a
+Bedrock API key are exported. `~/.aws` is not mounted, so for a profile or SSO session export its credentials first:
 
 ```bash
 eval "$(aws configure export-credentials --format env)"

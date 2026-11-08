@@ -9,7 +9,9 @@ every request that includes it. Two checks keep a run from failing on size:
 - when a request is built, :func:`fit_request_to_budget` replaces inline documents with such
   text blocks, latest first, until the serialized request fits the per-request budget.
 
-Both log a warning for each document they leave out, and neither raises for size.
+Both log a warning for each document they leave out, and neither raises for size. A
+document that every request of a conversation leaves out is warned about once per
+``reported`` set the caller keeps (one per chat model), and logged at DEBUG after that.
 
 Kept free of langchain imports, like :mod:`composer.llm.bedrock`.
 """
@@ -32,12 +34,12 @@ def base64_size(raw_size: int) -> int:
 
 
 def omitted_document_block(
-    name: str, reason: str, *, cache_control: Any = None
+    name: str, reason: str, *, cache_control: Any = None, log_level: int = logging.WARNING
 ) -> dict[str, Any]:
     """A text block that stands in for a document left out of the request, telling the model
-    which document is missing and why. ``cache_control`` is carried over so the request keeps
-    the cache breakpoint the document held."""
-    logger.warning("Leaving document %r out of a Bedrock request: %s", name, reason)
+    which document is missing and why, logged at ``log_level``. ``cache_control`` is carried
+    over so the request keeps the cache breakpoint the document held."""
+    logger.log(log_level, "Leaving document %r out of a Bedrock request: %s", name, reason)
     block: dict[str, Any] = {
         "type": "text",
         "text": (
@@ -117,10 +119,28 @@ def _check_no_file_reference(block: dict[str, Any]) -> None:
         )
 
 
-def fit_request_to_budget(payload: dict[str, Any], max_bytes: int) -> dict[str, Any]:
+type DocumentKey = tuple[str, int, int]
+"""Identifies an inline document across the requests of a conversation: its title, and the
+length and hash of its base64 body."""
+
+
+def _document_key(block: dict[str, Any]) -> DocumentKey:
+    data = block["source"].get("data")
+    body = data if isinstance(data, str) else ""
+    return (str(block.get("title") or ""), len(body), hash(body))
+
+
+def fit_request_to_budget(
+    payload: dict[str, Any], max_bytes: int, reported: set[DocumentKey] | None = None
+) -> dict[str, Any]:
     """``payload`` with inline documents replaced by text blocks, latest first, until its
     serialized size is at most ``max_bytes``. Returns ``payload`` itself when it already
     fits or carries no inline document; never mutates it.
+
+    Each document left out is logged as a warning. With ``reported``, only a document not yet
+    in that set is, and it is added; one already in it is logged at DEBUG. Every request of a
+    conversation carries its whole history, so without this a document left out once is
+    warned about on every later request.
 
     Leaving out the latest documents first keeps the earliest ones, which hold the system
     and design documents the whole conversation builds on and sit in the cached prefix.
@@ -149,11 +169,19 @@ def fit_request_to_budget(payload: dict[str, Any], max_bytes: int) -> dict[str, 
         if total <= max_bytes:
             break
         document = documents[ordinal]
+        log_level = logging.WARNING
+        if reported is not None:
+            key = _document_key(document)
+            if key in reported:
+                log_level = logging.DEBUG
+            else:
+                reported.add(key)
         placeholder = omitted_document_block(
             str(document.get("title") or "untitled document"),
             f"the request would exceed the {max_bytes}-byte request budget for Claude on "
             "Bedrock",
             cache_control=document.get("cache_control"),
+            log_level=log_level,
         )
         total -= _serialized_size(document) - _serialized_size(placeholder)
         replacements[ordinal] = placeholder
