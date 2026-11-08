@@ -22,7 +22,8 @@ from composer.llm.provider import (
 )
 from composer.llm.pricing import PriceProvider, price_provider_for
 from composer.llm.bedrock import (
-    llm_backend, bedrock_region, max_document_bytes, max_request_bytes,
+    MAX_TOKENS_ENV_VAR, llm_backend, bedrock_region, max_document_bytes, max_output_tokens,
+    max_request_bytes, is_transient_error_type,
 )
 from composer.llm.bedrock_inline import INLINE_MEDIA_TYPES, base64_size, omitted_document_block
 from .types import CacheLevel
@@ -327,6 +328,8 @@ def uploader_for_backend() -> FileUploader:
 # --- ModelProvider ---------------------------------------------------------
 
 
+INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
+
 RETRYABLE_ERROR_TYPES = frozenset({
     "overloaded_error",  # 529
     "api_error",         # 500
@@ -367,8 +370,15 @@ class AnthropicService(ProviderServiceBase):
         failures (``APITimeoutError`` subclasses ``APIConnectionError``), a
         transport failure mid-stream, and an error the server reports inside a
         stream. 400-class request errors are deterministic — an over-long prompt
-        fails identically on every attempt — and are deliberately excluded."""
-        if isinstance(exc, anthropic.APIConnectionError):
+        fails identically on every attempt — and are deliberately excluded.
+
+        On Bedrock the same statuses carry the same meaning (429 throttling and model
+        not ready, 500, 503, 408 model timeout; 400 validation, 403 access denied and
+        404 unknown model are deterministic). Bedrock's exception names for transient
+        errors count as well (``composer.llm.bedrock.TRANSIENT_ERROR_TYPES``), and so
+        does any ``RetryableError``, which is how a passing failure to fetch the AWS
+        credentials that sign a request reaches here once the SDK's retries are spent."""
+        if isinstance(exc, (anthropic.APIConnectionError, anthropic.RetryableError)):
             return True
         # The SDK does not wrap streamed-body failures as APIConnectionError: a dropped stream
         # raises httpx.RemoteProtocolError, a stalled one httpx.ReadTimeout. Both are transient.
@@ -381,7 +391,8 @@ class AnthropicService(ProviderServiceBase):
             # 200 response, and the SDK builds the exception from that response — so the
             # status code carries none of the meaning and the class stays the base
             # APIStatusError. The transient/deterministic split lives in the payload.
-            return payload_error_type(exc.body) in RETRYABLE_ERROR_TYPES
+            error_type = payload_error_type(exc.body)
+            return error_type in RETRYABLE_ERROR_TYPES or is_transient_error_type(error_type)
         return False
 
 @dataclass
@@ -421,7 +432,8 @@ class AnthropicModelProvider:
         # first request.
         backend = llm_backend()
         bedrock_settings = (
-            (bedrock_region(), max_request_bytes()) if backend == "bedrock" else None
+            (bedrock_region(), max_request_bytes(), max_output_tokens())
+            if backend == "bedrock" else None
         )
 
         opts = self.options
@@ -443,7 +455,7 @@ class AnthropicModelProvider:
             # this beta. Bedrock has no Files API, so its requests never carry such a block.
             betas.append("files-api-2025-04-14")
         if self.features.interleaved_thinking and opts.interleaved_thinking:
-            betas.append("interleaved-thinking-2025-05-14")
+            betas.append(INTERLEAVED_THINKING_BETA)
         if opts.memory_tool:
             betas.append("context-management-2025-06-27")
 
@@ -457,12 +469,26 @@ class AnthropicModelProvider:
         )
         if bedrock_settings is not None:
             from composer.llm.bedrock_chat import ChatAnthropicBedrock
-            aws_region, request_budget = bedrock_settings
+            aws_region, request_budget, token_cap = bedrock_settings
+            # Bedrock counts max_tokens against the token quota when it admits a request, so
+            # it is capped here; see composer.llm.bedrock.DEFAULT_MAX_TOKENS.
+            max_tokens = min(opts.tokens, token_cap)
+            # With interleaved thinking the budget covers every thinking block of a turn and
+            # may exceed max_tokens; without it, one thinking block must fit below max_tokens.
+            budget = (thinking or {}).get("budget_tokens")
+            interleaved = INTERLEAVED_THINKING_BETA in betas
+            if budget is not None and not interleaved and budget >= max_tokens:
+                raise ValueError(
+                    f"The thinking budget of {budget} tokens must be below max_tokens, which "
+                    f"on Bedrock is {max_tokens}, the smaller of --tokens ({opts.tokens}) and "
+                    f"{MAX_TOKENS_ENV_VAR} ({token_cap}); lower --thinking-tokens or raise "
+                    "the other two"
+                )
             return ChatAnthropicBedrock(
                 aws_region=aws_region,
                 max_request_bytes=request_budget,
                 model_name=self.model_name,
-                max_tokens_to_sample=opts.tokens,
+                max_tokens_to_sample=max_tokens,
                 # The same transport settings as the Anthropic API path below; see there.
                 timeout=300.0,
                 streaming=True,
