@@ -74,7 +74,7 @@ def _map_content_blocks(
 ) -> dict[str, Any]:
     """A copy of ``payload`` with ``fn`` applied to every content block of the system prompt
     and of each message, in request order, descending into ``tool_result`` content. Only the
-    containers along the way are copied; ``payload`` itself is left unchanged."""
+    dicts and lists along the way are copied; ``payload`` itself is left unchanged."""
 
     def map_list(blocks: list[Any]) -> list[Any]:
         out: list[Any] = []
