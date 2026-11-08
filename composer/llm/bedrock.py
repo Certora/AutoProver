@@ -9,6 +9,18 @@ CLI defaults, budgets, logs, pricing and usage records all key on them. Only the
 sent to Bedrock carries the Bedrock id, and the model name a Bedrock response reports is
 mapped back before anything downstream sees it.
 
+Bedrock has no Files API, so binary documents travel inline as base64 in every request
+that carries them, and Bedrock caps a request at 20 MB. Two byte budgets, measured on the
+serialized request, keep a run under that cap (see :mod:`composer.llm.bedrock_inline`):
+
+- ``AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES`` (default 8,000,000): the largest base64 body one
+  document may have;
+- ``AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES`` (default 16,000,000): the largest serialized
+  request body. The margin below 20 MB absorbs request headers and the difference between
+  this estimate and what the SDK sends.
+
+A document over budget is replaced by a short text block naming it, never an error.
+
 Kept free of langchain imports so the registry can use the id predicates cheaply; the chat
 model itself lives in :mod:`composer.llm.bedrock_chat`.
 """
@@ -57,6 +69,37 @@ def bedrock_region() -> str:
         f"{BACKEND_ENV_VAR}=bedrock needs an AWS region: set "
         f"{' or '.join(REGION_ENV_VARS)}"
     )
+
+
+MAX_DOCUMENT_BYTES_ENV_VAR = "AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES"
+MAX_REQUEST_BYTES_ENV_VAR = "AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES"
+DEFAULT_MAX_DOCUMENT_BYTES = 8_000_000
+DEFAULT_MAX_REQUEST_BYTES = 16_000_000
+
+
+def _byte_budget(var: str, default: int) -> int:
+    raw = os.environ.get(var, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise ValueError(f"{var}={os.environ[var]!r} is not a positive number of bytes")
+    return value
+
+
+def max_document_bytes() -> int:
+    """The base64 size above which one inline document is left out of a Bedrock request.
+    Raises ``ValueError`` for a value that is not a positive integer."""
+    return _byte_budget(MAX_DOCUMENT_BYTES_ENV_VAR, DEFAULT_MAX_DOCUMENT_BYTES)
+
+
+def max_request_bytes() -> int:
+    """The serialized request size above which inline documents are left out of a Bedrock
+    request. Raises ``ValueError`` for a value that is not a positive integer."""
+    return _byte_budget(MAX_REQUEST_BYTES_ENV_VAR, DEFAULT_MAX_REQUEST_BYTES)
 
 
 def _arn_resource(model_id: str) -> str | None:

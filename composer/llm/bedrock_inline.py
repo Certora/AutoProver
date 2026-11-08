@@ -1,0 +1,171 @@
+"""Inline documents for Claude on Bedrock, and the byte budgets that keep requests under
+Bedrock's 20 MB cap.
+
+Bedrock has no Files API, so a binary document is a base64 ``document`` block carried in
+every request that includes it. Two checks keep a run from failing on size:
+
+- when a document is rendered, one whose base64 body is over the per-document budget
+  becomes a text block naming it (:func:`omitted_document_block`);
+- when a request is built, :func:`fit_request_to_budget` replaces inline documents with such
+  text blocks, latest first, until the serialized request fits the per-request budget.
+
+Both log a warning for each document they leave out, and neither raises for size.
+
+Kept free of langchain imports, like :mod:`composer.llm.bedrock`.
+"""
+
+import json
+import logging
+from typing import Any, Callable
+
+from composer.llm.bedrock import BACKEND_ENV_VAR
+
+logger = logging.getLogger(__name__)
+
+INLINE_MEDIA_TYPES: frozenset[str] = frozenset({"application/pdf"})
+"""The media types a base64 ``document`` block accepts."""
+
+
+def base64_size(raw_size: int) -> int:
+    """The length of the base64 encoding of ``raw_size`` bytes, padding included."""
+    return 4 * ((raw_size + 2) // 3)
+
+
+def omitted_document_block(
+    name: str, reason: str, *, cache_control: Any = None
+) -> dict[str, Any]:
+    """A text block that stands in for a document left out of the request, telling the model
+    which document is missing and why. ``cache_control`` is carried over so the request keeps
+    the cache breakpoint the document held."""
+    logger.warning("Leaving document %r out of a Bedrock request: %s", name, reason)
+    block: dict[str, Any] = {
+        "type": "text",
+        "text": (
+            f"[Document {name!r} was omitted: {reason}. Its contents are not available in "
+            "this conversation, and reading it again will not attach it.]"
+        ),
+    }
+    if cache_control is not None:
+        block["cache_control"] = cache_control
+    return block
+
+
+class FilesApiReferenceError(ValueError):
+    """A request for Bedrock refers to a document uploaded to the Anthropic Files API.
+
+    Such blocks come from conversation checkpoints written under the anthropic backend. They
+    cannot be rewritten into inline blocks: the checkpoint holds only the file id, and the
+    Files API does not return the bytes of a file the client uploaded. So the request fails
+    before it is sent."""
+
+
+def _serialized_size(value: Any) -> int:
+    # The compact form the HTTP client sends; ``default=str`` only keeps the estimate
+    # total for values the SDK would serialize itself.
+    return len(json.dumps(
+        value, ensure_ascii=False, separators=(",", ":"), default=str
+    ).encode("utf-8"))
+
+
+def _map_content_blocks(
+    payload: dict[str, Any], fn: Callable[[dict[str, Any]], dict[str, Any]]
+) -> dict[str, Any]:
+    """A copy of ``payload`` with ``fn`` applied to every content block of the system prompt
+    and of each message, in request order, descending into ``tool_result`` content. Only the
+    containers along the way are copied; ``payload`` itself is left unchanged."""
+
+    def map_list(blocks: list[Any]) -> list[Any]:
+        out: list[Any] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                out.append(block)
+            elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+                out.append({**block, "content": map_list(block["content"])})
+            else:
+                out.append(fn(block))
+        return out
+
+    result = dict(payload)
+    if isinstance(system := payload.get("system"), list):
+        result["system"] = map_list(system)
+    if isinstance(messages := payload.get("messages"), list):
+        result["messages"] = [
+            {**m, "content": map_list(m["content"])}
+            if isinstance(m, dict) and isinstance(m.get("content"), list) else m
+            for m in messages
+        ]
+    return result
+
+
+def _is_inline_document(block: dict[str, Any]) -> bool:
+    source = block.get("source")
+    return (
+        block.get("type") == "document"
+        and isinstance(source, dict) and source.get("type") == "base64"
+    )
+
+
+def _check_no_file_reference(block: dict[str, Any]) -> None:
+    source = block.get("source")
+    if isinstance(source, dict) and source.get("type") == "file":
+        raise FilesApiReferenceError(
+            f"This conversation contains a {block.get('type', 'content')} block that refers to "
+            f"Anthropic Files API upload {source.get('file_id')!r}. It was most likely "
+            f"checkpointed by a run with {BACKEND_ENV_VAR}=anthropic, and Bedrock cannot "
+            f"read Files API uploads. Resume this thread with {BACKEND_ENV_VAR}=anthropic, "
+            f"or start a new thread with {BACKEND_ENV_VAR}=bedrock."
+        )
+
+
+def fit_request_to_budget(payload: dict[str, Any], max_bytes: int) -> dict[str, Any]:
+    """``payload`` with inline documents replaced by text blocks, latest first, until its
+    serialized size is at most ``max_bytes``. Returns ``payload`` itself when it already
+    fits or carries no inline document; never mutates it.
+
+    Leaving out the latest documents first keeps the earliest ones, which hold the system
+    and design documents the whole conversation builds on and sit in the cached prefix.
+    If the request is still over budget with every document left out, it is sent that way:
+    only documents can be dropped.
+
+    Raises :class:`FilesApiReferenceError` when the payload refers to a Files API upload."""
+    documents: list[dict[str, Any]] = []
+
+    def collect(block: dict[str, Any]) -> dict[str, Any]:
+        _check_no_file_reference(block)
+        if _is_inline_document(block):
+            documents.append(block)
+        return block
+
+    _map_content_blocks(payload, collect)
+    if not documents:
+        return payload
+
+    total = _serialized_size(payload)
+    if total <= max_bytes:
+        return payload
+
+    replacements: dict[int, dict[str, Any]] = {}
+    for ordinal in reversed(range(len(documents))):
+        if total <= max_bytes:
+            break
+        document = documents[ordinal]
+        placeholder = omitted_document_block(
+            str(document.get("title") or "untitled document"),
+            f"the request would exceed the {max_bytes}-byte request budget for Claude on "
+            "Bedrock",
+            cache_control=document.get("cache_control"),
+        )
+        total -= _serialized_size(document) - _serialized_size(placeholder)
+        replacements[ordinal] = placeholder
+
+    seen = 0
+
+    def replace(block: dict[str, Any]) -> dict[str, Any]:
+        nonlocal seen
+        if not _is_inline_document(block):
+            return block
+        ordinal = seen
+        seen += 1
+        return replacements.get(ordinal, block)
+
+    return _map_content_blocks(payload, replace)

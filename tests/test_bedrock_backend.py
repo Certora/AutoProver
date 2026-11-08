@@ -15,7 +15,7 @@ from langchain_core.messages import AIMessage
 
 from graphcore.utils import get_normalized_token_usage
 
-from composer.input.files import InMemoryTextFile
+from composer.input.files import InMemoryBytesFile, InMemoryTextFile
 from composer.llm import openrouter
 from composer.llm.anthropic import (
     AnthropicFileUploader, AnthropicModelProvider, AnthropicService, BedrockFileUploader,
@@ -361,11 +361,12 @@ async def test_bedrock_uploader_keeps_text_inline(bedrock_env, tmp_path) -> None
 
 
 @pytest.mark.asyncio
-async def test_bedrock_uploader_rejects_binary_for_now(bedrock_env, tmp_path) -> None:
+async def test_bedrock_uploader_inlines_binary(bedrock_env, tmp_path) -> None:
     pdf = tmp_path / "paper.pdf"
     pdf.write_bytes(b"%PDF-1.4\n%\x00\x01")
-    with pytest.raises(NotImplementedError, match="inline base64 document blocks"):
-        await BedrockFileUploader().get_document(pdf)
+    doc = await BedrockFileUploader().get_document(pdf)
+    assert isinstance(doc, InMemoryBytesFile)
+    assert doc.to_dict()["source"]["type"] == "base64"
 
 
 # --- model ids -------------------------------------------------------------------

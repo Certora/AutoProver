@@ -1,11 +1,14 @@
 """``ChatAnthropic`` pointed at Claude on Amazon Bedrock through the Mantle endpoint.
 
 Mantle serves the Anthropic Messages API itself, so everything ``ChatAnthropic`` does to
-build requests and parse responses applies unchanged. This subclass changes three things:
+build requests and parse responses applies unchanged. This subclass changes four things:
 
 - the SDK clients are the Bedrock Mantle ones, which sign requests with SigV4 from the
   default AWS credential chain and need no Anthropic API key;
 - the request carries the Bedrock model id, mapped from the logical one;
+- inline documents are dropped, latest first, until the request fits the request budget,
+  and a request that refers to a Files API upload fails before it is sent (see
+  :func:`composer.llm.bedrock_inline.fit_request_to_budget`);
 - the model name a response reports is mapped back to the logical id, so usage records,
   pricing and logs see the same name the run was configured with.
 """
@@ -21,8 +24,10 @@ from langchain_anthropic._client_utils import (
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatResult
+from pydantic import Field
 
-from composer.llm.bedrock import to_bedrock_model_id, to_logical_model_id
+from composer.llm.bedrock import max_request_bytes, to_bedrock_model_id, to_logical_model_id
+from composer.llm.bedrock_inline import fit_request_to_budget
 
 # Response fields that name the model: ``model`` as Anthropic returns it, and
 # ``model_name``, which langchain copies it into.
@@ -43,6 +48,8 @@ class ChatAnthropicBedrock(ChatAnthropic):
     ``model`` holds the logical id; only the request payload carries the Bedrock id."""
 
     aws_region: str
+    max_request_bytes: int = Field(default_factory=max_request_bytes)
+    """The serialized request size above which inline documents are left out."""
 
     def _mantle_params(self) -> dict[str, Any]:
         """The parent's client settings (timeout, retries, default headers) minus the
@@ -98,7 +105,7 @@ class ChatAnthropicBedrock(ChatAnthropic):
     ) -> dict:
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         payload["model"] = to_bedrock_model_id(payload["model"])
-        return payload
+        return fit_request_to_budget(payload, self.max_request_bytes)
 
     @override
     def _make_message_chunk_from_anthropic_event(

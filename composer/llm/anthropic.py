@@ -5,6 +5,7 @@ from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override, cast
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
+import base64
 from functools import cache
 
 import anthropic
@@ -12,7 +13,7 @@ import httpx
 
 from composer.input.files import (
     UploaderBase, ContentRenderer, FileUploader, FileData, Document, TextDocument,
-    InMemoryTextFile,
+    InMemoryBytesFile, InMemoryTextFile,
 )
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
@@ -20,7 +21,10 @@ from composer.llm.provider import (
     standard_callbacks
 )
 from composer.llm.pricing import PriceProvider, price_provider_for
-from composer.llm.bedrock import llm_backend, bedrock_region
+from composer.llm.bedrock import (
+    llm_backend, bedrock_region, max_document_bytes, max_request_bytes,
+)
+from composer.llm.bedrock_inline import INLINE_MEDIA_TYPES, base64_size, omitted_document_block
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
@@ -164,9 +168,66 @@ class AnthropicRenderer:
         self, basename: str, contents: bytes, mime: str,
         *, cache_level: CacheLevel = CacheLevel.NONE
     ) -> dict:
+        # ``title`` names the document to the model, and lets a request that has to drop
+        # the block for size say which document it dropped.
+        to_ret: dict[str, Any] = {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": mime,
+                "data": base64.b64encode(contents).decode("ascii"),
+            },
+            "title": basename,
+        }
+        if (ttl := level_to_ttl(cache_level)) is not None:
+            to_ret["cache_control"] = {
+                "type": "ephemeral",
+                "ttl": ttl
+            }
+        return to_ret
+
+
+@dataclass
+class BedrockRenderer(AnthropicRenderer):
+    """Content blocks for Claude on Bedrock: binary documents are inlined, within the
+    per-document byte budget. A document that cannot be inlined, being over budget or of a
+    type a ``document`` block does not accept, becomes a text block that names it."""
+
+    max_document_bytes: int = field(default_factory=max_document_bytes)
+
+    @override
+    def file_block(
+        self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
         raise NotImplementedError(
-            "Anthropic content is uploaded to the Files API, not inlined."
+            "Bedrock has no Files API; binary content is inlined by BedrockFileUploader "
+            "as an InMemoryBytesFile."
         )
+
+    @override
+    def inline_file_block(
+        self, basename: str, contents: bytes, mime: str,
+        *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
+        cache_control = (
+            {"type": "ephemeral", "ttl": ttl}
+            if (ttl := level_to_ttl(cache_level)) is not None else None
+        )
+        if mime not in INLINE_MEDIA_TYPES:
+            return omitted_document_block(
+                basename,
+                f"Claude on Bedrock accepts inline documents of type "
+                f"{', '.join(sorted(INLINE_MEDIA_TYPES))} only, and this one is {mime}",
+                cache_control=cache_control,
+            )
+        if (size := base64_size(len(contents))) > self.max_document_bytes:
+            return omitted_document_block(
+                basename,
+                f"it is {size} bytes as base64, over the {self.max_document_bytes}-byte "
+                "per-document budget for Claude on Bedrock",
+                cache_control=cache_control,
+            )
+        return super().inline_file_block(basename, contents, mime, cache_level=cache_level)
 
 @cache
 def _get_service():
@@ -220,9 +281,12 @@ class AnthropicFileUploader(UploaderBase):
 @dataclass
 class BedrockFileUploader(UploaderBase):
     """``FileUploader`` for Claude on Bedrock, which has no Files API. Text that would be
-    uploaded stays in the prompt instead; binary documents are not supported yet."""
+    uploaded stays in the prompt instead, and binary documents become
+    :class:`InMemoryBytesFile`, sent as base64 in every request that carries them. The
+    document keeps its bytes whatever its size; :class:`BedrockRenderer` decides, when it is
+    rendered, whether they fit the budget."""
 
-    renderer: ContentRenderer = field(default_factory=AnthropicRenderer)
+    renderer: ContentRenderer = field(default_factory=BedrockRenderer)
 
     @override
     async def _upload_bytes(
@@ -232,10 +296,11 @@ class BedrockFileUploader(UploaderBase):
 
     @override
     async def _binary_document(self, data: FileData) -> Document:
-        raise NotImplementedError(
-            f"Cannot attach binary document {data.basename!r} ({data.mime}): the Bedrock "
-            "LLM backend does not support binary documents yet (inline base64 document "
-            "blocks are the next step of the Bedrock backend)."
+        return InMemoryBytesFile(
+            basename=data.basename,
+            contents=data.raw_data,
+            mime=data.mime,
+            renderer=self.renderer,
         )
 
     @override
@@ -351,10 +416,13 @@ class AnthropicModelProvider:
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
 
-        # Read first so a bad AUTOPROVER_LLM_BACKEND (or, for Bedrock, a missing region)
-        # fails here, when the model is built, rather than on its first request.
+        # Read first so a bad AUTOPROVER_LLM_BACKEND (or, for Bedrock, a missing region or a
+        # malformed request budget) fails here, when the model is built, rather than on its
+        # first request.
         backend = llm_backend()
-        aws_region = bedrock_region() if backend == "bedrock" else None
+        bedrock_settings = (
+            (bedrock_region(), max_request_bytes()) if backend == "bedrock" else None
+        )
 
         opts = self.options
         thinking: dict[str, Any] | None
@@ -387,10 +455,12 @@ class AnthropicModelProvider:
         callbacks = standard_callbacks(
             self.price_provider, long_cache=cache_level == CacheLevel.LONG
         )
-        if aws_region is not None:
+        if bedrock_settings is not None:
             from composer.llm.bedrock_chat import ChatAnthropicBedrock
+            aws_region, request_budget = bedrock_settings
             return ChatAnthropicBedrock(
                 aws_region=aws_region,
+                max_request_bytes=request_budget,
                 model_name=self.model_name,
                 max_tokens_to_sample=opts.tokens,
                 # The same transport settings as the Anthropic API path below; see there.
