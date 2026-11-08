@@ -55,7 +55,12 @@ dependencies = [
     "pyelftools>=0.33",
     # the report renderer's `markdown` jinja filter (also in the ragbuild group).
     "markdown-it-py>=3.0",
-    "anthropic>=0.18.0",
+    # Bedrock Mantle clients (AnthropicBedrockMantle / AsyncAnthropicBedrockMantle)
+    # ship from 0.91.0; >=0.122.0 because from that release the async client
+    # does SigV4 signing (and AWS credential refresh) off the event loop. The
+    # [bedrock] extra brings boto3/botocore, which those clients sign with.
+    # <1.0 matches langchain-anthropic 1.4's own anthropic<1.0 requirement.
+    "anthropic[bedrock]>=0.122.0,<1.0",
     "openai>=1.50.0",
     "wcmatch>=8.5.0",
     "python-dotenv>=1.0.0",
