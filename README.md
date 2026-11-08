@@ -37,7 +37,7 @@ You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.
 
 - Python 3.12+, `uv`, Docker with compose
 - `rustup` — a default `uv sync` builds the `rust/` crates (see below)
-- `ANTHROPIC_API_KEY` in your environment
+- `ANTHROPIC_API_KEY` in your environment (also when Claude runs on [Amazon Bedrock](#claude-on-amazon-bedrock))
 - PostgreSQL databases running (see below)
 - RAG database populated
 - Solidity compiler(s) on `$PATH` (naming convention `solcX.Y`, e.g. `solc8.29`)
@@ -177,6 +177,59 @@ tui-autoprove \
     --cloud \
     --max-concurrent 2 \
     --cache-ns my-answer-run
+```
+
+## Claude on Amazon Bedrock
+
+By default the pipeline calls Claude through the Anthropic API. With `AUTOPROVER_LLM_BACKEND=bedrock` it calls Claude on
+Amazon Bedrock instead, through Bedrock's Anthropic Messages API endpoint (`https://bedrock-mantle.<region>.api.aws`).
+Every agent that builds its model through composer follows this setting. AutoSetup's own LLM calls still go to the
+Anthropic API, so `ANTHROPIC_API_KEY` is required with either backend.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `AUTOPROVER_LLM_BACKEND` | `anthropic` | `anthropic` or `bedrock`. Case and surrounding spaces are ignored; any other value stops the run when a model is built. |
+| `AWS_REGION` (or `AWS_DEFAULT_REGION`) | none | The Bedrock region. Required for `bedrock`: without it the run stops when a model is built. |
+| `AUTOPROVER_BEDROCK_MAX_TOKENS` | `64000` | Upper limit on `max_tokens` in a Bedrock request. A lower value is used unchanged. |
+| `AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES` | `8000000` | Largest base64 size of one document sent inline. |
+| `AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES` | `16000000` | Largest size of a whole serialized request. |
+
+**Credentials.** Requests are signed with AWS SigV4, using the default AWS credential chain: environment variables, the
+shared config and credentials files (profiles, SSO), the task role of an ECS or AWS Batch container, or an EC2
+instance profile. No Anthropic API key is used for these requests. The Anthropic SDK switches to a Bedrock API key
+instead of SigV4 when `AWS_BEARER_TOKEN_BEDROCK` or `ANTHROPIC_AWS_API_KEY` is set, and sends requests to
+`ANTHROPIC_BEDROCK_MANTLE_BASE_URL` instead of the regional endpoint when that variable is set.
+
+**Permissions.** The role needs the IAM action `bedrock-mantle:CreateInference`. Its resource type is a Bedrock
+project (`arn:aws:bedrock-mantle:<region>:<account>:project/<id>`), not a model; to limit the models a role may call,
+use the `bedrock-mantle:Model` condition key. The account must also have access to the Claude models the run uses.
+
+**Model ids stay logical.** `--model`, budgets, logs, pricing and the usage records in `job_info.json` all use
+the Anthropic model ids (`claude-opus-5-5`). Only the request sent to Bedrock carries the Bedrock id
+(`anthropic.claude-opus-5-5`), and the model name in a Bedrock response is mapped back to the logical id. Do not pass a
+Bedrock id to `--model`.
+
+**max_tokens.** Bedrock reserves a request's `max_tokens` against the account's tokens-per-minute quota before the
+model answers, so an oversized `max_tokens` throttles a run long before its real usage reaches the quota. Bedrock
+requests therefore cap `max_tokens` at `AUTOPROVER_BEDROCK_MAX_TOKENS`. A turn that reaches the cap is cut off.
+
+**PDFs and other files.** Bedrock has no Files API. On Bedrock, a PDF design document (or any other binary file the
+pipeline gives the model) is sent inline as base64 in every request of the conversation that carries it, with its
+prompt-cache marker kept. Bedrock rejects a request over 20 MB, and base64 makes a file about a third larger. A
+document over `AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES` is replaced by a short text note naming it. When a request is
+over `AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES`, documents are replaced the same way, latest first, until it fits. Each
+replacement is logged as a warning. Binary files other than PDFs are always replaced by such a note on Bedrock. A
+thread started on the Anthropic API that refers to a Files API upload cannot continue on Bedrock: its first Bedrock
+request fails with an error naming the file.
+
+**Docker.** `scripts/autoprove` and `scripts/docker-compose.yml` pass `AUTOPROVER_LLM_BACKEND`, the region variables,
+the Bedrock limits above and `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN` from your shell into
+the container. `~/.aws` is not mounted, so for a profile or SSO session export its credentials first:
+
+```bash
+eval "$(aws configure export-credentials --format env)"
+export AUTOPROVER_LLM_BACKEND=bedrock AWS_REGION=us-east-1
+scripts/autoprove AutoProverExamples/SmokeTest src/Answer.sol:Answer design.md
 ```
 
 ## Pipeline Phases

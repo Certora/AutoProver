@@ -36,6 +36,12 @@ from psycopg.sql import SQL, Identifier, Literal
 from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
 
 import composer.diagnostics.timing as timing_mod
+from composer.llm.bedrock import (
+    BACKEND_ENV_VAR,
+    MAX_DOCUMENT_BYTES_ENV_VAR,
+    MAX_REQUEST_BYTES_ENV_VAR,
+    MAX_TOKENS_ENV_VAR,
+)
 from composer.prover.core import ProverOptions, ProverReport
 from composer.spec.source.prover import get_prover_tool, in_situ_project, LLM
 
@@ -97,6 +103,21 @@ def _isolate_run_summary():
         yield
     finally:
         timing_mod._run_summary.reset(tok)
+
+
+@pytest.fixture(autouse=True)
+def _default_llm_backend(monkeypatch: MonkeyPatch) -> None:
+    """Run every test on the default (Anthropic API) backend with Bedrock's tunables at
+    their defaults, whatever the developer's shell exports. A shell set up for Bedrock
+    would otherwise route model builders in unrelated tests to Bedrock. Tests of the
+    Bedrock backend set these variables themselves."""
+    for var in (
+        BACKEND_ENV_VAR,
+        MAX_DOCUMENT_BYTES_ENV_VAR,
+        MAX_REQUEST_BYTES_ENV_VAR,
+        MAX_TOKENS_ENV_VAR,
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 # =========================================================================

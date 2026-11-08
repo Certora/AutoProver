@@ -1,7 +1,7 @@
 """``ChatAnthropic`` pointed at Claude on Amazon Bedrock through the Mantle endpoint.
 
 Mantle serves the Anthropic Messages API itself, so everything ``ChatAnthropic`` does to
-build requests and parse responses applies unchanged. This subclass changes four things:
+build requests and parse responses applies unchanged. This subclass changes five things:
 
 - the SDK clients are the Bedrock Mantle ones, which sign requests with SigV4 from the
   default AWS credential chain and need no Anthropic API key;
