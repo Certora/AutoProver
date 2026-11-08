@@ -35,6 +35,7 @@ from .provider import (
     ProviderServiceBase, ProviderSpec, compaction_threshold, payload_error_type,
     reasoning_effort, standard_callbacks
 )
+from .bedrock import is_bedrock_model_id
 from .openai import RETRYABLE_ERROR_TYPES, OpenAIRenderer
 from .pricing import PriceProvider, PriceTier, price_provider_for
 from .types import CacheLevel
@@ -65,8 +66,9 @@ def matches(model: str) -> bool:
     """OpenRouter ids are vendor-qualified (``moonshotai/kimi-k2.5``,
     ``openrouter/auto``), and the slash is what separates them from a native name. No
     overlap with the other predicates: those split on "-", so
-    ``anthropic/claude-sonnet-5`` heads at ``anthropic/claude``, never ``claude``."""
-    return "/" in model
+    ``anthropic/claude-sonnet-5`` heads at ``anthropic/claude``, never ``claude``. A
+    Bedrock ARN also contains a slash (``.../us.anthropic.claude-x``) and is excluded."""
+    return "/" in model and not is_bedrock_model_id(model)
 
 
 # --- live model metadata ---------------------------------------------------

@@ -10,13 +10,17 @@ from functools import cache
 import anthropic
 import httpx
 
-from composer.input.files import UploaderBase, ContentRenderer
+from composer.input.files import (
+    UploaderBase, ContentRenderer, FileUploader, FileData, Document, TextDocument,
+    InMemoryTextFile,
+)
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     ProviderServiceBase, ProviderSpec, compaction_threshold, payload_error_type,
     standard_callbacks
 )
 from composer.llm.pricing import PriceProvider, price_provider_for
+from composer.llm.bedrock import llm_backend, bedrock_region
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
@@ -202,8 +206,57 @@ class AnthropicFileUploader(UploaderBase):
 
     @staticmethod
     def lazy() -> "AnthropicFileUploader":
-        """A lazily-seeding uploader — no account file-list until first upload."""
+        """A lazily-seeding uploader — no account file-list until first upload. The Files
+        API exists only on the Anthropic API, so this refuses to build a first-party
+        client when the Bedrock backend is selected; use :func:`uploader_for_backend`."""
+        if llm_backend() != "anthropic":
+            raise ValueError(
+                "The Anthropic Files API uploader is only available with the anthropic "
+                "LLM backend"
+            )
         return AnthropicFileUploader(client=anthropic.AsyncAnthropic())
+
+
+@dataclass
+class BedrockFileUploader(UploaderBase):
+    """``FileUploader`` for Claude on Bedrock, which has no Files API. Text that would be
+    uploaded stays in the prompt instead; binary documents are not supported yet."""
+
+    renderer: ContentRenderer = field(default_factory=AnthropicRenderer)
+
+    @override
+    async def _upload_bytes(
+        self, crc_basename: str, file_data: bytes, mime: str
+    ) -> str:
+        raise NotImplementedError("Bedrock has no Files API.")
+
+    @override
+    async def _binary_document(self, data: FileData) -> Document:
+        raise NotImplementedError(
+            f"Cannot attach binary document {data.basename!r} ({data.mime}): the Bedrock "
+            "LLM backend does not support binary documents yet (inline base64 document "
+            "blocks are the next step of the Bedrock backend)."
+        )
+
+    @override
+    async def _text_upload_document(self, data: FileData) -> TextDocument:
+        # There is no upload to make it smaller than the prompt, so the very-large-text
+        # case this exists for collapses into the ordinary one.
+        return InMemoryTextFile(
+            basename=data.basename,
+            string_contents=data.raw_data.decode("utf-8"),
+            renderer=self.renderer,
+        )
+
+
+def uploader_for_backend() -> FileUploader:
+    """The Claude uploader for the selected LLM backend. Never builds a first-party
+    Anthropic client when the Bedrock backend is selected."""
+    match llm_backend():
+        case "anthropic":
+            return AnthropicFileUploader.lazy()
+        case "bedrock":
+            return BedrockFileUploader()
 
 
 # --- ModelProvider ---------------------------------------------------------
@@ -224,7 +277,7 @@ class AnthropicService(ProviderServiceBase):
         from graphcore.tools.memory import anthropic_async_memory_tool
         super().__init__(
             anthropic_async_memory_tool,
-            AnthropicFileUploader.lazy
+            uploader_for_backend
         )
 
     @override
@@ -298,6 +351,11 @@ class AnthropicModelProvider:
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
 
+        # Read first so a bad AUTOPROVER_LLM_BACKEND (or, for Bedrock, a missing region)
+        # fails here, when the model is built, rather than on its first request.
+        backend = llm_backend()
+        aws_region = bedrock_region() if backend == "bedrock" else None
+
         opts = self.options
         thinking: dict[str, Any] | None
         if opts.thinking_tokens is None or disable_thinking:
@@ -311,7 +369,11 @@ class AnthropicModelProvider:
         else:
             thinking = {"type": "enabled", "budget_tokens": opts.thinking_tokens}
 
-        betas = ["files-api-2025-04-14"]
+        betas: list[str] = []
+        if backend == "anthropic":
+            # Documents uploaded through the Files API are referenced by id, which needs
+            # this beta. Bedrock has no Files API, so its requests never carry such a block.
+            betas.append("files-api-2025-04-14")
         if self.features.interleaved_thinking and opts.interleaved_thinking:
             betas.append("interleaved-thinking-2025-05-14")
         if opts.memory_tool:
@@ -321,6 +383,28 @@ class AnthropicModelProvider:
         model_kwargs = (
             {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl is not None else {}
         )
+
+        callbacks = standard_callbacks(
+            self.price_provider, long_cache=cache_level == CacheLevel.LONG
+        )
+        if aws_region is not None:
+            from composer.llm.bedrock_chat import ChatAnthropicBedrock
+            return ChatAnthropicBedrock(
+                aws_region=aws_region,
+                model_name=self.model_name,
+                max_tokens_to_sample=opts.tokens,
+                # The same transport settings as the Anthropic API path below; see there.
+                timeout=300.0,
+                streaming=True,
+                max_retries=8,
+                stop=None,
+                # None rather than an empty list: with no betas the request goes to the
+                # plain messages endpoint instead of the beta one.
+                betas=betas or None,
+                thinking=thinking,
+                model_kwargs=model_kwargs,
+                callbacks=callbacks,
+            )
 
         return ChatAnthropic(
             model_name=self.model_name,
@@ -340,9 +424,7 @@ class AnthropicModelProvider:
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=standard_callbacks(
-                self.price_provider, long_cache=cache_level == CacheLevel.LONG
-            ),
+            callbacks=callbacks,
         )
 
 ANTHROPIC_SPEC = ProviderSpec(

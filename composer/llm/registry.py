@@ -15,6 +15,7 @@ import importlib.metadata
 from composer.input.types import ModelConfiguration, ModelOptionsBase, TieredModelOptions
 from composer.llm.provider import ProviderService, ModelProvider
 from .provider import ProviderSpec
+from .bedrock import is_bedrock_model_id, BACKEND_ENV_VAR
 
 LLM_PROVIDER_GROUP = "certora.autoprove.llm_provider"
 
@@ -32,6 +33,13 @@ def _loader_providers() -> list[ProviderSpec]:
 
 def _lookup(model: str) -> ProviderSpec:
     lowered = model.lower()
+    if is_bedrock_model_id(lowered):
+        # A Bedrock ARN contains "/", which would otherwise read as an OpenRouter id.
+        raise ValueError(
+            f"{model!r} is a Bedrock model id. Configure the logical Claude model name "
+            f"(e.g. claude-opus-5-5) and set {BACKEND_ENV_VAR}=bedrock; the Bedrock id "
+            f"is derived from it."
+        )
     for spec in _loader_providers():
         if spec.matches(lowered):
             return spec
