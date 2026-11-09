@@ -1,16 +1,17 @@
-# CVLR author prompts: less standing text, more recipes, typed Prover symptoms
+# CVLR author prompts: less standing text, more recipes, symptoms matched in code
 
 A plan to shrink what the CVLR author and judge carry on every turn. It has three parts that depend
 on each other:
 
-* **The Prover reports its analysis failures as typed values**, the way it already reports the
-  origin of a violated assertion (`assertOrigin`). A typed symptom can be matched in code, so the
-  advice for it can be *pushed* to the author at the moment it applies, instead of sitting in the
-  system prompt in case it does.
+* **Prover symptoms are matched in code**: the origin of a violated assertion (`assertOrigin`), the
+  `[NNNN]` code of an analysis error, the phase of a timed-out rule. A matched symptom lets the advice
+  for it be *pushed* to the author at the moment it applies, instead of sitting in the system prompt
+  in case it does. What the Prover already reports is enough for that; no Prover change is needed
+  (§3).
 * **Duplicated and redundant prompt text is removed.** Several passages appear two or three times in
   the author's context.
 * **Situational text moves into recipes**, retrieved by trigger (`get_cvlr_recipe`) or pushed by
-  `verify_rules` on a typed symptom.
+  `verify_rules` on a matched symptom.
 
 The CVL side is out of scope. Its author already runs on recipes: a 3 KB system prompt and 21
 recipes in `cvl_recipes_index.yaml`.
@@ -60,14 +61,14 @@ anything can tell it so.
    `Box` and `core::mem::forget(accounts)`; read post-state through the context's handle. Also the
    tools list, the conf, and what a finding is.
 2. **Pushed** (attached to a `verify_rules` result). For text keyed on a symptom the code can
-   recognize as a typed value. The author does not have to recognize anything, and the text costs
+   recognize. The author does not have to recognize anything, and the text costs
    tokens only in runs that hit the symptom. This already exists for two kinds of generated
    assertion: `_ADVISED` in `composer/spec/cvlr/verify.py` and the matching paragraphs in
    `composer/templates/cvlr/verdicts.j2`. `cvlr/external_functions.j2` is the same idea for the
    Prover's external-function warnings.
 3. **Pulled** (a recipe the agent retrieves from the index). For text keyed on a situation the
    agent recognizes in the program or the property before any run: "the handler performs a CPI",
-   "an acceptance property through a `seeds` constraint". Also for symptoms that are not typed yet.
+   "an acceptance property through a `seeds` constraint". Also for symptoms nothing matches.
 
 A recipe file is the single home for the text in channels 2 and 3. A pushed recipe is still listed
 in the index, so an author who meets the situation before a run says so can fetch it, and the judge
@@ -87,91 +88,118 @@ such check.
 | where an unfinished rule stood | `RuleStatistics` (phase, path count, branching and nonlinear hotspots), from `rule_live_statistics_*.json` (`composer/prover/results.py`) | rendered into the timeout report |
 | rule status | `VERIFIED`, `VIOLATED`, `TIMEOUT`, `ERROR`, `SANITY_FAILED`, `SKIPPED` | the gate and the verdict note |
 
-### 3.2 What is still free text
+### 3.2 What the author already reads
 
-* **Analysis errors.** An `ERROR` rule carries `error_messages: list[str]`, collected from the tree
-  view's error nodes (`flatten_tree_view` in `composer/prover/results.py`). The prompts teach the
-  author to recognize these by the bracketed code in the message:
+The full error text reaches the author. An `ERROR` rule carries `error_messages`, collected from the
+tree view's error entries (`flatten_tree_view`), and `verify_rules` prints every one through
+`TrivialFanoutCexHandler` and `flat_rule_feedback.j2`. A Solana analysis error
+(`FormattedErrorMessage` in the Prover's `sbf/support/Errors.kt`) is:
 
-  | code | message | what the prompts say it means |
-  |---|---|---|
-  | `[3308]` | illegal dereference of an absolute address | pointer analysis refused an object; most often an Anchor `#[error_code]` enum formatting its `#[msg]` |
-  | `[3003]` | dereference of a register with unknown provenance | the same family; seen through `Rc<RefCell<..>>` in `AccountInfo::lamports` |
-  | `[3005]` | memcpy with dynamically sized length | a copy whose length the analysis cannot fix: a variable-length collection or a derived (de)serializer |
-  | `[3006]` | illegal store of a stack pointer | the same family |
+```text
+[3308] illegal dereference of an absolute address
+source: src/state.rs:118
+  from: src/handlers/deposit.rs:42
+note: ...
+help: ...
+```
 
-  `results.py` itself tells a timeout from an error by matching substrings in the message
-  (`"timed-out"`, `"BlockingCoroutine was cancelled"`).
-* **Job-level failures.** An internal error out of `sbf.domains.ScalarDomain`, and a job that fails
-  with no per-rule verdicts at all. The reason is in the job's `alertReport.json` and does not reach
-  the author (open since the cloud work; see the FAILED-job note in `cvlr-todo.md`).
-* **The cause of a vacuity.** A `SANITY_FAILED` rule does not say *why* no path reaches the end.
-  The commonest measured cause is a generated assertion on every path: the unwinding assertion of
-  the loop that drops the 16-account array, after the rule's own assertion. `explain_vacuity` gets
-  at some of this from the unsat core, but cannot see past the rule's assertion.
+So the author already has the code, the inlined source chain at the refused instruction, and the
+Prover's own explanation and advice. The `help:` text is written for a person with the whole Prover
+configuration in reach ("add the function to an inlining file", "unroll the loop by hand"), and part
+of it is outside the author's action space. Correcting that is what a pushed recipe is for.
+
+One case where the text does not arrive: above the cex handler's summarization threshold,
+`_report_to_todo_list` has an LLM rewrite the report, which can drop it. Check whether CVLR runs can
+reach that threshold before relying on the text.
+
+The codes the prompts teach:
+
+| code | message | what the prompts say it means |
+|---|---|---|
+| `[3308]` | illegal dereference of an absolute address | pointer analysis refused an object; most often an Anchor `#[error_code]` enum formatting its `#[msg]` |
+| `[3003]` | dereference of a register with unknown provenance | the same family; seen through `Rc<RefCell<..>>` in `AccountInfo::lamports` |
+| `[3005]` | memcpy with dynamically sized length | a copy whose length the analysis cannot fix: a variable-length collection or a derived (de)serializer |
+| `[3006]` | illegal store of a stack pointer | the same family |
+
+What has no code or kind:
+
+* **Job-level failures.** The job's `alertReport.json` carries them, and a failed job's `ERROR`
+  alerts already reach the author: `CloudJobError.alerts`, read by `_failure_advice` in
+  `composer/prover/core.py`, which tells a resource limit, a Solana encoding failure and a crash
+  apart by the alert's `type`.
+* **The cause of a vacuity.** A `SANITY_FAILED` rule does not say *why* no path reaches the end. The
+  commonest measured cause, the loop that drops the 16-account array, does show indirectly: in
+  multi-assert mode the sibling `ProverInternalChecks` subrule is usually VIOLATED with
+  `assertOrigin: loopUnwinding` (§3.5).
 * **"Cannot overflow" before `assertOrigin`.** Older Provers report it as an unclassified assertion,
   which `classify_violation` treats as the rule's own.
 
-### 3.3 Asks of the Prover
+### 3.3 Typing only where a decision depends on it
 
-In order of value:
+`assertOrigin` had to be typed because it decides something: whether a violation is a finding or a
+Prover limit, which drives stamping and `expect_rule_failure`. Getting that from message text would
+make the gate's correctness depend on wording.
 
-1. **A kind on every analysis error**, in the tree view, beside the message: `errorKind` on each
-   error node, from a closed vocabulary the Prover documents, as `assertOrigin` does. The codes
-   above are the minimum. Each should carry, where the Prover has it, the **function** whose code it
-   refused and the **source location**, so the advice can name the method to stand in for rather than
-   asking the author to read a trace. That decides the `redirect_module` versus `mock_fn` question
-   ("diagnose the method, not its caller") in code.
-2. **A kind for a timeout.** `rule_live_statistics_*.json` already gives the phase. A timeout that
-   is the global job timeout, as opposed to the rule's own budget, should say so. Today that is
-   decided from message text.
-3. **A job-level failure reason**, in the job's result, not only in `alertReport.json`: a kind
-   (`internalAnalysisError`, ...) and the component that raised it. A job that fails with no rule
-   results then says which of its causes it was.
-4. **A vacuity cause.** For a `SANITY_FAILED` rule, the generated assertions that sit on every path
-   to the vacuity check's `satisfy`, with their kinds. That is the same data `assertOrigin` gives for
-   a violation. It would make the drop-loop case report itself as `loopUnwinding` after the rule's
-   last statement. (Separate from the fix that removes the drop loop's effect on vacuity: see
-   [upstream-defects.md](./upstream-defects.md).)
+No such decision depends on an analysis error's kind. An `ERROR` rule is unaccounted whatever its
+kind. The kind only chooses which advice to push, and a wrong choice costs a paragraph of
+irrelevant text that the author can see is irrelevant. For that, the `[NNNN]` code is enough. It is a
+closed vocabulary the Prover documents to its users, printed in a fixed position, and every error
+the recipes are about has one.
 
-Each ask is independent. The AutoProver side below works with whichever of them have landed.
+A typed `errorKind` from the Prover was drafted and set aside (§3.5). Beyond renaming the codes it
+added kinds for the errors without a code, which are setup failures in what AutoProver itself
+supplied (stripped symbols, a missing or unparsable summary or inlining file) rather than anything a
+recipe fixes, and function names on each source frame, which the author can read off the
+`source:` chain with its source tools.
+
+Revisit this if a benchmark run shows the code choosing the wrong advice, or a recipe that needs to
+know *which* function was refused to be useful.
 
 ### 3.4 AutoProver side
 
-* **A typed analysis error**, parallel to `GeneratedKind`:
+* **An analysis error's kind, from its code**, in one function next to `assert_origin` in
+  `composer/prover/results.py`:
 
   ```python
-  class AnalysisErrorKind(StrEnum):
-      ILLEGAL_ABSOLUTE_DEREF = ...   # [3308]
-      UNKNOWN_PROVENANCE = ...       # [3003]
-      DYNAMIC_MEMCPY = ...           # [3005]
-      STACK_POINTER_STORE = ...      # [3006]
+  class AnalysisErrorKind(IntEnum):
+      UNKNOWN_PROVENANCE_DEREF = 3003
+      DYNAMIC_MEMCPY = 3005
+      STACK_POINTER_STORE = 3006
+      ABSOLUTE_ADDRESS_DEREF = 3308
+      # ... the codes a recipe is pushed on
 
   @dataclass(frozen=True)
   class AnalysisError:
-      kind: AnalysisErrorKind | UnknownKind
+      kind: AnalysisErrorKind | UnknownCode | Uncoded
       message: str
-      function: str | None
-      source: SourceSpan | None
   ```
 
-  `RuleResult` gets `errors: list[AnalysisError]` beside `error_messages`; the latter stays until
-  nothing reads it. A kind this build does not know is `UnknownKind`, logged, as `assert_origin` does.
-* **Until ask 1 lands**, read the kind from the message's `[NNNN]` prefix, in one function next to
-  `assert_origin`, with a test per code. This parses the Prover's text, not anything of ours, and it
-  is removed when `errorKind` ships. A message with no code is `UnknownKind`. `function` and `source`
-  stay `None` until the Prover provides them.
-* **A typed timeout and job failure**, as ask 2 and 3 land. `RuleStatistics.phase` becomes a type
-  (`StaticAnalysis | Solving(...) | OtherPhase(str)`), so "the rule never reached the solver" can be
-  matched rather than compared to a string.
+  `UnknownCode(code: int)` is a code this build does not list, `Uncoded` a message with no `[NNNN]`
+  prefix. `RuleResult.error_messages` becomes `errors: list[AnalysisError]`, and the report keeps
+  printing each `message` whole. One test per listed code, against a message in the Prover's format.
+* **Timeouts.** `RuleStatistics.phase` becomes a type (`StaticAnalysis | Solving(...) |
+  OtherPhase(str)`), so "the rule never reached the solver" can be matched rather than compared to a
+  string.
+* **Failed jobs.** `ErrorAlert.type` already distinguishes the cases `_failure_advice` needs. It
+  becomes a type the same way when a recipe is pushed on it.
+* **Vacuity.** K12 is pushed on `SANITY_FAILED`. Where the `ProverInternalChecks` subrule reports
+  `loopUnwinding`, the note says the drop loop is the likely cause.
 
-### 3.5 Prover-side findings (November 2026)
+### 3.5 Prover asks, if they become needed (November 2026)
 
-From reading the Prover's code (EVMVerifier) for each ask. Asks 2–4 are deferred; these notes are so
-the investigation is not repeated.
+None of these is needed for this plan (§3.3). They are recorded, from reading the Prover's code
+(EVMVerifier), so the investigation is not repeated if one is. Per-rule data belongs on the rule's
+tree view node, which is where AutoProver already reads per-rule results; a job-level failure belongs
+in `alertReport.json`, which exists when the tree view may not and which AutoProver already reads for
+a failed job.
 
-**Ask 1: in progress** (EVMVerifier branch `eric/autoprover-typed-errors`, not merged). Each entry in
-a rule node's `errors` gains two fields beside `severity` and `message`:
+**Ask 1: a typed error kind and source frames. Drafted, set aside.** EVMVerifier#8815 first added
+them, then was trimmed to two fixes that improve the existing text: `Symbol.toRange` no longer
+discards a source location whose column is 0, so more errors get a `source:` line, and an encoding
+failure is reported as the original exception rather than through a wrapper that logged it as
+"Unknown error ... Error code N". (The message loses its `In <rule>: ` prefix; the `[NNNN]` prefix is
+unchanged.) The draft, for reference: each entry in a rule node's `errors` gained two fields beside
+`severity` and `message`, and job-level alerts carried the same fields:
 
 ```json
 { "severity": "error", "message": "[3308] illegal dereference ...",
@@ -180,10 +208,10 @@ a rule node's `errors` gains two fields beside `severity` and `message`:
 ```
 
 * `frames` is the inlined source call chain at the refused instruction, innermost first, from
-  `llvm-symbolizer`. It replaces `function` and `source` in §3.4: the innermost frame is often in
-  `core`/`alloc`, so `AnalysisError` should keep the list and pick the first frame in the program's
-  own sources for the `redirect_module` / `mock_fn` decision. `function` is `null` when DWARF has no
-  name, and `frames` is empty for errors with no instruction (no assertion, heap exhausted).
+  `llvm-symbolizer`, with the function names the message's `source:` chain leaves out. The innermost
+  frame is often in `core`/`alloc`, so a consumer would pick the first frame in the program's own
+  sources. `function` is `null` when DWARF has no name, and `frames` is empty for errors with no
+  instruction (no assertion, heap exhausted).
 * The vocabulary is `SolanaErrorKind` in `sbf/support/Errors.kt`. One kind per code:
   3001 `indeterminateStackOffset`, 3002 `unknownStackContent`, 3003 `unknownProvenanceDeref`,
   3004 `unknownProvenanceStore`, 3005 `dynamicMemcpyLength`, 3006 `stackPointerEscape`,
@@ -193,10 +221,7 @@ a rule node's `errors` gains two fields beside `severity` and `message`:
   5001 `inliningFileSyntax`, 6000 `stackFrameExceeded`, 6001 `heapExhausted`,
   7000 `unsupportedCall`, 7001 `unsupportedIndirectCall`. Errors with no code also get a kind:
   `missingRuleFunction`, `strippedSymbols`, `missingConfigurationFile`, `summaryShapeMismatch`,
-  `invalidStackOffset`. The §3.4 enum names (`ILLEGAL_ABSOLUTE_DEREF`, ...) should map to these.
-* Side effect: the message loses its `In <rule>: ` prefix. Encoding failures were reported through a
-  wrapper exception, which also logged each one as "Unknown error ... Error code N". The `[NNNN]`
-  prefix is unchanged, so the interim parser keeps working.
+  `invalidStackOffset`.
 * An internal error while encoding a rule (`SolanaInternalError`, including `ScalarDomainError`) has
   no kind yet. It has been caught per rule since EVMVerifier #8771, so a job that lost every rule to
   a `ScalarDomain` error was probably on an older Prover.
@@ -225,10 +250,11 @@ and `statsdata.json` carry none, and `alertReport.json` drops the exception's ty
   rule's encoding.
 * `VerificationFlow` silently drops (warn log only) any encoding failure it cannot tie to a rule, and
   likewise for continuation rules.
-* Shape to propose: a top-level `jobFailure: {kind, component, message}` in the tree view and
-  `output.json`, set from the catch blocks in `EntryPoint.kt` and the global-timeout handler. Kinds
-  fall out of those blocks: `globalTimeout`, `userError`, `internalError`, `unexpectedException`,
-  `badArguments`.
+* Shape to propose: a `kind` on the job-level alert in `alertReport.json`, set from the catch blocks
+  in `EntryPoint.kt` and the global-timeout handler. The tree view is not the place: a job that fails
+  before the rule loop may not write one, and AutoProver reads only the alert report for a failed
+  job. Kinds fall out of those blocks: `globalTimeout`, `userError`, `internalError`,
+  `unexpectedException`, `badArguments`.
 
 **Ask 4: vacuity cause.** Feasible, with two traps.
 
@@ -269,7 +295,7 @@ and `statsdata.json` carry none, and `alertReport.json` drops the exception's ty
 
 ---
 
-## 4. Pushing recipes on typed symptoms
+## 4. Pushing recipes on matched symptoms
 
 Today the pushed advice lives in `verdicts.j2`, keyed by a tuple in Python. Move it into recipe files
 and key it from the index.
@@ -285,8 +311,8 @@ and key it from the index.
   ```
 
   The field's type is a discriminated union over the symptom families:
-  `generated: GeneratedKind`, `error: AnalysisErrorKind`, `timeout: <phase kind>`,
-  `job_failure: <kind>`, `vacuity: GeneratedKind`. CVL's index never sets it. The kind names in the
+  `generated: GeneratedKind`, `error: AnalysisErrorKind` (written as the code, `error: 3308`),
+  `timeout: <phase kind>`, `job_failure: <alert type>`, `status: SANITY_FAILED`. CVL's index never sets it. The kind names in the
   YAML are validated against the enums, so a renamed kind fails at load, not at the first run that
   would have pushed it.
 * **`verify_rules` attaches the bodies.** `_verdicts_note` collects the symptom kinds in the run, as
@@ -323,20 +349,20 @@ moves to K11.
 
 ## 6. Moving text into recipes
 
-New recipes, continuing the K series. "Source" is where the text is now. "Push" is the typed symptom
-from §4 that attaches it, where one exists; otherwise it is pulled only.
+New recipes, continuing the K series. "Source" is where the text is now. "Push" is the matched
+symptom from §4 that attaches it, where one exists; otherwise it is pulled only.
 
 | id | recipe | source | trigger in the index | channel | push |
 |---|---|---|---|---|---|
 | K4 | A loop the bound does not finish | system prompt "The loop ladder", conf section, baseline facts "Loops are bounded" | a rule stops on `Unwinding condition in a loop` | CONF / RULE | `generated: loopUnwinding` |
 | K5 | `Cannot overflow` on an inferred pointer | system prompt conf section; `verdicts.j2` | a rule stops on `Cannot overflow: inferred pointer` or `computing TAC map index` | RULE / SKIP | `generated: cannotOverflow` |
-| K6 | Taking a CPI out from under a handler | system prompt "Reaching a handler" (the second move), "Writing the stand-in: two things that do not analyze" | a handler performs a CPI and the property is its own bookkeeping; `[3003]` with `alloc/src/rc.rs` in the trace; a VIOLATED rule over a value decoded from an instruction's bytes | EDIT | `error: UNKNOWN_PROVENANCE` with a function in `alloc::rc`, once ask 1 gives the function |
+| K6 | Taking a CPI out from under a handler | system prompt "Reaching a handler" (the second move), "Writing the stand-in: two things that do not analyze" | a handler performs a CPI and the property is its own bookkeeping; `[3003]` with `alloc/src/rc.rs` in the trace; a VIOLATED rule over a value decoded from an instruction's bytes | EDIT | — (`[3003]` is pushed to K10's family only if a run shows K6 is not fetched) |
 | K7 | Descending to the program's state-transition core | system prompt "Reaching a handler" (the first move, and its three conditions) | a handler-level rule blocked by a CPI, by validation or by error formatting, where the program has an accounting function below the handler | RULE | — |
 | K8 | A bounded stand-in for a computation that will not finish | system prompt "When a computation will not finish"; initial prompt Step 3, the timeout bullets about a rule alone still halting | a TIMEOUT that survives a small job; a statistics line with phase `static analysis`, or one function holding most of the branching or nonlinear share | MOCK / EDIT | `timeout: static analysis`, and a hotspot share over a threshold |
-| K9 | A halted job, and which rule halted it | initial prompt Step 3, the timeout bullets (submit without the last rule; the measured cases: a `HashSet` insert, a bincode walk of a `Pubkey`, a `u64 × u64` product, per-length splits, per-epoch walks) | a job that halts with no verdicts; a rule that times out alone | RULE / EDIT / SKIP | `job_failure: global timeout`, once ask 2 lands |
-| K10 | A rule the pointer analysis refuses | initial prompt Step 3, the "could not analyze" bullet (`summarize_for_prover`, the three-directive limit, what a summary drops, weaken or skip) | `[3308]`, `[3006]` on a rule | MOCK / SKIP | `error: ILLEGAL_ABSOLUTE_DEREF`, `error: STACK_POINTER_STORE` |
-| K11 | State the analysis cannot size: variable-length collections and `swap_derive` | baseline facts "When the Prover cannot follow the program's own data" | `[3005]`; an internal error out of `ScalarDomain`; a job that fails with no rule results | EDIT / SKIP | `error: DYNAMIC_MEMCPY`; `job_failure: internal analysis error`, once ask 3 lands |
-| K12 | Diagnosing a vacuous rule | initial prompt Step 3, the vacuity bullet (`explain_vacuity` first, then a copy ending in `cvlr_assert!(false)`, not `cvlr_satisfy!`) | a rule reported `SANITY_FAILED` | RULE | `SANITY_FAILED` status; `vacuity: <kind>` once ask 4 lands |
+| K9 | A halted job, and which rule halted it | initial prompt Step 3, the timeout bullets (submit without the last rule; the measured cases: a `HashSet` insert, a bincode walk of a `Pubkey`, a `u64 × u64` product, per-length splits, per-epoch walks) | a job that halts with no verdicts; a rule that times out alone | RULE / EDIT / SKIP | `job_failure: Out of Resources` |
+| K10 | A rule the pointer analysis refuses | initial prompt Step 3, the "could not analyze" bullet (`summarize_for_prover`, the three-directive limit, what a summary drops, weaken or skip) | `[3308]`, `[3006]` on a rule | MOCK / SKIP | `error: 3308`, `error: 3006` |
+| K11 | State the analysis cannot size: variable-length collections and `swap_derive` | baseline facts "When the Prover cannot follow the program's own data" | `[3005]`; an internal error out of `ScalarDomain`; a job that fails with no rule results | EDIT / SKIP | `error: 3005` |
+| K12 | Diagnosing a vacuous rule | initial prompt Step 3, the vacuity bullet (`explain_vacuity` first, then a copy ending in `cvlr_assert!(false)`, not `cvlr_satisfy!`) | a rule reported `SANITY_FAILED` | RULE | `status: SANITY_FAILED` |
 | K13 | Acceptance through a `seeds` constraint | system prompt "Reaching a handler", the paragraph on `seeds` | an acceptance property whose validation runs through `seeds`, including `init` on a PDA; "a non-canonical X is refused" | SKIP | — (the point is to skip *without* a run) |
 | K14 | Validating an accounts struct with `try_accounts` | system prompt, the `try_accounts` example and "The names Anchor generates" | a property enforced by the struct's `#[account(...)]` constraints | RULE | — |
 
@@ -358,7 +384,7 @@ Notes on individual moves:
   which recipe answers it. With K9, K10 and K12 pushed, its measured cases leave.
 * **Index triggers quote the literal symptom strings** (`Unwinding condition in a loop`,
   `[3308]`, `alloc/src/rc.rs`), because the agent matches on what the report says. A pushed recipe
-  needs them too, for the judge and for an untyped report from an older Prover.
+  needs them too, for the judge and for a report from an older Prover without `assertOrigin`.
 
 What stays standing (§2, channel 1): output shape, the tools list, the conf, the handler idioms
 named there, "When a rule should fail", and the judge's checklist.
@@ -372,10 +398,9 @@ named there, "When a rule should fail", and the judge's checklist.
    Behaviour-preserving for those two kinds, so a good check of the mechanism.
 3. **Pulled recipes that need nothing new:** K6, K7, K13, K14, and the move into
    `invariant_guidance()`.
-4. **Typed analysis errors (§3.4)**, from the message code, then K10 and K11 pushed on them.
-5. **K8, K9, K12**, pushed on the statistics phase and on `SANITY_FAILED`.
-6. **Prover asks (§3.3)** as they land: switch the parser from message codes to `errorKind`, add the
-   function to K6's push key, add job-failure and vacuity kinds.
+4. **Analysis errors by code (§3.4)**, then K10 and K11 pushed on them.
+5. **K8, K9, K12**, pushed on the statistics phase, the failed job's alert type and
+   `SANITY_FAILED`.
 
 Steps 1–3 take roughly 25 KB off the author's standing text, and steps 4–5 another 10 KB.
 
