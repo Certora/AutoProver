@@ -59,14 +59,54 @@ scaffold's own `Blocked` message, not adapted. Pinocchio and older generations c
 Anchor vault the CVLR tape already drives and the one scenario in the tree the scaffold accepts:
 the counterparts of the CVL skill's Counter and Answer.
 
-## Open
+**Structural invariants: one shared module, proved first, assumed everywhere.** CVLR has no
+inductive `invariant`, and the CVL skill's Phase 5 is built on one: `invariants.spec` is proved
+before any component, changed only at the barrier, imported by every component spec and used
+through `requireInvariant`. The Solana skill keeps that shape and fills it with the pipeline's own
+recipe, the "State invariants" section of `cvlr_property_generation_system_prompt.j2` and
+`cvlr_invariant_guidance.j2` (U37):
 
-**Structural invariants.** CVLR has no inductive `invariant`, and the CVL skill's Phase 5 is built
-on one. The proposal: each structural invariant becomes a well-formedness predicate over an
-account's state, assumed by other rules the way CVL uses `requireInvariant`, plus one rule per
-instruction that assumes it before and asserts it after. Whether that is sound enough to lean on
-— an instruction that creates the account has no "before" — is the first thing to settle, because
-Phase 5 and the judge's criteria follow from it.
+- **What an invariant may be about** is the guidance's answer. One account's fields, or accounts
+  every writer is given together, tied by a constraint such as `has_one`. A relationship over every
+  account of a type has no rule, because no handler sees them all, so Phase 4 restates it as what
+  each operation does to the accounts it touches. A fixed-size array is stated per element, at a
+  nondet index assumed in bounds.
+- **Where it lives.** `src/certora/specs/invariants.rs`, compiled whenever the `certora` feature is
+  on. Each component's module stays behind a feature of its own, as in the pipeline, so parallel
+  generators cannot break each other's builds; every one of them can still `use` the shared module.
+  The shared module is compiled with every component, so a trait impl it makes (`impl Nondet for
+  Pool`) is one no component may repeat (`E0119`). The pipeline's units never meet, which is why
+  they can each make their own; here the shared module owns the impls its invariants need, and
+  components use them.
+- **What proves it.** Each invariant is a `pub fn` returning `bool`. Its doc comment lists every
+  writer of a field it reads, found in the code and followed up to the handlers, across the whole
+  program and not one component. The base case runs each instruction that creates the state, from
+  arbitrary inputs, and asserts the invariant: that is the answer to an instruction that creates an
+  account having no "before". One step rule per writer assumes the invariant, runs the writer and
+  asserts it, generated with `cvlr_invariant_rules!` or a local macro. A handler that may create
+  or modify the same account (`init_if_needed`, `realloc`) is both a base case and a step.
+- **The gate.** Phase 5 closes when the judge has accepted the module and a full run shows every
+  base case and step VERIFIED. None is ever marked expected-to-fail: a component that assumed an
+  invariant whose step was marked would assume exactly what failed to prove. A failing step whose
+  pre-state nothing produces strengthens the invariant, and the new conjunct gets its own steps.
+- **How a component uses it.** `cvlr_assume!(<predicate>(..))` on the rule's pre-state is the
+  counterpart of `requireInvariant`. The rule's commentary names the step rules behind it, and the
+  judge rejects an assumption of a predicate that is not in the shared module, or whose steps did
+  not all verify. An assumption the module cannot supply follows the pipeline's remedies in order:
+  a request for a new invariant at the barrier, then a justification rule, then a bare
+  `cvlr_assume!` that says what it gives up.
+- **The barrier.** Only the orchestrator edits `invariants.rs`, between generation and judging,
+  and then re-runs the Phase 5 gate, exactly as the CVL skill treats `invariants.spec`.
+
+The pipeline has the recipe but not the sharing: its units build in isolation, so an invariant one
+unit proves cannot be assumed by another (`cvlr-todo.md` U56). Its hoisting step, which moves a
+property several components state into one shared unit (`composer/spec/hoist.py`), becomes a step
+at the end of the skill's Phase 4. The orchestrator already sees every component's property file,
+so merging duplicates into a protocol component, checked with `cvlr_rules!` over every handler,
+needs no model call of its own. The recipe has not yet been exercised by a pipeline run, so the
+skill's first evals are also its first test.
+
+## Open
 
 **Command names and boundaries.** Below they are named by what they do.
 
@@ -74,7 +114,11 @@ Phase 5 and the judge's criteria follow from it.
 
 **A1 — Set up a project.** A console script over `preflight.select_package`, `plan_scaffold` +
 `apply`, the fork plan, and the compile gate. It prints what it edited, and exits non-zero with
-the `Blocked` reason when it refuses. It submits nothing.
+the `Blocked` reason when it refuses. It submits nothing. It also declares the harness's modules:
+`invariants` under the `certora` feature, and one module and feature per component the agent names
+(`harness.declare_modules` writes `specs/mod.rs`, `scaffold.declare_unit_features` the features),
+so the skill never edits either by hand. Today `declare_modules` gates every module on a unit
+feature; the ungated `invariants` module is new, and U56 needs it too.
 
 **A2 — Build and submit.** Over `prover.prepare_submission` / `run_submission`: build with
 `cargo certora-sbf`, write the build script and conf outside the working tree, submit, and print
@@ -106,7 +150,9 @@ pin bump. For the Solana skill:
 
 **S1 — `SKILL.md`.** The CVL skill's phases, adapted: preflight checks the Rust and SBF toolchain
 instead of solc; the component model is programs, instructions, accounts and PDAs, with CPI
-targets as external actors; setup is A1; the prover loop is A2 and A3; the report is unchanged.
+targets as external actors; setup is A1; Phase 4 ends by merging duplicate protocol-wide
+properties; Phase 5 is the shared invariants module above; the prover loop is A2 and A3; the report
+is unchanged.
 
 **S2 — Property classes.** The CVL skill's list, plus the classes Solana adds: signer, owner and
 PDA checks, CPI targets, close and realloc, rent.
