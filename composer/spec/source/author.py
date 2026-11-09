@@ -18,7 +18,7 @@ from graphcore.graph import tool_state_update, tool_return, RawPromptInput, Cach
 
 from composer.authoring.judge import PropertyFeedbackProtocol
 from composer.authoring.state import SkippedProperty
-from composer.authoring.tools import gated_give_up_tool, give_up_tool
+from composer.authoring.tools import FocusPolicy, gated_give_up_tool, give_up_tool
 from composer.spec.guidance import StructuralInvariantGuidance
 from composer.spec.cvl_generation import (
     cvl_guidance_tools, skip_tools, CVLGenerationExtra, FEEDBACK_VALIDATION_KEY,
@@ -225,11 +225,6 @@ _GIVE_UP_DESCRIPTION = """
     mechanisms to complete your task.
     """
 
-#: How many prover runs a prioritized author owes before an ``exhausted`` surrender is even
-#: considered. Three is enough to have compiled a spec, seen a real counterexample, and tried
-#: something about it — the shortest honest account of "I tried".
-FOCUS_MIN_GIVE_UP_ATTEMPTS = 3
-
 _FOCUS_GIVE_UP_DESCRIPTION = """
     Call this tool to stop work on this task.
 
@@ -238,18 +233,6 @@ _FOCUS_GIVE_UP_DESCRIPTION = """
     must enumerate what you tried. If the toolchain itself is unusable, stop immediately with
     sort='environment' — that is not gated.
     """
-
-
-@dataclass(frozen=True)
-class FocusPolicy:
-    """The tightened exits a prioritized author runs under: the properties it may not retire,
-    and the prover-run floor under an ``exhausted`` give-up.
-
-    Both are static. Whether the skip protection currently applies is read from
-    ``budget_curtailed`` in the graph state, which the budget monitor already sets and which a
-    checkpoint carries — a flag here would shadow it and could disagree with it on resume."""
-    protected: tuple[PropertyTitle, ...]
-    min_give_up_attempts: int = FOCUS_MIN_GIVE_UP_ATTEMPTS
 
 
 class ResourceView(TypedDict):
@@ -996,7 +979,8 @@ async def batch_cvl_generation(
          if focus is None else
          gated_give_up_tool(
              name="give_up", description=_FOCUS_GIVE_UP_DESCRIPTION, label="CVL generation",
-             min_attempts=focus.min_give_up_attempts, state_ty=SourceCVLGenerationState,
+             min_attempts=focus.min_give_up_attempts, verify_tool="submit_buffer",
+             state_ty=SourceCVLGenerationState,
          ),
          PublishResultTool.bind(titles).as_tool("result"),
          ctx.get_memory_tool()]

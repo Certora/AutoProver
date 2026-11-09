@@ -15,7 +15,12 @@ from typing import Any
 import pytest
 from langchain_core.messages import ToolMessage
 
-from composer.authoring.state import checked_digest
+from composer.authoring.state import (
+    SkippedProperty,
+    check_completion,
+    checked_digest,
+    make_validation_stamper,
+)
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CompileFailed
 from composer.diagnostics.timing import RunSummary, install_run_summary
@@ -38,7 +43,7 @@ from composer.spec.cvlr.externals import ExternalWarnings
 from composer.spec.cvlr.harness import HarnessModule
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing
 from composer.spec.cvlr.prover import Checked, Submission, SubmissionFailed
-from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
+from composer.spec.cvlr.state import FEEDBACK, PROVER_STAMPER, PROVER_VALIDATION_KEY, tuning_history
 from composer.spec.cvlr.tree import ProjectSource, SharedTree
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.cvlr.verify import (
@@ -458,6 +463,33 @@ async def test_a_marking_after_the_run_stamps_without_another_submission(gate: _
     assert out.update["validations"] == {
         PROVER_VALIDATION_KEY: checked_digest(state, tuning_history(state))  # type: ignore[arg-type]
     }
+    assert "nothing was submitted" in _text(out)
+    assert len(gate.written) == 1
+
+
+async def test_a_skip_recorded_beside_the_run_stales_only_the_judges_stamp(gate: _Gate):
+    """A run checks the same rules whichever properties are skipped, so its stamp holds and the
+    next ``verify_rules`` submits nothing. The judge accepted the skips, so its stamp goes stale."""
+    gate.outcome = _checked(("rule_a", "VERIFIED"), ("rule_b", "VERIFIED"))
+    first = await gate.verify()
+    feedback = make_validation_stamper(FEEDBACK)
+    stamped = {**gate.state, "curr_spec": _DRAFT, "validations": first.update["validations"]}
+    stamped["validations"] |= feedback(stamped, tuning_history(stamped))  # type: ignore[arg-type]
+    skipped = {
+        **stamped,
+        "skipped": [SkippedProperty(property_title="fee_is_bounded", reason="times out alone")],
+    }
+    history = tuning_history(skipped)
+
+    prover_only = {**skipped, "required_validations": [PROVER_VALIDATION_KEY]}
+    judge_only = {**skipped, "required_validations": [FEEDBACK]}
+    assert check_completion(prover_only, [PROVER_STAMPER], history) is None  # type: ignore[arg-type]
+    assert check_completion(judge_only, [feedback], history) is not None  # type: ignore[arg-type]
+
+    gate.state["last_verdicts"] = first.update["last_verdicts"]
+    gate.state["skipped"] = skipped["skipped"]
+    out = await gate.verify()
+
     assert "nothing was submitted" in _text(out)
     assert len(gate.written) == 1
 

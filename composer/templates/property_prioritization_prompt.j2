@@ -7,6 +7,9 @@ Component: {{ c.label }}
 {%- for p in c.props %}
   - [{{ c.label }}] {{ p.title }}  (sort: {{ p.sort }})
       {{ p.description }}
+{%- if p.title in c.beyond %}
+      Also names other components' entry points: {{ c.beyond[p.title] | join(", ") }}
+{%- endif %}
 {%- endfor %}
 {% endfor %}
 Score all of them, then group them into claims.

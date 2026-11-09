@@ -24,8 +24,8 @@ reaches back into the driver.
 
 import logging
 from collections import Counter
-from dataclasses import dataclass
-from typing import Sequence
+from dataclasses import dataclass, field
+from typing import Mapping, Sequence
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -34,7 +34,10 @@ from pydantic import BaseModel, Field
 from composer.input.files import Document
 from composer.llm.structured import with_structured_output
 from composer.llm.types import CacheLevel
-from composer.spec.types import ComponentName, PropertyFormulation, PropertyKey, PropertyTitle
+from composer.spec.hoist import named_entry_points
+from composer.spec.types import (
+    ComponentName, PropertyFormulation, PropertyKey, PropertyTitle, ScopedPropertyFormulation,
+)
 from composer.templates.loader import load_jinja_template
 
 _log = logging.getLogger(__name__)
@@ -91,8 +94,9 @@ class PropertyRanking(BaseModel):
         "one group."
     )
     justification: str = Field(
-        description="Two to four sentences on which claim came out on top and why it is the one "
-        "worth proving."
+        description="Two to four sentences on which claim the run will pursue and why it is the "
+        "one worth proving. That is the group holding the property with the highest priority "
+        "(score, plus the critical-match bonus), which is not always the highest raw score."
     )
 
 
@@ -114,6 +118,9 @@ class Candidate:
     unit_index: int
     label: ComponentName
     props: list[PropertyFormulation]
+    #: Per property, the other components' entry points it names. Empty for a backend whose
+    #: checker ranges over every entry point by itself, where no property is narrowed.
+    beyond: Mapping[PropertyTitle, list[str]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -126,17 +133,86 @@ class Selection:
 
 
 def build_candidates(
-    units: Sequence[tuple[int, ComponentName, list[PropertyFormulation]]]
+    units: Sequence[tuple[int, ComponentName, list[PropertyFormulation]]],
+    entry_points: Mapping[int, list[str]] | None = None,
 ) -> list[Candidate]:
     """Label every unit for the prompt.
 
     The label carries ``unit_index``, the stable per-run component id, so a ranking always names
     exactly one component even where two share a display name — and it needs no invented
-    uniquifying suffix to do it."""
+    uniquifying suffix to do it.
+
+    ``entry_points`` maps each ``unit_index`` to the entry points its properties may range over,
+    for a backend that checks a property only at the entry points a rule drives (see
+    :func:`scope_to_unit`). With it, each candidate records which of its properties reach into
+    other units, so the ranker can see what a prioritized run will narrow."""
+    everyone = {e for eps in (entry_points or {}).values() for e in eps}
     return [
-        Candidate(unit_index, ComponentName(f"{unit_index}: {name}"), props)
+        Candidate(
+            unit_index,
+            ComponentName(f"{unit_index}: {name}"),
+            props,
+            {} if entry_points is None else _beyond(props, entry_points[unit_index], everyone),
+        )
         for unit_index, name, props in units
     ]
+
+
+def _beyond(
+    props: Sequence[PropertyFormulation], own: Sequence[str], everyone: set[str]
+) -> dict[PropertyTitle, list[str]]:
+    others = everyone - set(own)
+    return {
+        p.title: beyond
+        for p in props
+        if (beyond := sorted(named_entry_points(p.description, others)))
+    }
+
+
+@dataclass(frozen=True)
+class Scoped:
+    """A focus narrowed to its unit's own entry points."""
+    #: The focus, in order. A property that names other units' entry points as well as its own is a
+    #: :class:`ScopedPropertyFormulation`; every other property is as extracted.
+    props: list[PropertyFormulation]
+    #: Properties that name other units' entry points and none of the focus unit's own, so that
+    #: narrowing them would leave nothing to check.
+    unreachable: list[PropertyFormulation]
+
+
+def scope_to_unit(
+    props: Sequence[PropertyFormulation], own: Sequence[str], everyone: Sequence[str]
+) -> Scoped:
+    """Narrow a prioritized run's focus to the entry points of the unit it formalizes.
+
+    A unit's extraction may state a property over other units' entry points too. A comprehensive run
+    moves such a property into a shared unit (:mod:`composer.spec.hoist`), whose rules drive every
+    entry point it names. A prioritized run formalizes one unit, so it checks the property at that
+    unit's own entry points, and the property says so. The rest are recorded as excluded, the way a
+    CVL ``filtered`` block is stated: the narrowing must keep the property's own entry points, which
+    is why a property that names none of them cannot be narrowed at all.
+
+    Matching is by name (:func:`~composer.spec.hoist.named_entry_points`), as the hoist's is. A
+    property that says "every handler" without naming any is not detected, and stays as extracted.
+    """
+    others = [e for e in everyone if e not in set(own)]
+    kept: list[PropertyFormulation] = []
+    unreachable: list[PropertyFormulation] = []
+    for p in props:
+        excluded = named_entry_points(p.description, set(others))
+        if not excluded:
+            kept.append(p)
+            continue
+        checked = named_entry_points(p.description, set(own))
+        if not checked:
+            unreachable.append(p)
+            continue
+        kept.append(ScopedPropertyFormulation(
+            **p.model_dump(),
+            checked_at=[e for e in own if e in checked],
+            excluded=[e for e in others if e in excluded],
+        ))
+    return Scoped(kept, unreachable)
 
 
 def validate_ranking(candidates: Sequence[Candidate], r: PropertyRanking) -> str | None:
@@ -235,7 +311,9 @@ async def rank_properties(
     A ranking that will not validate raises rather than falling back to the whole
     candidate set: a silent widening would spend exactly the budget the caller asked to
     save, and failing here is cheap — nothing has been formalized yet."""
-    system = load_jinja_template("property_prioritization_system.j2")
+    system = load_jinja_template(
+        "property_prioritization_system.j2", critical_match_bonus=CRITICAL_MATCH_BONUS
+    )
     user = load_jinja_template(
         "property_prioritization_prompt.j2",
         contract_name=contract_name,

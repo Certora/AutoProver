@@ -9,6 +9,7 @@ goes stale quietly. An alias is written against a starting layer. After that fil
 alias whose path no longer appears still looks like coverage.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -579,3 +580,25 @@ def test_the_anchor_1_1_dialect_inlines_the_error_conversion_the_program_calls()
     dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), SOLANA_V3)
     assert not _inlined_by_a_specific_directive(compose_env(INLINING), ERROR_CODE_FROM)
     assert _inlined_by_a_specific_directive(compose_env(INLINING, dialect=dialect), ERROR_CODE_FROM)
+
+
+# ---------------------------------------------------------------------------------------------
+# Anchor's account validation is inlined however the Prover numbers it
+
+
+@pytest.mark.parametrize("suffix", ["", "_0", "_2"])
+def test_a_numbered_try_accounts_is_inlined(suffix: str) -> None:
+    """A generic impl monomorphized more than once is numbered by the Prover, and the bare name is
+    then not a symbol. The lending benchmark's ``AccountLoader`` validation came back external as
+    ``try_accounts_0`` to ``_2``, which left every handler-level rule on it vacuous.
+    """
+    symbol = (
+        "<anchor_lang::accounts::account_loader::AccountLoader<T> as anchor_lang::Accounts<B>>"
+        "::try_accounts" + suffix
+    )
+    inlines = [
+        ln.removeprefix("#[inline]").strip()
+        for ln in starting_env("cvlr_inlining_anchor.txt").splitlines()
+        if ln.startswith("#[inline] ")
+    ]
+    assert any(re.search(pattern, symbol) for pattern in inlines)

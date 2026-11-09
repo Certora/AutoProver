@@ -11,9 +11,8 @@ import pytest
 from langchain_core.messages import AIMessage
 
 from composer.authoring.tools import (
-    GatedGiveUp, RecordSkip, SkipScope, _verify_attempts, skip_tools,
+    FocusPolicy, GatedGiveUp, GiveUpFloor, RecordSkip, SkipScope, _verify_attempts, skip_tools,
 )
-from composer.spec.source.author import FocusPolicy
 from composer.spec.types import PropertyTitle
 
 pytestmark = pytest.mark.asyncio
@@ -25,20 +24,24 @@ _Gated = GatedGiveUp.with_template(
 _Skip = RecordSkip.with_template(description="Skip it.", reason="why")
 
 
-def _prover_calls(n: int) -> list[AIMessage]:
-    # `_verify_attempts` counts prover attempts by the buffer-submission tool.
+VERIFY = "submit_buffer"
+
+
+def _prover_calls(n: int, tool: str = VERIFY) -> list[AIMessage]:
     return [
-        AIMessage(content="", tool_calls=[{"name": "submit_buffer", "args": {}, "id": f"c{i}"}])
+        AIMessage(content="", tool_calls=[{"name": tool, "args": {}, "id": f"c{i}"}])
         for i in range(n)
     ]
 
 
-async def _give_up(sort: str, runs: int, floor: int = FLOOR) -> str:
+async def _give_up(
+    sort: str, runs: int, floor: int = FLOOR, *, called: str = VERIFY, counted: str = VERIFY,
+) -> str:
     inst = _Gated(
         sort=sort, reason="r", attempts=["tried the obvious rule"],
-        state={"messages": _prover_calls(runs), "failed": None}, tool_call_id="t",
+        state={"messages": _prover_calls(runs, called), "failed": None}, tool_call_id="t",
     )
-    tok = _Gated._dep_ctx.set(floor)
+    tok = _Gated._dep_ctx.set(GiveUpFloor(floor, counted))
     try:
         out = await inst.run()
     finally:
@@ -118,9 +121,19 @@ async def test_attempts_are_counted_from_tool_calls_not_prover_reports():
     # escalating through (a spec that will not type-check) return before that. Counting calls
     # is what makes the floor reachable.
     state = {"messages": [*_prover_calls(2), AIMessage(content="thinking out loud")]}
-    assert _verify_attempts(state) == 2
-    assert _verify_attempts({"messages": []}) == 0
-    assert _verify_attempts({}) == 0
+    assert _verify_attempts(state, VERIFY) == 2
+    assert _verify_attempts({"messages": []}, VERIFY) == 0
+    assert _verify_attempts({}, VERIFY) == 0
+
+
+async def test_the_gate_counts_the_backends_own_verify_tool():
+    # CVLR verifies with `verify_rules`. A gate that counted CVL's `submit_buffer` there would
+    # see zero attempts however many runs the author made, and refuse every exhausted stop.
+    assert await _give_up("exhausted", FLOOR, called="verify_rules", counted="verify_rules") == (
+        "Accepted"
+    )
+    out = await _give_up("exhausted", FLOOR, called="verify_rules", counted="submit_buffer")
+    assert "Rejected" in out
 
 
 # --- the skip protection --------------------------------------------------

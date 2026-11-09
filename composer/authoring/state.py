@@ -8,10 +8,12 @@ having to remember to clear it — the stamp simply stops matching.
 
 The digest covers the skip declarations as well as the spec text, because "this property is skipped,
 here is why" is part of what a judge accepted. In a session that runs named checks, the stamp of a
-gate that reports those checks' verdicts also covers which of them are marked as expected to fail
-(:func:`make_verdict_stamper`): a run passes only relative to the markings, so a marking changed
-after a green run invalidates that run the same way an edit does. A judge is not shown the markings
-and a build does not depend on them, so their stamps leave them out.
+gate that reports those checks' verdicts covers what the run depended on (:func:`checks_digest`),
+which leaves the skips out: a run checks the same thing whichever properties are skipped. It also
+covers which checks are marked as expected to fail (:func:`make_verdict_stamper`): a run passes only
+relative to the markings, so a marking changed after a green run invalidates that run the same way
+an edit does. A judge is not shown the markings and a build does not depend on them, so their stamps
+leave them out.
 """
 
 import hashlib
@@ -110,6 +112,12 @@ def draft_digest(state: AuthoringExtra, version_history: Sequence[str] = ()) -> 
     return spec_digest(state["curr_spec"] or "", state["skipped"], version_history)
 
 
+def checks_digest(state: AuthoringExtra, version_history: Sequence[str] = ()) -> str:
+    """:func:`spec_digest` of what a run of the checks depends on: the spec and the edit history.
+    The skip declarations are left out."""
+    return spec_digest(state["curr_spec"] or "", [], version_history)
+
+
 def marked_digest(draft: str, expected_failures: Iterable[CheckName]) -> str:
     """``draft`` bound to the names of the checks marked as expected to fail. The reasons are left
     out: rewording one changes nothing a run checked."""
@@ -121,9 +129,9 @@ def marked_digest(draft: str, expected_failures: Iterable[CheckName]) -> str:
 
 
 def checked_digest(state: CheckingExtra, version_history: Sequence[str] = ()) -> str:
-    """The digest a verdict stamp carries (:func:`make_verdict_stamper`): the draft and its
-    markings."""
-    return marked_digest(draft_digest(state, version_history), state["expected_failures"])
+    """The digest a verdict stamp carries (:func:`make_verdict_stamper`): what the checks ran on,
+    and the markings."""
+    return marked_digest(checks_digest(state, version_history), state["expected_failures"])
 
 
 class ValidationStamper[S: AuthoringExtra](Protocol):

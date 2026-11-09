@@ -2,16 +2,23 @@
 into the run."""
 
 import json
+import shutil
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import pytest
 from prover_output_utility.exceptions import ProverAPIError
 from prover_output_utility.models import JobStatus
 
-from composer.prover import cloud
+from composer.prover import cloud, core
 from composer.prover.cloud import CloudJobError, CloudResultsUnavailable, cloud_results
-from composer.prover.results import ErrorAlert
+from composer.prover.core import ProverCallbacks, ProverOptions, ProverReport
+from composer.prover.results import AlertReport, ErrorAlert, FetchedResults
 
+_TREE_VIEW = Path(__file__).parent / "data" / "solana_cex" / "loop_unwinding" / "Reports"
+#: A tree view with two rules that timed out. The tree-view fetch brings only its status file;
+#: the statistics are served one by one.
+_TIMED_OUT = Path(__file__).parent / "data" / "prover_statistics" / "Reports" / "treeView"
 _LINK = "https://prover.certora.com/jobStatus/37632/793b747e3a2c41a4819b6a0ec9705ad7?anonymousKey=k"
 _HINT = (
     "TAC Clock::get expected to extract 5 TAC variables from call "
@@ -20,16 +27,37 @@ _HINT = (
 
 
 class _FlakyAPI:
-    def __init__(self, failures: int, report: str | ProverAPIError = "{}") -> None:
+    def __init__(
+        self,
+        failures: int,
+        report: str | ProverAPIError = "{}",
+        tree_view: bool = False,
+        timed_out: bool = False,
+    ) -> None:
         self.failures = failures
         self.report = report
+        self.tree_view = tree_view
+        self.timed_out = timed_out
         self.calls = 0
         self.alert_calls = 0
+        self.statistics_fetched: list[str] = []
 
     def fetch_sources_and_treeview_files(self, job_id: str, dest: Path) -> None:
         self.calls += 1
         if self.calls <= self.failures:
             raise ProverAPIError("Read timed out")
+        if self.tree_view:
+            shutil.copytree(_TREE_VIEW, dest / "Reports")
+        if self.timed_out:
+            tree_view = dest / "Reports" / "treeView"
+            tree_view.mkdir(parents=True)
+            shutil.copy(_TIMED_OUT / "treeViewStatus_1.json", tree_view)
+
+    def fetch_treeview_output_by_filename(self, job_id: str, name: str) -> object:
+        self.statistics_fetched.append(name)
+        if name == "rule_live_statistics_3.json":
+            raise ProverAPIError("Read timed out")
+        return json.loads((_TIMED_OUT / name).read_text())
 
     def fetch_output_file(self, job_id: str, name: str) -> str:
         self.alert_calls += 1
@@ -41,9 +69,14 @@ class _FlakyAPI:
 @pytest.fixture
 def api(monkeypatch: pytest.MonkeyPatch):
     def install(
-        failures: int, *, status: str = "SUCCEEDED", report: str | ProverAPIError = "{}"
+        failures: int,
+        *,
+        status: str = "SUCCEEDED",
+        report: str | ProverAPIError = "{}",
+        tree_view: bool = False,
+        timed_out: bool = False,
     ) -> _FlakyAPI:
-        fake = _FlakyAPI(failures, report)
+        fake = _FlakyAPI(failures, report, tree_view, timed_out)
         monkeypatch.setattr(cloud, "results_api", lambda: fake)
 
         async def finished(*_args, **_kwargs) -> dict:
@@ -101,19 +134,64 @@ async def test_a_read_that_keeps_failing_names_the_job(api) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status", ["FAILED", "HALTED"])
-async def test_a_job_that_ran_carries_its_error_alert(api, status: str) -> None:
-    fake = api(0, status=status, report=_clock_report())
+async def test_a_failed_job_carries_its_error_alert(api) -> None:
+    fake = api(0, status="FAILED", report=_clock_report())
 
     with pytest.raises(CloudJobError) as raised:
         async with cloud_results(_LINK, poll_timeout=1):
             pytest.fail("a job without verdicts should not be yielded")
 
-    assert raised.value.status == JobStatus(status)
+    assert raised.value.status == JobStatus.FAILED
     assert raised.value.link == _LINK
     assert raised.value.alerts == (ErrorAlert("General", _HINT),)
     assert fake.alert_calls == 1
     assert fake.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_a_halted_job_yields_the_verdicts_it_finished(api) -> None:
+    api(0, status="HALTED", tree_view=True)
+
+    async with cloud_results(_LINK, poll_timeout=1) as fetched:
+        assert fetched.halted
+        assert (fetched.root / "Reports" / "treeView").is_dir()
+
+
+@pytest.mark.asyncio
+async def test_a_succeeded_job_is_not_halted(api) -> None:
+    api(0, tree_view=True)
+
+    async with cloud_results(_LINK, poll_timeout=1) as fetched:
+        assert not fetched.halted
+
+
+@pytest.mark.asyncio
+async def test_the_statistics_of_the_rules_that_timed_out_are_fetched(api) -> None:
+    """A statistics file that cannot be fetched is left out; the verdicts still arrive."""
+    fake = api(0, status="HALTED", timed_out=True)
+
+    async with cloud_results(_LINK, poll_timeout=1) as fetched:
+        tree_view = fetched.root / "Reports" / "treeView"
+        assert (tree_view / "rule_live_statistics_2.json").is_file()
+        assert not (tree_view / "rule_live_statistics_3.json").exists()
+
+    assert sorted(fake.statistics_fetched) == [
+        "rule_live_statistics_2.json",
+        "rule_live_statistics_3.json",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_halted_job_with_no_tree_view_carries_its_error_alert(api) -> None:
+    fake = api(0, status="HALTED", report=_clock_report())
+
+    with pytest.raises(CloudJobError) as raised:
+        async with cloud_results(_LINK, poll_timeout=1):
+            pytest.fail("a job without verdicts should not be yielded")
+
+    assert raised.value.status == JobStatus.HALTED
+    assert raised.value.alerts == (ErrorAlert("General", _HINT),)
+    assert fake.calls == 1
 
 
 @pytest.mark.asyncio
@@ -159,3 +237,24 @@ async def test_a_poll_timeout_names_the_job_and_skips_the_alert(api, monkeypatch
     assert raised.value.link == _LINK
     assert raised.value.alerts == ()
     assert fake.alert_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("halted", [True, False])
+async def test_the_report_says_when_the_job_was_cut_off(monkeypatch, halted: bool) -> None:
+    async def submitted(*_args, **_kwargs):
+        return {"sort": "success", "link": _LINK, "is_local_link": False}, ""
+
+    @asynccontextmanager
+    async def fetched(*_args, **_kwargs):
+        yield FetchedResults(_TREE_VIEW.parent, None, AlertReport(), halted=halted)
+
+    monkeypatch.setattr(core, "run_prover_inner", submitted)
+    monkeypatch.setattr(core, "cloud_results", fetched)
+
+    report = await core.run_prover(
+        Path("."), [], "tc", ProverOptions(app="solana", server="prod"), ProverCallbacks(), None
+    )
+
+    assert isinstance(report, ProverReport)
+    assert report.result_str.startswith(core._HALTED_NOTE) == halted

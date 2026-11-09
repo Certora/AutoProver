@@ -66,6 +66,7 @@ from composer.prover.results import (
     UnreadableAlertReport,
     read_alert_report,
     read_and_format_run_result,
+    read_rule_statistics,
 )
 from composer.templates.loader import load_jinja_template
 from composer.certora_env import ProverApp
@@ -739,6 +740,33 @@ async def declared_rules_list(
     return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
 
+_HALTED_NOTE = (
+    "The prover job reached its time limit before every rule finished. The rules it finished "
+    "have their verdicts; a rule it cut off is reported as TIMEOUT. Resubmitting the same rules "
+    "will reach the limit again: simplify or split the rules that timed out."
+)
+
+
+_STUCK_HEADING = (
+    "Where each rule that timed out stood when it was stopped, from the prover's statistics. "
+    "A function's share is of the rule's branching or of its nonlinear operations:"
+)
+
+
+def _stuck_note(results: list[RuleResult], tree_view_dir: Path) -> str | None:
+    """One line per ``TIMEOUT`` rule with statistics: its phase, path count and hotspots."""
+    lines: list[str] = []
+    for result in results:
+        if result.status != "TIMEOUT" or result.live_check_info is None:
+            continue
+        stats = read_rule_statistics(tree_view_dir, result.live_check_info)
+        if stats is not None:
+            lines.append(f"* {result.name}: {stats.render()}")
+    if not lines:
+        return None
+    return "\n".join([_STUCK_HEADING, *lines])
+
+
 def _failure_advice(alerts: tuple[ErrorAlert, ...]) -> str:
     """What to tell the author, given the ``ERROR`` entries on a job with no verdicts.
 
@@ -921,6 +949,10 @@ async def run_prover(
                     rule_entries=[(r, None) for r in all_results],
                     diagnoses=[],
                 )
+            if (stuck := _stuck_note(all_results, emv_path / "Reports" / "treeView")) is not None:
+                result_str = f"{result_str}\n\n{stuck}"
+            if fetched.halted:
+                result_str = f"{_HALTED_NOTE}\n\n{result_str}"
     except CloudJobError as exc:
         return cloud_job_failure_message(exc)
     except CloudResultsUnavailable as exc:

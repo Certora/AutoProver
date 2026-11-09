@@ -48,7 +48,7 @@ from composer.pipeline.cli import AtExit, cli_pipeline, user_ns
 from composer.pipeline.pinned import load_pinned_run
 from composer.pipeline.ecosystem import SOLANA
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS, CorePipelineResult
-from composer.pipeline.run_mode import RunMode
+from composer.pipeline.run_mode import RunMode, add_run_mode_arg, resolve_run_mode
 from composer.prover.core import make_prover_options
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
@@ -72,6 +72,9 @@ from composer.spec.cvlr_research import (
 )
 
 _log = logging.getLogger(__name__)
+
+#: The run modes the CVLR backend implements. ``evaluate`` is not among them (cvlr-todo U47).
+CVLR_RUN_MODES = (RunMode.COMPREHENSIVE, RunMode.PRIORITIZED)
 
 #: The result a frontend renders.
 type CvlrPipelineResult = CorePipelineResult[GeneratedHarness]
@@ -107,6 +110,7 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     time_budget: float | None
     extra_context: list[str] | None
     threat_model: str | None
+    run_mode: str | None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -187,6 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
     budget_group.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
+    add_run_mode_arg(parser, CVLR_RUN_MODES)
     add_extra_context_args(parser)
     return parser
 
@@ -280,7 +285,9 @@ def announce_confinement(sandbox: SandboxConfig) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _usage_exit_logger(summary: RunSummary, selected: SelectedPackage) -> AtExit:
+def _usage_exit_logger(
+    summary: RunSummary, selected: SelectedPackage, run_mode: RunMode
+) -> AtExit:
     """Persist the run's LLM usage, and dump ``job_info.json`` beside the report whether or not the
     pipeline got as far as writing one — the foundry entry point's hook, with the package directory
     the CVLR store needs. Each step is guarded so a teardown failure cannot mask the run's own
@@ -297,10 +304,7 @@ def _usage_exit_logger(summary: RunSummary, selected: SelectedPackage) -> AtExit
             _log.exception("failed to log cvlr usage to run data")
         try:
             CvlrArtifactStore(run.project_root, selected.package_dir).write_job_info(
-                # This backend exposes no --run-mode and passes none to the pipeline, so the
-                # manifest records the mode the run actually took rather than a resolved
-                # preference it would have ignored.
-                summary, user_id=get_uid(), run_mode=RunMode.COMPREHENSIVE.value
+                summary, user_id=get_uid(), run_mode=run_mode.value
             )
         except Exception:
             _log.exception("failed to dump cvlr job info")
@@ -332,6 +336,7 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     thread_id = f"cvlr_{uuid.uuid4().hex[:12]}"
     project_root = pathlib.Path(args.project_root).resolve()
     main_source, identifier = parse_main_program(args.main_contract)
+    run_mode = resolve_run_mode(args.run_mode, CVLR_RUN_MODES)
 
     # Before any service starts: a workspace cargo cannot read, a package that is not a member, and
     # a multi-program workspace with nothing naming the one to verify are all usage errors, and
@@ -379,7 +384,8 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
             task_handler=fact,
             design_doc_phase=CvlrPhase.DISCOVER_DESIGN_DOC,
             ecosystem=SOLANA,
-            at_exit=_usage_exit_logger(summary, selected),
+            at_exit=_usage_exit_logger(summary, selected, run_mode),
+            run_mode=run_mode,
             pinned=pinned,
             pin_to=pathlib.Path(args.pin_to).resolve() if args.pin_to else None,
             workflow="cvlr",

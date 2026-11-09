@@ -77,14 +77,26 @@ def test_editing_the_spec_after_a_clean_run_invalidates_it():
     assert "stale" in (_gate(stamped) or "")
 
 
-def test_declaring_a_skip_after_a_clean_run_also_invalidates_it():
-    # A skip is part of what was reviewed — "this property is left out, here is why" is a claim the
-    # gate must not carry over from a draft that didn't make it.
+def test_declaring_a_skip_after_a_clean_run_leaves_it_current():
+    # A run checks the same tests whichever properties are skipped, so rerunning it would say nothing
+    # about the skip.
     stamped = _state(
         skipped=[SkippedProperty(property_title="no_free_mint", reason="no oracle")],
         validations={VALIDATE_KEY: checked_digest(_state())},
     )
-    assert "stale" in (_gate(stamped) or "")
+    assert _gate(stamped) is None
+
+
+def test_declaring_a_skip_after_a_review_invalidates_the_review():
+    # A skip is part of what the judge reviewed — "this property is left out, here is why" is a claim
+    # the gate must not carry over from a draft that didn't make it.
+    stamped = _state(
+        required_validations=[VALIDATE_KEY, FEEDBACK_KEY],
+        skipped=[SkippedProperty(property_title="no_free_mint", reason="no oracle")],
+        validations={VALIDATE_KEY: checked_digest(_state()), FEEDBACK_KEY: draft_digest(_state())},
+    )
+    assert FEEDBACK_KEY in (_gate(stamped) or "")
+    assert VALIDATE_KEY not in (_gate(stamped) or "")
 
 
 def test_marking_a_check_after_a_clean_run_also_invalidates_it():

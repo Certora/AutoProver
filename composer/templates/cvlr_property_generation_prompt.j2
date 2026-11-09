@@ -10,6 +10,12 @@ properties of the program `{{ program }}`:
 {% for prop in properties %}
 <{{ prop.sort }}>
   Property {{ loop.index }} (`{{ prop.title }}`): {{ prop.description }}
+  {% if prop.checked_at is defined %}
+  Scope: this run checks the property at {{ prop.checked_at | join(", ") }} only. It formalizes this
+  component and no other, so {{ prop.excluded | join(", ") }} are out of its scope: write no rule for
+  them and record no skip for them. The report states the narrowing. Covering every one of
+  {{ prop.checked_at | join(", ") }} is required.
+  {% endif %}
   {% if prop.sort == "attack_vector" %}
   Goal: demonstrate that this attack cannot occur. If it *can*, the rule that shows it must fail —
   see the expected-failure instructions below.
@@ -237,7 +243,40 @@ remove it — an unattributed rule costs prover time nobody chose to spend.
 For a `cvlr_rules!` invocation, name the *generated* rules, not the invocation: `name: "solvency"`
 over `bases: [base_deposit, base_withdraw]` declares `solvency_deposit` and `solvency_withdraw`.
 
-<skipping>
+<skipping>{% if focused %}
+This run is being spent on the properties above and nothing else. They were chosen out of everything
+inferred for this program because they are the ones worth verifying, so there is no other work to fall
+back on: whatever you establish here is the entire result.
+
+You therefore may not retire them. `record_skip` will refuse them, and the `give_up` tool rejects a
+`sort='exhausted'` stop until you have actually run `verify_rules` several times and can enumerate what
+you tried. Where the steps above say to skip, here they mean the remedies below. When you are stuck, the
+move is to make the problem smaller, not to put it down:
+
+  - State the missing fact. If the counterexamples keep starting from account states the program cannot
+    reach, what is missing is a fact about the state, not a smaller property. State that fact as an
+    invariant, prove it here as its own rule, and assume it in the rule that needs it (see "When a rule
+    should fail" in your instructions).
+  - Decompose it. Prove a smaller statement that the property is built out of as its own rule — the
+    accounting function below the handler, one account-list length, one pre-state variant — and work up
+    from there.
+  - Weaken it honestly. If the full property will not go through, formalize the strongest version of it
+    that does — a bounded domain, a sub-property the prover can reach — and say plainly in your
+    commentary what you proved and what you did not.
+
+Weakening is not licence to reach a passing rule by any means. A rule that passes because it assumes
+away the states where the property is interesting proves nothing, and neither does one weakened until
+it no longer says anything, nor one moved onto a copy of the handler you wrote. Each is a worse outcome
+than an honest account of what would not go through — the point of this run is a real result about the
+property, not a green check.
+
+**A program that appears to violate a property is a finding, not a failure.** Write the rule, let it
+fail, and mark it with `expect_rule_failure`.
+
+If an environment problem blocks all progress — the crate will not build for reasons unrelated to
+your module, the prover is unreachable — call `give_up` with `sort='environment'` and specifics so it
+can be fixed and the task re-run. That stop is not gated: do it as soon as the problem is identified,
+and do not keep retrying.{% else %}
 If you genuinely cannot express a property as a rule after serious effort, use
 `record_skip(property_title, reason)`.
 
@@ -258,7 +297,7 @@ rule, let it fail, and mark it.
 
 If an environment problem blocks all progress — the crate will not build for reasons unrelated to
 your module, the prover is unreachable — call `give_up(reason)` with specifics so it can be fixed and
-the task re-run.
+the task re-run.{% endif %}
 </skipping>
 </task>
 

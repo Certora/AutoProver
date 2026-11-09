@@ -174,9 +174,9 @@ class LastVerdicts(BaseModel):
     incomplete: list[str]
     #: Rules the build listed that the report gave no verdict for.
     unverdicted: list[str]
-    #: :func:`~composer.authoring.state.draft_digest` with :func:`tuning_history`
-    #: at that run. The markings are not in it: they change how a run is judged,
-    #: not which run it was.
+    #: :func:`~composer.authoring.state.checks_digest` with :func:`tuning_history`
+    #: at that run. The markings and the skips are not in it: they change how a
+    #: run is judged, not which run it was.
     draft: str
     #: The names the build listed, sorted. ``None`` means no build has listed
     #: them, which is also what a checkpoint from before this field loads as.

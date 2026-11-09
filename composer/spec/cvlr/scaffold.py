@@ -838,7 +838,9 @@ def _plan_harness(
             )
 
 
-def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
+def _plan_forks(
+    workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
+) -> None:
     """Add ``[patch.crates-io]`` entries for the chain's verification forks.
 
     The table is workspace-level, so it goes on the workspace manifest with the rest of the plan.
@@ -853,7 +855,10 @@ def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuil
     """
     path = Path("Cargo.toml")
     match forks.plan_overrides(
-        workspace, reference.forks, already_redirected=forks.already_patched(plan.read(path))
+        workspace,
+        package,
+        reference.forks,
+        already_redirected=forks.already_patched(plan.read(path)),
     ):
         case forks.ForkRefused(blocked):
             for b in blocked:
@@ -965,7 +970,7 @@ def plan_scaffold(
     _plan_harness(package, relative, dialect, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, plan)
-    _plan_forks(workspace, reference, plan)
+    _plan_forks(workspace, package, reference, plan)
     _plan_unpublished(workspace, reference, plan)
     _plan_package_manifest(workspace, package, relative, reference, plan, inherit=inherit)
     # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the

@@ -359,6 +359,8 @@ class FetchedResults:
     #: The prover's queue-free run time, when it is known.
     runtime_ms: int | None
     alerts: AlertReport | UnreadableAlertReport
+    #: The job hit the time limit, so rules it had not finished are ``TIMEOUT``.
+    halted: bool = False
 
 
 def parse_alert_report(text: str) -> AlertReport | UnreadableAlertReport:
@@ -432,6 +434,132 @@ def get_final_treeview(s: Path) -> tuple[TreeViewStatus, Path]:
         return (loaded_data, tree_view_dir)
     except ValidationError as e:
         raise MalformedTreeVew(e)
+
+
+#: Statuses that are verdicts. A node of a ``HALTED`` job that the Prover cut off is still
+#: ``RUNNING``, and a timeout can be written as an ``ERROR``; both read as ``TIMEOUT``.
+_FINISHED = frozenset({"VERIFIED", "VIOLATED", "SANITY_FAILED", "SKIPPED"})
+
+
+def unfinished_statistics_files(tree: TreeViewStatus) -> frozenset[str]:
+    """The statistics files (``LiveCheckInfo``) of every node without a verdict."""
+    found: set[str] = set()
+
+    def walk(node: RuleNodeModel) -> None:
+        if node.status not in _FINISHED and node.LiveCheckInfo is not None:
+            found.add(node.LiveCheckInfo)
+        for child in node.children:
+            walk(child)
+
+    for rule in tree.rules:
+        walk(rule)
+    return frozenset(found)
+
+
+@dataclass(frozen=True)
+class Hotspot:
+    function: str
+    #: The function's share of the rule's branching or nonlinear operations, in percent.
+    share: int
+
+
+@dataclass(frozen=True)
+class RuleStatistics:
+    """Where an unfinished rule stood, from the Prover's ``rule_live_statistics_*.json``."""
+
+    #: The Prover's verification phase, with its line breaks collapsed.
+    phase: str
+    path_count: str | None
+    branching: tuple[Hotspot, ...]
+    nonlinear: tuple[Hotspot, ...]
+
+    def render(self, top: int = 2) -> str:
+        parts = [self.phase]
+        if self.path_count is not None:
+            parts.append(f"path count {self.path_count}")
+        for what, spots in (("branching", self.branching), ("nonlinear ops", self.nonlinear)):
+            if spots:
+                listed = ", ".join(f"{h.function} {h.share} %" for h in spots[:top])
+                parts.append(f"{what}: {listed}")
+        return "; ".join(parts)
+
+
+_SHARE = re.compile(r"contrib\. to (?:branching|nonlinear ops): (\d+) %")
+_PHASE_PREFIX = "verification phase:"
+
+
+def _hotspots(section: object) -> tuple[Hotspot, ...]:
+    if not isinstance(section, dict) or not isinstance(children := section.get("children"), list):
+        return ()
+    found: list[Hotspot] = []
+    for child in children:
+        if not isinstance(child, dict):
+            continue
+        label, value = child.get("label"), child.get("value")
+        if not isinstance(label, str) or not label.startswith("function: ") or not isinstance(value, str):
+            continue
+        if (share := _SHARE.search(value)) is None:
+            continue
+        found.append(Hotspot(label.removeprefix("function: "), int(share.group(1))))
+    return tuple(sorted(found, key=lambda h: -h.share))
+
+
+_SPLITS = re.compile(
+    r"splits attempted \(solved or split again\): (\d+) "
+    r"total weight of splits proved: (\d+) % "
+    r"splitting depth reached: (\d+) "
+    r"configured max\. splitting depth: (\d+)"
+)
+
+
+def _phase(label: str) -> str:
+    detail = " ".join(label.removeprefix(_PHASE_PREFIX).split())
+    if detail == "static analysis":
+        return "static analysis (the rule did not reach the solver)"
+    if (splits := _SPLITS.fullmatch(detail)) is not None:
+        attempted, proved, depth, max_depth = splits.groups()
+        return (
+            f"solving (splits attempted {attempted}, {proved} % proved, "
+            f"splitting depth {depth} of {max_depth})"
+        )
+    return detail
+
+
+def parse_rule_statistics(text: str) -> RuleStatistics | None:
+    """A ``rule_live_statistics_*.json`` body, or None when it has no verification phase."""
+    try:
+        sections = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(sections, list):
+        return None
+    by_label: dict[str, dict] = {}
+    phase: str | None = None
+    for section in sections:
+        if not isinstance(section, dict) or not isinstance(label := section.get("label"), str):
+            continue
+        if label.startswith(_PHASE_PREFIX):
+            phase = _phase(label)
+        else:
+            by_label[label] = section
+    if phase is None:
+        return None
+    path_count = by_label.get("path count", {}).get("value")
+    return RuleStatistics(
+        phase=phase,
+        path_count=path_count if isinstance(path_count, str) else None,
+        branching=_hotspots(by_label.get("path count hotspots")),
+        nonlinear=_hotspots(by_label.get("nonlinearity hotspots")),
+    )
+
+
+def read_rule_statistics(tree_view_dir: Path, name: str) -> RuleStatistics | None:
+    """The statistics file ``name`` in ``tree_view_dir``, or None when it is absent or unreadable."""
+    try:
+        text = (tree_view_dir / name).read_text()
+    except OSError:
+        return None
+    return parse_rule_statistics(text)
 
 
 def read_and_format_run_result(s: Path, app: ProverApp) -> dict[str, RuleResult] | str:

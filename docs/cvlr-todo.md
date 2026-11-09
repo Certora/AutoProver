@@ -362,12 +362,16 @@ beside `solana.html`: its diagnostics and timeout chapters are on-topic and its 
 not. And vector search missed *Parametric Rules & Macros* for "one rule covering every instruction",
 which keyword search found. Neither has been looked at since the corpus became the manual alone.
 
-**U32. A halted job's finished rules are not returned. Deferred: parity with CVL.**
-`cloud_results` raises on `HALTED` before it downloads the tree view, so the author hears that the
-job ran out of resources and not which rules already had a verdict. The EVM author path uses the
-same function. PreAudit does read them: it treats `HALTED` as complete and calls
-`parse_rule_results_from_job`. Seen as 18 jobs on the 2026-10-16 stake run
-([stake-benchmark.md](./stake-benchmark.md)). Not a Solana gap to fix on its own.
+**~~U32. A halted job's finished rules are not returned.~~** — **built (2026-11-02), for both
+backends.** `cloud_results` raised on `HALTED` before it downloaded the tree view, so the author
+heard that the job ran out of resources and not which rules already had a verdict. A halted job
+does write its tree view: one of the lending benchmark's halted jobs parses to 9 rules VERIFIED and
+the 5 the limit cut off as `TIMEOUT`, which both gates already treat as unfinished. `cloud_results`
+now yields a halted job's results with `FetchedResults.halted`, and `run_prover` puts a note ahead
+of the report: the limit cut those rules off, and resubmitting them unchanged reaches it again. A
+halted job with no tree view still raises `CloudJobError` with its alerts. PreAudit already read
+halted jobs this way. Seen as 18 jobs on the 2026-10-16 stake run
+([stake-benchmark.md](./stake-benchmark.md)) and 6 on the lending benchmark's run 2b.
 
 **U33. `-solanaHeapSize` could be a setting the author may change.** `BASE_CONF` raises it to 256 KB,
 enough for the one crashed job of the lending benchmark that was resubmitted
@@ -493,6 +497,14 @@ is "treated as external". That is a soundness caveat a reader has to discount by
 So U38 is still worth doing, as cleanup of verdict caveats and of the author rounds spent on
 pointer errors, but it is not the cause of U40.
 
+*Seen again 2026-11-04, on the liquidation rerun of run 3.* The author guessed that formatted
+logging made the eligibility rules time out, and asked the editor to make the logging macro a
+no-op. The editor refused, correctly: none of its kinds edits a `macro_rules!` definition, and
+dropping the arguments would also drop any panic inside them. The guess was wrong. The pilot's
+program dumps for those rules hold about 400 instructions' worth of formatting out of 43,799 (U44
+has the breakdown). So the recipe above needs a new editor kind, a gated macro-definition swap, and
+U44 is what would have kept the author from asking for it here.
+
 **U39. The run spends its budget first in, first out.** Formalization authors four units at a time
 in component order, from one shared pool. On both benchmark runs the first units took the whole pool
 and the units that mattered most started with about a dollar. Give each unit a share of the pool, or
@@ -504,7 +516,7 @@ across 75 calls. Jobs of 20 to 30 minutes were common, 6 halted at the ceiling, 
 of their wall clock waiting. Find out what the long jobs are before moving `global_timeout`: which
 rules, and whether they are the wide-integer arithmetic, the loops, or the translation. A halted job's
 finished verdicts are not returned (U32), so each halt also discards the rules that did finish. That
-makes U32 worth doing for the Solana backend on its own.
+makes U32 worth doing for the Solana backend on its own. (Built 2026-11-02; see U32.)
 
 *Measured 2026-10-30: it is wide-integer division.* The data comes from 7 of run 2b's job output
 archives (`Reports/treeView`: the per-rule `rule_live_statistics_*.json` and the final
@@ -598,6 +610,283 @@ a sentence in the remedy list. One cost: the recorded Counter tape
 arguments, and it must be updated or re-recorded.
 
 ---
+
+**~~U42. A skip recorded beside `verify_rules` makes its stamp stale.~~** — **fixed (2026-11-05).**
+A verdict stamp is now built on `checks_digest`, the spec and the tuning history without the skips,
+and so is the draft `LastVerdicts` records, so a skip after a run neither stales its stamp nor sends
+`verify_rules` back to the Prover. The judge's stamp still covers the skips. The stamper is shared,
+so the Rust-app and Foundry gates changed the same way. What was found: the prover stamp was
+`checked_digest`, which is built on `draft_digest`, and that covers the skipped properties. On the
+lending benchmark's run 3 pilot (2026-11-02), the author called `record_skip` and `verify_rules` in
+one step. The run came back stamped (35 VERIFIED, 1 marked VIOLATED), the judge accepted, and then
+`result` was refused as stale, so the author resubmitted an unchanged harness: one more Prover job.
+What the Prover checks does not depend on which properties are skipped, so the verdict stamp should
+leave the skips out and keep the harness, the tuning history and the markings. The judge's stamp
+must keep covering skips, since a skip's reason is part of what it accepts. Saying "not in parallel"
+in the tool docstrings, as `expect_rule_failure` does, would be the weaker fix.
+
+**~~U43. The author has no recipe for a computation that will not finish.~~** — **built
+(2026-11-04, not yet exercised by a run).** On the lending benchmark's run 3 pilot, the functions
+that decide whether and how much an obligation can be liquidated timed out even alone in small jobs,
+and the author skipped every property whose path crossed them, including the ones that only use
+their result. The published report for that program names the abstraction that answers it: the
+liquidation computation replaced by one that returns arbitrary values. The mechanism was already
+there (`mock_fn` with a stand-in the author writes); the prompt only offered it for a hash, a clock
+or a CPI. The author's system prompt now has "When a computation will not finish: a bounded
+stand-in": sort the properties into those about what the function computes and those that only
+consume its result; for the second kind, a `nondet()` stand-in constrained only by guarantees taken
+from the function's own code or proved by a rule over it; the stand-in applies to the whole unit;
+a counterexample may use a value the real function never returns; and the rules that cross it say
+so. The judge checks each constraint's source. The example is an AMM, not a lending program.
+
+*Not used on its first run (2026-11-04).* On the liquidation rerun the author skipped the
+flow-of-funds properties because `calculate_liquidation` calls the eligibility function first, and
+that function timed out. Those properties are about `calculate_liquidation`'s own output, and use only
+the eligibility result, so a stand-in for the callee was the move. The section sorted properties by
+the function a rule drives, so the author never looked one call down. It now says to sort by what the
+rule asserts over, and its example adds a timed-out callee.
+
+*Used on the third run (2026-11-05), then replaced.* The author wrote stand-ins for the redeem and
+the protocol fee under the net-proceeds floor, a property that only consumes them. The rule still
+failed translation, because the 256-bit code is in the caller itself, and a verbatim extraction of
+the check proved it instead. Where the remaining liquidation properties time out, the stuck-rule
+lines (U44) put the time in the division across the function rather than in one callee, so that
+wall is U45's.
+
+**~~U44. A TIMEOUT does not say what the Prover was stuck on.~~** — **built (2026-11-05).** `cloud_results` now fetches the statistics file of every rule without a
+verdict (a halted job leaves a cut-off rule `RUNNING`, which the parse reads as `TIMEOUT`), and the
+prover report ends with one line per timed-out rule: the phase, the path count, and the top two
+functions by share of branching and of nonlinear operations. A local run already has the files.
+Checked against the pilot's halted job, the lines name the four rules stuck in static analysis and
+the 256-bit division at 86–96 % in the rest. The author's stand-in section says how to read them.
+*Used on its first run (2026-11-05):* the liquidation run's skip reasons quote the lines, with no
+guess at logging, and the run needed 5 Prover jobs where the rerun needed 15.
+What was found: the Prover writes per-rule statistics
+(`rule_live_statistics_*.json`, linked from each rule's `LiveCheckInfo` in the tree view): the
+phase the rule reached, its path count, and the functions that dominate its branching and its
+nonlinear operations. `cloud_results` downloads the tree view and the sources but not these
+files, so a TIMEOUT reaches the author as a bare status, and the author guesses. On the liquidation
+rerun of run 3 (2026-11-04) the author guessed formatted logging, and spent an editor round trip on
+it (U38). The pilot's statistics for the same rules showed something else:
+
+* Four eligibility rules never left static analysis in 25 minutes. Their programs were about 13
+  times the size of a rule that reached the solver (43,799 instructions against 3,372). The
+  function they drive inlines 25 copies of the 256-bit division under the fixed-point type, which
+  make up most of that size. Formatting was under 1%.
+* The rules that reached the solver had that division at 86 to 96% of their branching.
+
+Fetch the statistics files with the tree view. Add one line to each unfinished rule's verdict: the
+phase it reached, its path count, and its top one or two hotspot functions with their share.
+"Static analysis" and "solving" call for different remedies. The line has to stay a measurement,
+not advice: the remedies are already in the prompt (U43, the loop ladder, bounding inputs). It is
+generic: the statistics come from the Prover for any program, and nothing in them is specific to
+one benchmark.
+
+**U45. A narrower fixed-point type has to be chosen when a unit starts.** The eligibility decision
+in the lending benchmark's liquidation unit compares ratios that the program computes with 25
+fixed-point divisions, each a 256-bit long division (U44). A stand-in (U43) cannot replace those
+divisions without changing the decision the property is about, and U40 found that characterizing
+the division exactly (`q*d + r == n`) is slower still. The published report for that program
+names the abstraction that answers it: `Fraction` replaced by a narrower fixed-point type
+(`FixedU64<14>` in place of the 128-bit type with 60 fractional bits).
+
+U40's experiment says what supporting this takes. A 64-bit `Fraction` swapped in under the unit's
+feature turned a 17-minute rule into 3.5 minutes, and two timeouts into 8-second verdicts. But it
+needed eight coordinated edits to compile, and it made 8 of 14 rules vacuous until the harness
+constants were rescaled. The program's encoding, the harness's constants and every stored `_sf`
+field have to agree on the scale. So it cannot be applied to rules already written. It is a
+decision for the start of a unit, or for a family of units that share the type, made before the
+first rule:
+
+* **When.** The author's research step, or preflight, sees the program's fixed-point type and its
+  widening multiply and divide, and a probe rule over one of its divisions times out or reaches
+  the 256-bit path.
+* **What.** A verification-only replacement of the type's module under the unit's feature, with
+  the same API at the narrower width. It is a new editor kind, or a `redirect_module` with a recipe.
+  Its caveats are fixed: it changes rounding, so it cannot support a property about rounding or
+  precision, and every verdict in the unit is stated under it.
+* **The harness.** Rules must use the program's own constants (its `ONE`, its scale shift) rather
+  than literal encodings, so that they survive a change of scale. That is worth telling the author
+  even without the narrow type.
+
+This is the larger piece of work. Do U44 first. It makes the problem visible to the author, and it
+tells us how often a unit hits this wall.
+
+**U46. The Solana AutoProver has no prioritized mode.** Every CVLR run is comprehensive: it
+formalizes every inferred property of every unit. Each of the three cloud Solana jobs on dev
+formalized 4–7 units for an estimated $39–65, while a prioritized Solidity run formalizes one.
+Prioritized is the dashboard's default for Solidity, and it is what a like-for-like cost
+comparison between the two needs. The ranking itself is already backend-agnostic. `run_pipeline` in
+[core.py](../composer/pipeline/core.py) ranks the candidates (`_prioritize`), cuts the run to one
+batch, skips hoisting and refuses a cached result that retires the focus (`_focus_satisfied`), and
+passes the deprioritized list to `build_report`. What is missing is the mode's input and the CVLR
+author's side of it:
+
+* **The entry point.** [cvlr/entry.py](../composer/spec/cvlr/entry.py) has no `--run-mode`, passes
+  none to `cli_pipeline`, and writes `comprehensive` into `job_info.json` unconditionally. It needs
+  the flag, `resolve_run_mode` (which reads `AUTOPROVER_RUN_MODE` too), and the resolved mode in
+  both places. The flag's definition is in `autoprove_common.py` today; it should move beside
+  `resolve_run_mode` so the two entry points share it.
+* **The staged formalizer.** `CvlrStagedFormalizer.begin` then receives the chosen batch alone, so
+  the shared scaffold is built from the focus's properties only. That should be correct and cheaper,
+  but it has not been checked. In particular, nothing in it may assume one section per inferred unit.
+* **The author's exits.** The CVL author tightens its exits around the focus with a `FocusPolicy`
+  (`source/pipeline.py`, `source/author.py`), and CVLR has to do the same:
+  `skip_tools(..., protected=...)`, `gated_give_up_tool` in place of `give_up_tool`, a focus variant
+  of the give-up description, and a `focused` branch in the CVLR property generation prompt. That
+  branch is the `<skipping>` text in `property_generation_prompt.j2`, with the CVLR remedies: state
+  the missing fact as an invariant, decompose, weaken honestly and say so. `FocusPolicy` should move
+  to `composer/authoring` rather than be imported from the CVL author. CVLR's budget monitor already
+  sets `budget_curtailed`, which lifts the skip protection at wrap-up.
+* **The give-up gate counts the wrong tool.** `_verify_attempts` in
+  [authoring/tools.py](../composer/authoring/tools.py) counts `submit_buffer` calls, which is the
+  CVL tool. Under CVLR it would count zero and refuse every `exhausted` give-up. The verify tool's
+  name has to be a parameter of `gated_give_up_tool` (`verify_rules` for CVLR).
+* **The ranking prompt.** `property_prioritization_system.j2` speaks of contracts and uses ERC-20
+  examples. It ranks property descriptions, so it probably works as it is. Judge it from the first
+  prioritized run, not in advance.
+* **The cloud.** data-processors refuses a `run_mode` for `AUTO_PROVER_SOLANA`
+  (`_require_solana_inputs`), and `_submit_autoprover_solana` passes `include_run_mode=False`. Both
+  lift for `prioritized` only; `evaluate` stays refused until U47. The AIAutoProver wrapper needs no
+  change: `s3_autoprove_solana` calls `console_solana` in-process, so the env var reaches it.
+* **The dashboard.** zeus-saas shows the run-mode picker, and prices by mode, only for the
+  `auto-prover` app (`auto-prover-sections.tsx`, `aiss-run-overview-dialog.tsx`). The Solana app
+  needs the picker with Prioritized and Comprehensive, and a default chosen deliberately. Its size
+  estimator is calibrated on Solidity runs.
+
+**The AutoProver side is done:** the flag (`add_run_mode_arg`, shared with the CVL entry point), the
+mode in `job_info.json`, `FocusPolicy` in `composer/authoring/tools.py`, the gate counting
+`verify_rules` (`GiveUpFloor`), and the `focused` prompt branch. The staged formalizer needed no
+change; it declares whatever units it is handed. Open: the pin, the API, the dashboard, and a first
+prioritized run.
+
+Order: AutoProver first, then the AIAutoProver pin, then the API, then the dashboard. A first
+prioritized run on a benchmark unit says whether the ranking prompt needs Solana wording. Tests: the
+entry point resolves the mode, the formalizer binds the focus exits under prioritized and not under
+comprehensive, and the gate counts `verify_rules`.
+
+**U47. The Solana AutoProver has no evaluate mode (deferred).** Evaluate (#282, not yet merged into
+`feature/solana`) writes no specs. It runs the specs and confs already in the repository and reports
+how well they cover the inferred properties. #282 adds only the hook: the driver hands the
+extracted batches to an implementation registered under the `certora.autoprove.modes` entry point.
+The implementation in use is CVL-specific (the CVL judge, conf coverage per spec). A Solana version
+needs its own implementation. It has to find a project's existing CVLR rules and the confs that
+select them, run them through the CVLR verify path, and judge per property which rules cover it.
+The API and dashboard would need the same per-kind lifting as U46, and the dashboard's flat
+evaluate price. Left until after U46.
+
+**~~U48. A generic impl's account validation stayed external.~~** — **fixed (2026-11-04; on the
+third liquidation run two `try_accounts` rules verified the owner and market bindings).** The Anchor inlining layer inlines `<.. as anchor_lang::Accounts<..>>::try_accounts`
+with a directive anchored at `$`. The Prover numbers a name that several symbols share, `_0`, `_1`
+and so on, and the bare name is then not a symbol (`as_the_prover_names` in `composer/cargo/symbols.py`).
+`AccountLoader<T>`'s validation is generic and was monomorphized three times in the lending benchmark,
+so it came back external as `try_accounts_0` to `_2`. Under the blanket `inline(never)` on
+`anchor_lang`, validation returned an arbitrary `Result`, so every handler-level rule over a zero-copy
+account was vacuous, and no `has_one`, signer or owner constraint in the unit was verified. The
+directive now allows the suffix, as the layer's other generic directives already did. No symbol
+fixture held a numbered `try_accounts`, so nothing caught it. A test now checks the numbered
+spellings.
+
+**U49. The Solana launch form has no Expert Settings panel.** The Solidity AutoProver form
+(zeus-saas `auto-prover-sections.tsx`) shows only the essentials by default and keeps the rest
+behind an `ExpertSettingsToggle`: the contract picker, the run mode, *Use repo memory* and the
+design and threat-model documents. The Solana form (`auto-prover-solana-sections.tsx`) has no such
+panel. Its program picker, run-mode picker and design-document picker are always shown, and it
+offers no repo memory and no threat model. The Solana form should get the same panel and the same
+default view, so that the two apps look and behave alike. The panel is also where any future Solana
+settings would go. Moving the run mode behind it should keep Prioritized as the default, as the
+Solidity form does.
+
+**U50. The dashboard does not show a narrowed property's scope.** A prioritized CVLR run checks a
+property that names other components' entry points only at its own component's
+(`prioritize.scope_to_unit`, `ScopedPropertyFormulation`). The report records each narrowing in
+`run_scoped` (schema 3.8): the component, the title, `checked_at` and `excluded`. zeus-saas does
+not read that field, so a narrowed property's verdicts look like any other property's, and a
+balance floor verified at `withdraw` alone reads as the floor holding across the program. The
+report view should mark each narrowed property, list the entry points it was checked at and the
+ones it was not, and say that the exclusion is the run's scope rather than a finding about the
+code. The run overview could say how many pursued properties were narrowed. This should ship with,
+or before, the first prioritized Solana runs that users see.
+
+**U51. A cloud job that never leaves the queue is reported as a failed job.** `cloud_results` polls
+a job for `runtime_bound + 5 min` (`prover/core.py`, `poll_timeout`), counted from submission, so
+queue time uses up the budget meant for the Prover's runtime. On the 2026-11-06 stake run
+(`70635f3a`) an EC2 throttling incident in us-west-2 kept job `01413cbd` `RUNNABLE` for over 25
+minutes. The poll timed out, `poll_job`'s `TimeoutError` became `CloudJobError(JobStatus.UNKNOWN)`,
+and the author was told "Prover cloud job did not produce results (status UNKNOWN). The job and its
+failure output are at …" (`cloud_job_failure_message`). Nothing says the job never started, so the
+author cannot tell an infrastructure delay from a halt on its own rules. It resubmitted, but it
+could as well have cut or weakened rules that were never run. The abandoned job is not cancelled,
+so it runs for nothing once capacity returns.
+
+The fix has three parts, all in shared code (`prover/cloud.py`, `prover/core.py`), so CVL runs get
+it too:
+
+- Count the runtime bound from the first `RUNNING` status. Bound queue time separately and
+  generously, or not at all.
+- Make "never started" an outcome of its own rather than `UNKNOWN`. The text should say how long the
+  job waited, that this is an infrastructure delay and not a verdict, and that the same draft should
+  be resubmitted unchanged.
+- Cancel a job the poll gives up on, if the cloud API allows it.
+
+U51 to U55 come from a prioritized benchmark run on a Solana lending program's liquidity layer
+(dev cloud, 2026-11-05): 53 rules, 20 Prover jobs, 6 of them halted. Each is general.
+
+**U51. A finding's severity does not distinguish code-reachable from deployed.** U36 asks whether
+the program can reach a counterexample's pre-state. It does not ask whether the deployment does.
+On the benchmark, a claimed finding needed a mode the program allows any configured protocol to
+use, but the protocol's published verification work says only one program uses it, and in a way
+that never produces the state. The author called it high, and it had no way to know otherwise:
+nothing it reads describes the deployed configuration. The report should give a finding's
+reachability as one of: from any state the handlers allow, only under configuration an
+administrator would have to choose, or not shown. The severity should follow from that, not from
+the impact alone. The design document is where a user could state the deployment's configuration
+(which protocols use which modes, which admin settings are live). The Solana form takes no threat
+model yet (U49), and that document is the natural home for it.
+
+**U52. A rule that pins a scale factor at its initial value hides unit bugs.** Every accrual rule
+on the benchmark assumed both exchange prices were at their initial value of 1.0 ("prices at their
+initial value", bounded for tractability). At 1.0, a raw amount and its face value are equal. So the
+run could not see a defect that mixes the two, and one was in the benchmarked code: the supply ratio
+compared raw with-interest supply against face-value interest-free supply, published as M-04 in
+Certora's second Jupiter Lend report (*Formal Verification, Jupiter Lend, January–March 2026*,
+`lend-certora-fv-2.pdf` in `jup-ag/docs/static/files/audits`) and fixed upstream after that
+release. The author's operate rules pinned prices at 1.25 and 1.5, but ran in the same second, so
+they never reached the accrual. Guidance for the author and the judge: a domain pin that makes two
+quantities coincide (a price at its precision, a ratio at 1, two decimals equal) is a restriction
+to lift, not a domain. At least one rule over the code that converts between them should run with
+the factor away from its identity value. The judge's domain check (item 2) could name the pattern.
+
+**U53. Repeated halts on the same rules do not change the author's approach.** The benchmark's
+author sent the same timing-out rules back five times in a row; every one of those jobs halted at
+the 25-minute limit. U32 returned each halted job's finished verdicts, and the Prover's note said
+to simplify or split the rules that timed out. The author kept editing them in place for about
+2.5 hours, without skipping, splitting or isolating them, and never tried `give_up`. It recovered
+only when it deleted them (U54). klend run 4 showed the same pattern. After a second consecutive
+halt in which the same rules have no verdict, `verify_rules` should refuse to resubmit them alongside
+the rest. The author would then have to isolate them in their own job (U34 would make that a selection),
+narrow them, or account for them. The refusal message is a prompt, so it should name the rules and
+the three options.
+
+**U54. A rule dropped after it reached the Prover leaves no trace in the report.** Skips are
+recorded per property. A rule is only checked for belonging to some property. On the benchmark,
+the author ended the halts of U53 by deleting the three rules for an `operate` that both
+withdraws and borrows, including the path that merges the two payouts into one transfer. Their
+properties still mapped to other rules, so `result` accepted the unit, the report lists nothing as
+skipped, and the component reads as complete with one code path unverified. The run knows every
+rule that ever received a verdict (the stamps' history). A rule in that set that is missing from the
+final spec, above all one whose last verdict was TIMEOUT, should either be accounted for by the
+author before `result` (why it was dropped, and what still covers its path) or appear in the report
+as dropped with its last verdict. The judge should see the list.
+
+**U55. A preflight refusal does not reach the cloud UI.** The benchmark's first run stopped in
+preflight about 40 seconds in, on a scaffold `Blocked` entry (the anchor-lang double resolution, fixed in
+31c81906). The UI showed the run as failed with no reason. The only record was a `PreflightFailed`
+traceback in the executor's CloudWatch log, which a user cannot read. `PreflightFailed` already
+carries a reason meant for the project's owner, with each blocked item's problem and resolution.
+The Solana executor (AIAutoProver `s3_autoprove_solana`) should write it where the workflow's
+status is shown, the same way a run's report is. This is the preflight counterpart of the deferred
+fix for a Prover job's FAILED reason.
 
 ## Leads from the certora-cvlr-kb ledger
 

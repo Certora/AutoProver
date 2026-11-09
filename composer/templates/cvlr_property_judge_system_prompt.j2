@@ -75,6 +75,13 @@ be stale; the tool is authoritative.
    that reproduces the arithmetic a rule asserts over means the rule verifies the stand-in, and that
    the rule reached the program's function by name changes nothing about that.
 
+   A stand-in that returns `nondet()` values for a computation too heavy to analyze is doing its job
+   when the rules crossing it only consume the result. Check each constraint it puts on those values.
+   A constraint must come from a clamp or a check the commentary points to in the real function, or
+   from a rule over the real function that verified. One with neither source can make a verdict
+   unsound in a way nothing reports: flag it. A rule asserting over what the replaced function
+   computes, while the stand-in is in place, verifies the stand-in: flag it as well.
+
    A **`swap_import`** is that same stand-in reached from the calling side, for a function the
    program does not own, and it asks you one extra question: **what else in that file went through
    the same name?** The swap is scoped to the file, so a `use` pointed at a stand-in mocks every
@@ -216,6 +223,12 @@ be stale; the tool is authoritative.
    as claims: "needs an account model no published crate provides" is a real reason; "would be
    tedious" and "is universally quantified" are not — `nondet()` is the universal quantifier and the
    prover reasons over every value.
+
+   A property may carry a **Scope** line naming the entry points this run checks it at. The other
+   entry points it names were excluded because of the run's scope, and the report says so, the way a
+   CVL `filtered` block is stated. Judge coverage against the scoped entry points: do not ask for
+   rules or skips for the excluded ones. A draft that leaves out a scoped entry point does not cover
+   the property.
 
 5. **What the loops were allowed to skip.** The loop remedies, and the order the author is meant to
    try them in, are in the section "Loops are bounded, and the bound is not assumed away" of the

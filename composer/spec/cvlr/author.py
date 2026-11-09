@@ -58,7 +58,7 @@ from composer.authoring.state import (
     SkippedProperty,
     ValidationStamper,
 )
-from composer.authoring.tools import give_up_tool, skip_tools
+from composer.authoring.tools import FocusPolicy, gated_give_up_tool, give_up_tool, skip_tools
 from composer.diagnostics.budget import (
     BudgetExceeded,
     budget_monitor,
@@ -92,7 +92,7 @@ from composer.spec.cvlr.state import (
 from composer.spec.cvlr.vacuity import vacuity_analyzer
 from composer.spec.cvlr.author_tools import ExpectRuleFailure, ExpectRulePassage
 from composer.spec.guidance import CvlrInvariantGuidance
-from composer.spec.cvlr.verify import HarnessTarget, VerifyDeps, gate_tools
+from composer.spec.cvlr.verify import VERIFY_TOOL, HarnessTarget, VerifyDeps, gate_tools
 from composer.kb.kb_context import with_cvlr_context
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.graph_builder import run_to_completion
@@ -177,6 +177,16 @@ _SKIP_REASON = (
 _GIVE_UP_DESCRIPTION = """
     Last-resort exit when you have exhausted other mechanisms to complete the task. The batch will
     be reported as failed with your ``reason``. Prefer skipping individual properties.
+    """
+
+_FOCUS_GIVE_UP_DESCRIPTION = """
+    Call this tool to stop work on this task.
+
+    This run exists to establish the properties you were given, so stopping is gated: an
+    `exhausted` stop is rejected until you have run `verify_rules` several times, and you must
+    enumerate what you tried. If the toolchain itself is unusable — the crate will not build for
+    reasons unrelated to your module, the prover is unreachable — stop immediately with
+    sort='environment'; that is not gated.
     """
 
 
@@ -586,6 +596,10 @@ class CvlrPropertyGenParams(TypedDict):
     module: str
     cvlr_versions: str
     sort: Literal["existing"]
+    #: Whether this batch is a prioritized run's focus rather than a unit's full property list. A
+    #: focused batch has no other work to fall back on, so the prompt directs the author to
+    #: decompose rather than to skip.
+    focused: bool
 
 
 _PropertyGenTemplate = TypedTemplate[CvlrPropertyGenParams]("cvlr_property_generation_prompt.j2")
@@ -681,6 +695,7 @@ async def batch_cvlr_generation(
     target: HarnessTarget,
     verify: VerifyDeps,
     editing: ProgramEditing,
+    focus: FocusPolicy | None = None,
 ) -> BatchHarnessResult:
     """Author one harness module covering ``props``.
 
@@ -695,6 +710,9 @@ async def batch_cvlr_generation(
     ``editing`` is the run's program-editing kit, whose source tools every agent of this unit reads
     the program through, so that each reads this unit's edits and no sibling's.
 
+    ``focus`` is a prioritized run's: the properties ``record_skip`` refuses until the budget orders
+    a wrap-up, and the ``verify_rules`` floor under an ``exhausted`` give-up.
+
     CVLR itself is not mounted here. The author and the judge both reach it through
     ``cvlr_research`` in ``env.rag_tools`` (``docs/cvlr-api-docs-plan.md`` §5), which is the one
     place the ordering between the generated API reference and the hand-written manual is applied.
@@ -707,6 +725,7 @@ async def batch_cvlr_generation(
             "module": module,
             "cvlr_versions": cvlr_versions,
             "sort": "existing",
+            "focused": focus is not None,
         }
     )
 
@@ -755,7 +774,10 @@ async def batch_cvlr_generation(
                 PutHarness.as_tool("put_harness"),
                 get_harness_tool(CvlrGenerationState),
                 *skip_tools(
-                    titles, skip_description=_SKIP_DESCRIPTION, skip_reason=_SKIP_REASON
+                    titles,
+                    skip_description=_SKIP_DESCRIPTION,
+                    skip_reason=_SKIP_REASON,
+                    protected=focus.protected if focus is not None else (),
                 ),
                 ExpectRuleFailure.as_tool("expect_rule_failure"),
                 ExpectRulePassage.as_tool("expect_rule_passage"),
@@ -776,6 +798,16 @@ async def batch_cvlr_generation(
                     name="give_up",
                     description=_GIVE_UP_DESCRIPTION,
                     label="CVLR harness generation",
+                    reason_description="Why you are giving up on this batch",
+                )
+                if focus is None
+                else gated_give_up_tool(
+                    name="give_up",
+                    description=_FOCUS_GIVE_UP_DESCRIPTION,
+                    label="CVLR harness generation",
+                    min_attempts=focus.min_give_up_attempts,
+                    verify_tool=VERIFY_TOOL,
+                    state_ty=CvlrGenerationState,
                     reason_description="Why you are giving up on this batch",
                 ),
                 ctx.get_memory_tool(),
