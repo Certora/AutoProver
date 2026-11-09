@@ -205,7 +205,8 @@ markers = [
     "expensive: hits the real prover / network — deselect with -m 'not expensive'",
     "measurement: produces a one-off number rather than guarding an invariant; also `expensive`, and excluded from sweeping selections so it is paid for only when someone asks for it by name",
     "fuzz: fuzz tests",
-    "wire: Rust/Python wire-protocol round trips — build a cargo binary at test time"
+    "wire: Rust/Python wire-protocol round trips — build a cargo binary at test time",
+    "skill_interface: the commands, flags and files the certora-autoprover-solana skill names (composer/spec/cvlr/skill_interface.py)"
 ]
 # optional but recommended once you're registering marks:
 addopts = "--strict-markers"   # a typo'd mark becomes an error, not a silent no-match
@@ -220,6 +221,8 @@ console-foundry = "composer.cli.console_foundry:main"
 tui-foundry = "composer.cli.tui_foundry:main"
 console-solana = "composer.cli.console_solana:main"
 tui-solana = "composer.cli.tui_solana:main"
+# The Solana skill's commands (composer/spec/cvlr/skill_interface.py)
+certora-cvlr = "composer.cli.certora_cvlr:main"
 # console-crucible / tui-crucible land in PR3, together with the `composer.crucible_launch`
 # module they name — an entry point pointing at a module that doesn't exist installs happily
 # and only fails, as an ImportError, when someone runs it.

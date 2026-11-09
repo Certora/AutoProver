@@ -105,6 +105,7 @@ from graphcore.graph import Builder
 from composer.spec.solana.model import SolanaComponentInstance
 from composer.spec.system_model import component_context
 from composer.spec.types import Curtailed, PropertyFormulation, PropertyTitle, RuleName
+from composer.templates.loader import load_jinja_template
 from composer.pipeline.ptypes import GaveUp
 from composer.ui.tool_display import ToolDisplay, suppress_ack, tool_display
 
@@ -355,6 +356,14 @@ _JudgeSystemTemplate = TypedTemplate[CvlrVersionParams]("cvlr_property_judge_sys
 _PropertyGenSysTemplate = TypedTemplate[CvlrAuthorSystemParams](
     "cvlr_property_generation_system_prompt.j2"
 )
+
+
+def render_author_system(params: CvlrAuthorSystemParams) -> str:
+    return _PropertyGenSysTemplate.bind(params).render_to(load_jinja_template)
+
+
+def render_judge_system(params: CvlrVersionParams) -> str:
+    return _JudgeSystemTemplate.bind(params).render_to(load_jinja_template)
 
 
 def _rules_sentence(listed: tuple[str, ...] | None) -> str:

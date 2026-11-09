@@ -22,7 +22,10 @@ both pinned to one commit.
 - `eric/solana-skill`, on top of it, is empty. The Solana skill is built there, and the layout
   change is proposed upstream only once the skill works.
 
-Nothing has been written in this repository yet.
+In this repository, A1, A4 and I are built: `certora-cvlr setup` (`composer/cli/certora_cvlr.py`,
+`composer/spec/cvlr/skill.py`), the interface module `composer/spec/cvlr/skill_interface.py`, and
+the `skill_interface` tests in `tests/test_cvlr_skill.py`. A2 and A3 are next. Nothing is tagged
+yet.
 
 ## Settled
 
@@ -106,9 +109,16 @@ so merging duplicates into a protocol component, checked with `cvlr_rules!` over
 needs no model call of its own. The recipe has not yet been exercised by a pipeline run, so the
 skill's first evals are also its first test.
 
-## Open
+**One command, `certora-cvlr`, with a subcommand per step.** One console script is one name for
+the skill to pin and the interface test to check; `setup` is A1, and A2 and A3 become
+subcommands beside it. A4 is not a subcommand: `setup` writes the reference text into the project
+(`.certora_internal/cvlr/reference/`) and prints the path, rendered for the CVLR versions the
+project resolves.
 
-**Command names and boundaries.** Below they are named by what they do.
+**Builds are unconfined unless asked.** The pipeline confines a build by default because it compiles
+a project nobody at the keyboard chose to build. Here the user's agent already builds the project
+with the user's permissions, and the launcher is a Linux binary `uv tool install` does not provide.
+`COMPOSER_SANDBOX_PROVIDER` still opts in.
 
 ## Work in this repository
 
@@ -128,11 +138,15 @@ the job stays with the skill, as in the CVL skill's foreground loop.
 **A3 — Explain a result.** Over `vacuity.py` (why a rule passed vacuously, from its unsat core)
 and `externals.py` (functions the Prover treated as external). The output is text the agent reads.
 
-**A4 — The reference text, shipped.** CVLR writing guidance, pitfalls, the worked example and the
-docs map, as package data under one directory, drawn from what the pipeline's prompts already say
-(`guidance.py`, `example.py`, the templates). A command prints that directory's path, so the skill
-names a command rather than the package layout. The CVL skill finds `hardhat_config_extractor.js`
-by its path inside the package, which is the coupling to avoid.
+**A4 — The reference text, shipped.** Rendered by `setup` from the sources the pipeline's agents
+read, so there is no second copy to drift: the baseline facts (`cvlr_baseline_facts.md`), the
+property guidance (`guidance.py`), the author's and judge's system prompts (rendered without a
+worked example), the invariant guidance, and the recipes, one file per retrieval ID. A README maps
+each pipeline tool those texts name to what the skill's agent does instead. The skill names the
+directory `setup` prints rather than a path inside the package; the CVL skill finds
+`hardhat_config_extractor.js` by its path inside the package, which is the coupling to avoid. The
+skill sends the agent to sections of `author.md` by heading, so those headings are part of the
+interface.
 
 **I — The skill's interface, declared and tested.** Nothing in this repository knows the CVL skill
 exists: renaming one of `certora-autosetup`'s flags would pass CI and break the skill at its next

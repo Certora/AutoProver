@@ -1,0 +1,32 @@
+# CVLR reference for {{ package }}
+
+Written by `certora-cvlr setup` for {{ cvlr_versions }}. Every file here is rewritten on the next
+setup, so do not edit them; they are the version that matches the installed commands.
+
+| file | what it is |
+|---|---|
+| `cvlr.md` | CVLR and the Certora Solana Prover: what a rule is, `clog!`, assumptions, nondeterminism, loops, arithmetic. Read it before writing a rule. |
+| `properties.md` | What makes a property checkable by a rule, and which classes of property are worth looking for. Read it before writing properties. |
+| `author.md` | The instructions AutoProver gives its own rule author. Read it by section, as a question comes up. |
+| `judge.md` | The instructions AutoProver gives the reviewer of a rule module. |
+| `invariants.md` | Choosing which relationship among account fields to state and prove as an invariant. |
+| `recipes/index.md` | Situations and their fixes, by trigger. The recipe with retrieval ID `K1` is `recipes/K1.md`. |
+
+## Reading text written for AutoProver's agents
+
+`author.md`, `judge.md` and the recipes were written for agents that act through tools. Where they
+name a tool, this is what it means for you:
+
+| tool | for you |
+|---|---|
+| `put_harness`, `get_harness` | Edit the component's module, `src/certora/specs/<module>.rs`, directly. "The buffer" is that file. |
+| `list_files`, `get_file`, `grep_files`, `code_explorer` | Read the program with your own tools. |
+| `cvlr_research` | Read `cvlr.md` and the recipes, then the CVLR crates' own source in the cargo registry, at the versions above. |
+| `get_cvlr_recipe(id)` | Read `recipes/<id>.md`. |
+| `invariant_guidance` | Read `invariants.md`. |
+| `record_skip`, `unskip_property` | Record the property as skipped, with the reason, where the skill keeps its skips. |
+| `feedback_tool` | Have the judge review the module. |
+| `result`, `give_up` | Finish the component, as the skill says. |
+| `cargo_check`, `verify_rules`, `adjust_prover_config`, `summarize_for_prover` | Building and submitting. This version of `certora-cvlr` has no command for them yet. |
+| `expect_rule_failure`, `expect_rule_passage` | Record the rule as expected to fail, with the reason and the pre-state, where the skill keeps them. |
+| `code_editor`, `commit_edit`, `edit_history_log`, `revert_to_edit` | Changing the program's own source. Do it yourself, behind the `certora` feature, and record every edit for the report. |
