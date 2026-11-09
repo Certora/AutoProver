@@ -183,6 +183,16 @@ def compose_env(
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"
 
 
+def extend_composite(package_composite: str, unit_layer: str) -> str:
+    """A unit's composite, from the package composite the scaffold wrote and the unit's layer.
+
+    The same text as :func:`compose_env` with ``unit_layer``, for a caller that has the package
+    composite on disk but not the dialect it was spelled in."""
+    if not unit_layer:
+        return package_composite
+    return package_composite.rstrip("\n") + "\n" + unit_layer.rstrip("\n") + "\n"
+
+
 #: A summary body. A ``#[type(...)]`` annotation is optional. Omitting it means
 #: the return is unconstrained, which is the usual case for a formatting path
 #: nothing asserts over.

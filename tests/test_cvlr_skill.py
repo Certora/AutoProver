@@ -11,17 +11,25 @@ from pathlib import Path
 
 import pytest
 
+from composer.cli import certora_cvlr
 from composer.cli.certora_cvlr import build_parser, main
+from composer.prover.core import ProverReport
 from composer.spec.cvlr import skill_interface as interface
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.harness import SHARED_INVARIANTS, HarnessModule, declare_modules
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.skill import (
+    INVARIANT_RULES,
     REFERENCE_DIR,
+    SUMMARY_LAYERS_DIR,
     ComponentNameRejected,
+    Running,
     component_modules,
     reference_documents,
+    selected_rules,
 )
+from composer.prover.conf import ExcludeRules, InheritRules, SelectRules
+from composer.spec.cvlr.tuning import SUMMARIES, compose_env, extend_composite
 
 _REPO = Path(__file__).resolve().parent.parent
 
@@ -65,6 +73,50 @@ def test_the_harness_layout_is_where_the_skill_says():
     assert str(SPECS_DIR / f"{SHARED_INVARIANTS}.rs") == interface.SHARED_INVARIANTS_FILE
     assert interface.UNIT_FEATURE.format(module="deposits") == HarnessModule("deposits").feature
     assert interface.HARNESS_FEATURE == DEFAULT_FEATURE
+    assert interface.INVARIANT_RULES == INVARIANT_RULES
+    assert interface.SUMMARY_LAYER.format(module="deposits") == str(
+        SUMMARY_LAYERS_DIR / "deposits.txt"
+    )
+
+
+@pytest.mark.skill_interface
+@pytest.mark.parametrize(
+    ("outcome", "state"),
+    [
+        (Running("RUNNING"), "RUNNING"),
+        (ProverReport(raw_rule_status={}, result_str="", link="L", certora_run_stdout=""), "FINISHED"),
+        ("the job failed", "FAILED"),
+    ],
+)
+def test_wait_prints_one_of_the_states_the_skill_loops_on(monkeypatch, capsys, outcome, state):
+    async def fake_wait(link, *, seconds, prover_opts):
+        return outcome
+
+    monkeypatch.setattr(certora_cvlr, "wait", fake_wait)
+    main(["wait", "https://prover.certora.com/output/1/2?anonymousKey=k", "--for", "1"])
+    first = capsys.readouterr().out.split()[0]
+    assert first == state and state in interface.WAIT_STATES
+
+
+@pytest.mark.parametrize(
+    ("selection", "chosen"),
+    [
+        (InheritRules(), ("rule_a", "rule_b_deposit", "rule_b_withdraw")),
+        (SelectRules(("rule_b_*",)), ("rule_b_deposit", "rule_b_withdraw")),
+        (ExcludeRules(("rule_b_*",)), ("rule_a",)),
+        (SelectRules(("rule_c",)), ()),
+    ],
+)
+def test_a_job_names_the_listed_rules_the_selection_matches(selection, chosen):
+    listed = {"rule_a", "rule_b_deposit", "rule_b_withdraw"}
+    assert selected_rules(selection, listed) == chosen
+
+
+def test_a_units_summaries_compose_from_the_package_file_as_from_the_layers():
+    layer = "; formatting only\n^<vault::VaultError as core::fmt::Display>::fmt$\n"
+    package = compose_env(SUMMARIES)
+    assert extend_composite(package, layer) == compose_env(SUMMARIES, unit_layer=layer)
+    assert extend_composite(package, "") == package
 
 
 def test_every_recipe_the_index_names_is_a_file_under_its_id():
@@ -100,7 +152,8 @@ def test_a_unit_may_not_take_a_shared_module_s_name(tmp_path: Path):
     [
         (["Deposits"], "use 'deposits'"),
         (["admin-config"], "use 'admin_config'"),
-        (["invariants"], "shared invariants module"),
+        (["invariants"], "declared by setup itself"),
+        (["invariant_rules"], "declared by setup itself"),
         (["deposits", "deposits"], "more than once"),
     ],
 )
@@ -157,9 +210,79 @@ def test_setup_scaffolds_declares_and_compiles_and_a_second_setup_keeps_the_rule
     assert (specs / "deposits.rs").read_text() == authored
     assert invariants.read_text().endswith("// an invariant\n")
     assert (specs / "withdrawals.rs").is_file()
+    assert (specs / f"{INVARIANT_RULES}.rs").is_file()
     mod_rs = (specs / "mod.rs").read_text()
     assert "pub mod invariants;" in mod_rs and "pub mod withdrawals;" in mod_rs
     manifest = (tmp_path / "Cargo.toml").read_text()
     assert "certora_unit_deposits = []" in manifest and "certora_unit_withdrawals = []" in manifest
     reference = tmp_path / interface.REFERENCE_DIR
     assert all((reference / f).is_file() for f in interface.REFERENCE_FILES)
+
+
+_SHARED = """\
+//! Structural invariants.
+
+pub fn amount_is_small(amount: u64) -> bool {
+    amount < 1000
+}
+"""
+
+_RULES = """\
+use cvlr::prelude::*;
+
+use crate::certora::specs::invariants::amount_is_small;
+
+#[rule]
+pub fn rule_deposit_returns_its_amount() {
+    let amount: u64 = nondet();
+    cvlr_assume!(amount_is_small(amount));
+    let returned = crate::deposit(amount);
+    clog!(amount, returned);
+    cvlr_assert_eq!(returned, amount);
+}
+
+#[rule]
+pub fn rule_deposit_returns_more() {
+    let amount: u64 = nondet();
+    let returned = crate::deposit(amount);
+    clog!(amount, returned);
+    cvlr_assert!(returned > amount);
+}
+"""
+
+
+@pytest.mark.expensive
+@pytest.mark.skill_interface
+def test_a_component_that_assumes_a_shared_invariant_is_checked_proved_and_waited_for(
+    tmp_path: Path, capsys
+):
+    """The whole loop a generator runs, against the cloud: one rule that holds, one that does not,
+    and a predicate from the shared module both components' builds compile."""
+    if shutil.which("cargo") is None:
+        pytest.skip("cargo is not on PATH")
+    (tmp_path / "Cargo.toml").write_text(_MANIFEST)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "lib.rs").write_text("pub fn deposit(amount: u64) -> u64 { amount }\n")
+    assert main(["setup", str(tmp_path), "--component", "deposits", "--no-check"]) == 0
+    specs = tmp_path / SPECS_DIR
+    (specs / "invariants.rs").write_text(_SHARED)
+    (specs / "deposits.rs").write_text(_RULES)
+    capsys.readouterr()
+
+    assert main(["check", str(tmp_path), "--component", "deposits"]) == 0, capsys.readouterr()
+    capsys.readouterr()
+    assert main(["prove", str(tmp_path), "--component", "deposits"]) == 0, capsys.readouterr()
+    (link,) = [
+        line.removeprefix("submitted: ")
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith("submitted: ")
+    ]
+
+    for _ in range(60):
+        main(["wait", link, "--for", "60"])
+        out = capsys.readouterr().out
+        if not out.startswith("RUNNING"):
+            break
+    assert out.startswith("FINISHED"), out
+    assert "  VERIFIED rule_deposit_returns_its_amount" in out
+    assert "  VIOLATED rule_deposit_returns_more" in out

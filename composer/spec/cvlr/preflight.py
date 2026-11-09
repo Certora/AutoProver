@@ -22,7 +22,7 @@ from pathlib import Path
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
 from composer.cargo.sbf import PlatformToolsMissing, sbf_check
-from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
+from composer.cargo.session import CargoSession, CompileFailed, Compiled, CompileVerdict, WarmFailed
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import sandbox_cargo_home
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
@@ -274,30 +274,10 @@ async def gate_workspace(
     What this has to catch is a scaffold that does not compile. The build is a later gate, and
     running it here would cost more than the failure it would be catching.
     """
-    try:
-        check_with = sbf_check(PLATFORM_TOOLS_VERSION)
-    except PlatformToolsMissing as exc:
-        raise PreflightFailed(str(exc)) from exc
-    session = CargoSession(
-        workdir=pre.workspace_root,
-        sandbox=sandbox,
-        toolchain=HOST_RUST_TOOLCHAIN,
-        check_with=check_with,
+    verdict = await check_package(
+        pre.workspace_root, pre.package_dir, sandbox=sandbox, features=features
     )
-    warmed = await session.warm()
-    if isinstance(warmed, WarmFailed):
-        raise PreflightFailed(
-            f"could not fetch the dependency graph for {pre.workspace_root} "
-            f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
-        )
-    run = await session.check(manifest_dir=pre.package_dir, features=features)
-    _log.info(
-        "preflight gate: %s in %dms%s",
-        "ok" if run.ok else "FAILED",
-        run.duration_ms,
-        "" if run.confined else " (UNCONFINED)",
-    )
-    match run.verdict:
+    match verdict:
         case Compiled():
             return
         case CompileFailed(diagnostics=diagnostics):
@@ -305,3 +285,48 @@ async def gate_workspace(
                 f"the scaffolded {pre.package} does not compile with --features "
                 f"{','.join(features)}:\n{diagnostics}"
             )
+
+
+async def check_package(
+    workspace_root: Path,
+    package_dir: Path,
+    *,
+    sandbox: SandboxConfig,
+    features: tuple[CargoFeature, ...],
+) -> CompileVerdict:
+    """``cargo check`` the package at ``package_dir`` for the SBF target with ``features``.
+
+    Raises :class:`PreflightFailed` as :func:`sbf_session` does."""
+    session = await sbf_session(workspace_root, sandbox=sandbox)
+    run = await session.check(manifest_dir=package_dir, features=features)
+    _log.info(
+        "preflight gate: %s in %dms%s",
+        "ok" if run.ok else "FAILED",
+        run.duration_ms,
+        "" if run.confined else " (UNCONFINED)",
+    )
+    return run.verdict
+
+
+async def sbf_session(workspace_root: Path, *, sandbox: SandboxConfig) -> CargoSession:
+    """A session that checks and builds for the SBF target, its dependency graph fetched.
+
+    Raises :class:`PreflightFailed` when the platform tools are missing or the graph cannot be
+    fetched."""
+    try:
+        check_with = sbf_check(PLATFORM_TOOLS_VERSION)
+    except PlatformToolsMissing as exc:
+        raise PreflightFailed(str(exc)) from exc
+    session = CargoSession(
+        workdir=workspace_root,
+        sandbox=sandbox,
+        toolchain=HOST_RUST_TOOLCHAIN,
+        check_with=check_with,
+    )
+    warmed = await session.warm()
+    if isinstance(warmed, WarmFailed):
+        raise PreflightFailed(
+            f"could not fetch the dependency graph for {workspace_root} "
+            f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
+        )
+    return session

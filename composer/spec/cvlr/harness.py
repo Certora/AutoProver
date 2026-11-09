@@ -164,8 +164,9 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         return (declare_modules(self._artifact_dir(), modules),)
 
 
-#: The module a skill run proves its structural invariants in, compiled whenever the ``certora``
-#: feature is on, so every unit's rules can assume what it proves.
+#: The module a skill run states its structural invariants in, compiled whenever the ``certora``
+#: feature is on, so every unit's rules can assume them. The rules that prove them are a unit of
+#: their own (:data:`composer.spec.cvlr.skill.INVARIANT_RULES`).
 SHARED_INVARIANTS = "invariants"
 
 

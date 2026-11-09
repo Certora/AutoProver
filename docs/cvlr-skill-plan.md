@@ -22,10 +22,10 @@ both pinned to one commit.
 - `eric/solana-skill`, on top of it, is empty. The Solana skill is built there, and the layout
   change is proposed upstream only once the skill works.
 
-In this repository, A1, A4 and I are built: `certora-cvlr setup` (`composer/cli/certora_cvlr.py`,
-`composer/spec/cvlr/skill.py`), the interface module `composer/spec/cvlr/skill_interface.py`, and
-the `skill_interface` tests in `tests/test_cvlr_skill.py`. A2 and A3 are next. Nothing is tagged
-yet.
+In this repository, A1, A2, A4 and I are built: `certora-cvlr setup`, `check`, `prove` and `wait`
+(`composer/cli/certora_cvlr.py`, `composer/spec/cvlr/skill.py`), the interface module
+`composer/spec/cvlr/skill_interface.py`, and the `skill_interface` tests in
+`tests/test_cvlr_skill.py`. A3 is next. Nothing is tagged yet.
 
 ## Settled
 
@@ -74,8 +74,9 @@ recipe, the "State invariants" section of `cvlr_property_generation_system_promp
   account of a type has no rule, because no handler sees them all, so Phase 4 restates it as what
   each operation does to the accounts it touches. A fixed-size array is stated per element, at a
   nondet index assumed in bounds.
-- **Where it lives.** `src/certora/specs/invariants.rs`, compiled whenever the `certora` feature is
-  on. Each component's module stays behind a feature of its own, as in the pipeline, so parallel
+- **Where it lives.** The predicates in `src/certora/specs/invariants.rs`, compiled whenever the
+  `certora` feature is on; the rules that prove them in `invariant_rules.rs`, a component of their
+  own that setup always declares, so that a component's job does not check them again. Each component's module stays behind a feature of its own, as in the pipeline, so parallel
   generators cannot break each other's builds; every one of them can still `use` the shared module.
   The shared module is compiled with every component, so a trait impl it makes (`impl Nondet for
   Pool`) is one no component may repeat (`E0119`). The pipeline's units never meet, which is why
@@ -130,10 +131,21 @@ the `Blocked` reason when it refuses. It submits nothing. It also declares the h
 so the skill never edits either by hand. Today `declare_modules` gates every module on a unit
 feature; the ungated `invariants` module is new, and U56 needs it too.
 
-**A2 — Build and submit.** Over `prover.prepare_submission` / `run_submission`: build with
-`cargo certora-sbf`, write the build script and conf outside the working tree, submit, and print
-the job link. Rule filters and the author-tunable conf settings (`conf.py`) are flags. Waiting for
-the job stays with the skill, as in the CVL skill's foreground loop.
+**A2 — Build and submit.** Three subcommands:
+
+- `check --component M` type-checks one component for the SBF target in seconds, the pipeline
+  author's `cargo_check`.
+- `prove --component M` builds with `cargo certora-sbf`, writes the build script and conf outside
+  the working tree, submits, and prints the job link without waiting. Rule filters and the
+  author-tunable settings (`--loop-iter`, `--optimistic-loop WHY`) are flags. A component's
+  points-to summaries are a file the agent edits, `src/certora/summaries/<module>.txt`, composed
+  into the component's conf on every prove. From the build until the job is accepted nothing else
+  may build the crate, so concurrent proves of one workspace queue on a file lock; a generator may
+  edit its own module meanwhile, because another component's module is behind a disabled `cfg`.
+- `wait <link> --for SECONDS` polls the job for at most that long and prints `RUNNING <status>`, or
+  `FINISHED` with one line per rule and the Prover's report, or `FAILED` with the reason. The
+  skill's bounded foreground loop is this one command repeated; there is no detached process to
+  manage. `run_prover` is split into `submit_prover_job` and `collect_prover_results` for it.
 
 **A3 — Explain a result.** Over `vacuity.py` (why a rule passed vacuously, from its unsat core)
 and `externals.py` (functions the Prover treated as external). The output is text the agent reads.

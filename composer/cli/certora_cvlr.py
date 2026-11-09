@@ -10,12 +10,29 @@ import logging
 import sys
 from pathlib import Path
 
-from composer.cargo.sbf import PLATFORM_TOOLS_ROOT
-from composer.sandbox.config import SandboxConfig
-from composer.spec.cvlr.conf import DEFAULT_FEATURE
+from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, SbfVerdict
+from composer.cargo.session import Compiled, CompileFailed
+from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
+from composer.prover.core import ProverOptions, ProverReport, make_prover_options
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, OptimisticLoop, TunableConf
 from composer.spec.cvlr.preflight import PreflightFailed
+from composer.sandbox.config import SandboxConfig
+from composer.spec.cvlr.prover import BuildRejected, SubmissionFailed
 from composer.spec.cvlr.scaffold import ScaffoldStale
-from composer.spec.cvlr.skill import ComponentNameRejected, SetupResult, setup
+from composer.spec.cvlr.skill import (
+    INVARIANT_RULES,
+    ComponentNameRejected,
+    JobStarted,
+    NoRules,
+    NotSetUp,
+    ProveRequest,
+    Running,
+    SetupResult,
+    check,
+    prove,
+    setup,
+    wait,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -46,6 +63,69 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Do not compile the scaffolded package.",
     )
+
+    check_ = commands.add_parser(
+        "check",
+        help="Type-check one component's rules for the SBF target, without building or "
+        "submitting. Seconds; run it after every edit.",
+    )
+    check_.add_argument("project_root", type=Path, help="The project setup was run on.")
+    check_.add_argument("--package", help="As for setup.")
+    check_.add_argument(
+        "--component",
+        required=True,
+        metavar="MODULE",
+        help=f"The rule module to check: a component setup declared, or {INVARIANT_RULES}.",
+    )
+
+    prove_ = commands.add_parser(
+        "prove",
+        help="Build one component's rules and submit them to the Certora Solana Prover. Prints the "
+        "job link once the job is accepted; `wait` reads the verdicts.",
+    )
+    prove_.add_argument("project_root", type=Path, help="The project setup was run on.")
+    prove_.add_argument("--package", help="As for setup.")
+    prove_.add_argument(
+        "--component",
+        required=True,
+        metavar="MODULE",
+        help=f"The rule module to check: a component setup declared, or {INVARIANT_RULES}.",
+    )
+    selection = prove_.add_mutually_exclusive_group()
+    selection.add_argument(
+        "--rule", action="append", default=[], help="Check only this rule (a glob). Repeatable."
+    )
+    selection.add_argument(
+        "--exclude-rule", action="append", default=[], help="Skip this rule (a glob). Repeatable."
+    )
+    prove_.add_argument(
+        "--loop-iter",
+        type=int,
+        default=TunableConf.loop_iter,
+        help="How many iterations of each loop the Prover unrolls (default %(default)s).",
+    )
+    prove_.add_argument(
+        "--optimistic-loop",
+        metavar="WHY",
+        help="Assume every loop finishes within --loop-iter. Unsound: every verdict in the job "
+        "then depends on it. Give the reason.",
+    )
+    prove_.add_argument("--msg", help="The job's message on the Prover dashboard.")
+
+    wait_ = commands.add_parser(
+        "wait",
+        help="Wait a bounded time for a prove job. Prints RUNNING and the job status if it has "
+        "not finished, else every rule's verdict.",
+    )
+    wait_.add_argument("link", help="The job link prove printed.")
+    wait_.add_argument(
+        "--for",
+        dest="seconds",
+        type=float,
+        default=90,
+        metavar="SECONDS",
+        help="How long to wait before printing RUNNING (default %(default)s).",
+    )
     return parser
 
 
@@ -68,13 +148,17 @@ def _report_setup(result: SetupResult) -> str:
     return "\n".join(lines)
 
 
+def _sandbox() -> SandboxConfig:
+    return SandboxConfig.from_env(extra_ro=(PLATFORM_TOOLS_ROOT,))
+
+
 async def _setup(args: argparse.Namespace) -> int:
     try:
         result = await setup(
             args.project_root.resolve(),
             package=args.package,
             components=args.component,
-            sandbox=SandboxConfig.from_env(extra_ro=(PLATFORM_TOOLS_ROOT,)),
+            sandbox=_sandbox(),
             check=args.check,
         )
     except (PreflightFailed, ScaffoldStale, ComponentNameRejected) as exc:
@@ -84,11 +168,116 @@ async def _setup(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _check(args: argparse.Namespace) -> int:
+    try:
+        verdict = await check(
+            args.project_root.resolve(), args.component, package=args.package, sandbox=_sandbox()
+        )
+    except (PreflightFailed, NotSetUp) as exc:
+        print(f"certora-cvlr check: {exc}", file=sys.stderr)
+        return 1
+    match verdict:
+        case Compiled():
+            print("ok")
+            return 0
+        case CompileFailed(diagnostics=diagnostics):
+            print(diagnostics)
+            return 1
+
+
+def _rule_selection(args: argparse.Namespace) -> RuleSelection:
+    if args.rule:
+        return SelectRules(tuple(args.rule))
+    if args.exclude_rule:
+        return ExcludeRules(tuple(args.exclude_rule))
+    return InheritRules()
+
+
+def _prover_options() -> ProverOptions:
+    return make_prover_options(cloud=True, app="solana")
+
+
+async def _prove(args: argparse.Namespace) -> int:
+    request = ProveRequest(
+        component=args.component,
+        rules=_rule_selection(args),
+        settings=TunableConf(
+            loop_iter=args.loop_iter,
+            optimistic_loop=(
+                OptimisticLoop(args.optimistic_loop) if args.optimistic_loop is not None else None
+            ),
+        ),
+        msg=args.msg,
+    )
+    try:
+        outcome = await prove(
+            args.project_root.resolve(),
+            request,
+            package=args.package,
+            sandbox=_sandbox(),
+            prover_opts=_prover_options(),
+            on_waiting=lambda: print(
+                "waiting for another prove of this workspace to be accepted", file=sys.stderr
+            ),
+        )
+    except (PreflightFailed, NotSetUp) as exc:
+        print(f"certora-cvlr prove: {exc}", file=sys.stderr)
+        return 1
+    match outcome:
+        case JobStarted(link=link, rules=rules, summaries=summaries):
+            print(f"rules: {', '.join(rules)}")
+            if summaries is not None:
+                print(f"summaries: {summaries}")
+            print(f"submitted: {link}")
+            return 0
+        case NoRules(reason=reason):
+            print(f"nothing submitted: {reason}")
+            return 1
+        case BuildRejected(build=build):
+            print(f"build failed, nothing submitted:\n{_diagnostics(build.verdict)}")
+            return 1
+        case SubmissionFailed(reason=reason):
+            print(f"submission failed:\n{reason}")
+            return 1
+
+
+def _diagnostics(verdict: SbfVerdict) -> str:
+    match verdict:
+        case CompileFailed(diagnostics=diagnostics):
+            return diagnostics
+        case Built():
+            return "(the build succeeded)"
+
+
+async def _wait(args: argparse.Namespace) -> int:
+    outcome = await wait(args.link, seconds=args.seconds, prover_opts=_prover_options())
+    match outcome:
+        case Running(status=status):
+            print(f"RUNNING {status}")
+            return 0
+        case ProverReport():
+            print(f"FINISHED {outcome.link}")
+            for rule, status in sorted(outcome.rule_outcomes().items()):
+                print(f"  {status} {rule}")
+            print()
+            print(outcome.result_str)
+            return 0
+        case str():
+            print(f"FAILED\n{outcome}")
+            return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     args = build_parser().parse_args(argv)
     match args.command:
         case "setup":
             return asyncio.run(_setup(args))
+        case "check":
+            return asyncio.run(_check(args))
+        case "prove":
+            return asyncio.run(_prove(args))
+        case "wait":
+            return asyncio.run(_wait(args))
         case _:
             raise AssertionError(args.command)
