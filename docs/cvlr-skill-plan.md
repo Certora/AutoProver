@@ -25,7 +25,11 @@ both pinned to one commit.
 In this repository, A1–A4 and I are built: `certora-cvlr toolchain`, `setup`, `check`, `prove`,
 `wait` and `vacuity` (`composer/cli/certora_cvlr.py`, `composer/spec/cvlr/skill.py`), the interface module
 `composer/spec/cvlr/skill_interface.py`, and the `skill_interface` tests in
-`tests/test_cvlr_skill.py`. S1, the first `SKILL.md`, is next. Nothing is tagged yet.
+`tests/test_cvlr_skill.py`. In the skill repository, S1, S2 and S4's definitions are on
+`eric/solana-skill`: `plugins/certora-autoprover-solana/`. The skill runs `certora-cvlr` through
+`uvx`, not `uv tool install`, because the Solidity skill installs the same package as a tool at its
+own pin and two pins would replace each other. Next: push and tag the pinned commit, then run the
+evals. Nothing is tagged yet.
 
 ## Settled
 
