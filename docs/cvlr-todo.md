@@ -888,6 +888,37 @@ The Solana executor (AIAutoProver `s3_autoprove_solana`) should write it where t
 status is shown, the same way a run's report is. This is the preflight counterpart of the deferred
 fix for a Prover job's FAILED reason.
 
+**U56. An invariant one unit proves cannot be assumed by another.** Each unit's harness module is
+declared behind its own cargo feature (`harness.declare_modules`), so units build in isolation and
+one unit's broken draft cannot break a sibling's build. The same isolation keeps every predicate in
+its unit. A component cannot call the protocol unit's invariant, and nothing tells its author which
+invariants have been proved. Hoisting (`composer/spec/hoist.py`) moves a property several
+components state into the shared "Protocol invariants" unit and dispatches that unit first. But the
+hoisted claims reach only the report (`HoistedClaim`), and dispatching first is scheduling, not a
+dependency. So a component that needs solvency to exclude an unproduced pre-state (U36) proves it
+again, or falls back to U37's second and third remedies, a justification rule or a bare
+`cvlr_assume!`, for a fact another unit may already have proved.
+
+The CVL skill has the shape that fixes it: `invariants.spec` is proved before any component,
+changed only at a barrier, and imported by every spec. For CVLR:
+
+- An `invariants` module under `specs/`, gated on `certora` rather than a unit feature, so every
+  unit's build compiles it. Its invariants are proved as U37 describes, with the writers listed
+  across the whole program, not one component, and a gate of every base case and step VERIFIED,
+  none expected-to-fail.
+- The unit that writes it runs to that gate before the others start. That makes the staged
+  formalizer order a dependency, not a queue position. A later unit's request for a new invariant
+  goes through the staging writer, then the gate runs again before any unit uses it.
+- Each later unit's prompt lists the proved predicates and the step rules behind each. The judge
+  rejects a `cvlr_assume!` of a shared predicate that did not prove.
+- The shared module owns the trait impls its invariants need. Units are never compiled together
+  today, so two can each write `impl Nondet for Pool`. With a module every unit compiles, a unit
+  that repeats one of its impls fails with `E0119`.
+
+U37's recipe has not yet been exercised by a run, so this is worth building after the first run
+that proves an invariant, not before. `docs/cvlr-skill-plan.md` designs the same module for the
+Solana skill, where the orchestrator plays the staging writer.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
