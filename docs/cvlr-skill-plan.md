@@ -28,8 +28,9 @@ In this repository, A1–A4 and I are built: `certora-cvlr toolchain`, `setup`, 
 `tests/test_cvlr_skill.py`. In the skill repository, S1, S2 and S4's definitions are on
 `eric/solana-skill`: `plugins/certora-autoprover-solana/`. The skill runs `certora-cvlr` through
 `uvx`, not `uv tool install`, because the Solidity skill installs the same package as a tool at its
-own pin and two pins would replace each other. Next: push and tag the pinned commit, then run the
-evals. Nothing is tagged yet.
+own pin and two pins would replace each other. Version 0.1.0 pins `27fa4bee`, tagged
+`skill/certora-autoprover-solana/0.1.0`; the wrapper installs it from GitHub in about six minutes
+cold. Next: the evals.
 
 ## Settled
 
