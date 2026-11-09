@@ -31,12 +31,15 @@ from composer.spec.cvlr.skill import (
     INVARIANT_RULES,
     ComponentNameRejected,
     JobStarted,
+    Missing,
     NoRules,
     NotSetUp,
+    Present,
     ProveRequest,
     Running,
     SetupResult,
     check,
+    check_toolchain,
     prove,
     setup,
     vacuity,
@@ -48,6 +51,12 @@ from composer.spec.cvlr.verify import externals_note
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="certora-cvlr", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+
+    commands.add_parser(
+        "toolchain",
+        help="Check the Rust and Solana tools the other commands build with, and print the command "
+        "that installs each one that is missing.",
+    )
 
     set_up = commands.add_parser(
         "setup",
@@ -174,6 +183,19 @@ def _report_setup(result: SetupResult) -> str:
 
 def _sandbox() -> SandboxConfig:
     return SandboxConfig.from_env(extra_ro=(PLATFORM_TOOLS_ROOT,))
+
+
+async def _toolchain() -> int:
+    checks = await check_toolchain()
+    for c in checks:
+        match c:
+            case Present(item=item, detail=detail):
+                print(f"ok      {item}: {detail}")
+            case Missing(item=item, install=install, why=why):
+                print(f"MISSING {item}" + (f" ({why})" if why else ""))
+                if install is not None:
+                    print(f"        install: {install}")
+    return 0 if all(isinstance(c, Present) for c in checks) else 1
 
 
 async def _setup(args: argparse.Namespace) -> int:
@@ -326,6 +348,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
     args = build_parser().parse_args(argv)
     match args.command:
+        case "toolchain":
+            return asyncio.run(_toolchain())
         case "setup":
             return asyncio.run(_setup(args))
         case "check":

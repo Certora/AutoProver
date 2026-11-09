@@ -153,6 +153,14 @@ def test_vacuity_prints_the_finding_and_the_core(monkeypatch, capsys):
     assert out.endswith(f"Unsat core data:\n{core}\n")
 
 
+def test_without_rustup_the_toolchain_check_stops_and_installs_nothing(monkeypatch, capsys):
+    monkeypatch.setattr(skill.shutil, "which", lambda name: None)
+    assert main(["toolchain"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("MISSING rustup") and "https://rustup.rs" in out
+    assert "install:" not in out
+
+
 def test_a_units_summaries_compose_from_the_package_file_as_from_the_layers():
     layer = "; formatting only\n^<vault::VaultError as core::fmt::Display>::fmt$\n"
     package = compose_env(SUMMARIES)

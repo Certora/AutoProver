@@ -21,7 +21,15 @@ from pathlib import Path
 
 from composer.cargo.features import CargoFeature
 from composer.cargo.manifest import ManifestEditor
-from composer.cargo.sbf import Built
+from composer.cargo.sbf import (
+    PLATFORM_TOOLS_ROOT,
+    SBF_SUBCOMMAND,
+    SBF_SUBCOMMAND_VERSION,
+    Built,
+    PlatformToolsMissing,
+    sbf_check,
+)
+from composer.cargo.symbols import RUSTFILT_VERSION
 from composer.cargo.session import CompileVerdict
 from composer.kb.kb_context import (
     CVLR_BUNDLE,
@@ -42,6 +50,8 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.author import render_author_system, render_judge_system
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
+    HOST_RUST_TOOLCHAIN,
+    PLATFORM_TOOLS_VERSION,
     CheckVerdicts,
     CollectUnsatCore,
     ConfPurpose,
@@ -490,3 +500,103 @@ async def vacuity(link: str, rule: str) -> CoreRead | None:
     if not cores:
         return None
     return CoreRead(core_finding(cores[0]), cores[0])
+
+
+# ---------------------------------------------------------------------------------------------
+# the toolchain
+
+
+@dataclass(frozen=True)
+class Present:
+    item: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class Missing:
+    item: str
+    #: What installs it. ``None`` when the skill must not install it itself, and ``why`` says so.
+    install: str | None
+    why: str = ""
+
+
+type ToolCheck = Present | Missing
+
+
+async def _run(*argv: str) -> str | None:
+    """The command's stdout, or ``None`` when it is absent or fails."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+        )
+    except OSError:
+        return None
+    stdout, _ = await proc.communicate()
+    return stdout.decode().strip() if proc.returncode == 0 else None
+
+
+async def check_toolchain() -> list[ToolCheck]:
+    """What ``setup``, ``check`` and ``prove`` build with, at the versions this AutoProver uses.
+
+    The install commands are the ones the Solana images run (:mod:`composer.scripts.solana_toolchain`),
+    and a missing ``rustup`` or C compiler is the user's to install."""
+    checks: list[ToolCheck] = []
+    if shutil.which("rustup") is None:
+        checks.append(
+            Missing("rustup", None, "Install it from https://rustup.rs; everything below needs it.")
+        )
+        return checks
+    toolchains = await _run("rustup", "toolchain", "list") or ""
+    checks.append(
+        Present("host Rust toolchain", HOST_RUST_TOOLCHAIN)
+        if any(line.startswith(f"{HOST_RUST_TOOLCHAIN}-") for line in toolchains.splitlines())
+        else Missing(
+            "host Rust toolchain",
+            f"rustup toolchain install {HOST_RUST_TOOLCHAIN} --profile minimal",
+        )
+    )
+    checks.append(
+        Present("C compiler", cc)
+        if (cc := shutil.which("cc")) is not None
+        else Missing(
+            "C compiler",
+            None,
+            "Build scripts and proc-macros link with `cc`. Install the platform's build tools "
+            "(build-essential, or the Xcode command line tools).",
+        )
+    )
+    sbf = await _run("cargo", SBF_SUBCOMMAND, "--version")
+    checks.append(
+        Present(f"cargo {SBF_SUBCOMMAND}", sbf)
+        if sbf is not None and sbf.endswith(f" {SBF_SUBCOMMAND_VERSION}")
+        else Missing(
+            f"cargo {SBF_SUBCOMMAND}",
+            f"cargo install --locked --force cargo-{SBF_SUBCOMMAND} --version "
+            f"{SBF_SUBCOMMAND_VERSION}",
+            "" if sbf is None else f"found {sbf}",
+        )
+    )
+    try:
+        sbf_check(PLATFORM_TOOLS_VERSION)
+        checks.append(
+            Present("Solana platform tools", f"{PLATFORM_TOOLS_VERSION} in {PLATFORM_TOOLS_ROOT}")
+        )
+    except PlatformToolsMissing:
+        checks.append(
+            Missing(
+                "Solana platform tools",
+                f"cargo {SBF_SUBCOMMAND} --no-build --no-rustup --platform-tools-root "
+                f"{PLATFORM_TOOLS_ROOT} --tools-version {PLATFORM_TOOLS_VERSION}",
+            )
+        )
+    rustfilt = await _run("rustfilt", "--version")
+    checks.append(
+        Present("rustfilt", rustfilt)
+        if rustfilt is not None
+        else Missing(
+            "rustfilt",
+            f"cargo install --locked rustfilt --version {RUSTFILT_VERSION}",
+            "Without it, `prove` cannot say which summary directives match nothing.",
+        )
+    )
+    return checks

@@ -14,6 +14,7 @@ COMMAND = "certora-cvlr"
 
 #: Each subcommand the skill runs, with the flags it passes.
 SUBCOMMANDS: dict[str, tuple[str, ...]] = {
+    "toolchain": (),
     "setup": ("--package", "--component", "--no-check"),
     "check": ("--package", "--component"),
     "prove": (

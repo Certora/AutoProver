@@ -22,8 +22,8 @@ both pinned to one commit.
 - `eric/solana-skill`, on top of it, is empty. The Solana skill is built there, and the layout
   change is proposed upstream only once the skill works.
 
-In this repository, A1–A4 and I are built: `certora-cvlr setup`, `check`, `prove`, `wait` and
-`vacuity` (`composer/cli/certora_cvlr.py`, `composer/spec/cvlr/skill.py`), the interface module
+In this repository, A1–A4 and I are built: `certora-cvlr toolchain`, `setup`, `check`, `prove`,
+`wait` and `vacuity` (`composer/cli/certora_cvlr.py`, `composer/spec/cvlr/skill.py`), the interface module
 `composer/spec/cvlr/skill_interface.py`, and the `skill_interface` tests in
 `tests/test_cvlr_skill.py`. S1, the first `SKILL.md`, is next. Nothing is tagged yet.
 
