@@ -18,6 +18,7 @@ from composer.spec.cvlr import skill_interface as interface
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.harness import SHARED_INVARIANTS, HarnessModule, declare_modules
 from composer.spec.cvlr.scaffold import SPECS_DIR
+from composer.spec.cvlr import skill
 from composer.spec.cvlr.skill import (
     INVARIANT_RULES,
     REFERENCE_DIR,
@@ -29,7 +30,14 @@ from composer.spec.cvlr.skill import (
     selected_rules,
 )
 from composer.prover.conf import ExcludeRules, InheritRules, SelectRules
-from composer.spec.cvlr.tuning import SUMMARIES, compose_env, extend_composite
+from composer.spec.cvlr.tuning import (
+    SUMMARIES,
+    SummaryDirective,
+    compose_env,
+    extend_composite,
+    layer_patterns,
+    render_layer,
+)
 
 _REPO = Path(__file__).resolve().parent.parent
 
@@ -110,6 +118,39 @@ def test_wait_prints_one_of_the_states_the_skill_loops_on(monkeypatch, capsys, o
 def test_a_job_names_the_listed_rules_the_selection_matches(selection, chosen):
     listed = {"rule_a", "rule_b_deposit", "rule_b_withdraw"}
     assert selected_rules(selection, listed) == chosen
+
+
+def test_a_summaries_layer_s_patterns_are_its_uncommented_lines():
+    layer = render_layer(
+        (
+            SummaryDirective("^a::f$", "formatting only"),
+            SummaryDirective("^b::g$", "two lines\nof why", returns="(*i64)(r1+8):num"),
+        )
+    )
+    assert layer_patterns(layer) == ("^a::f$", "^b::g$")
+
+
+@pytest.mark.skill_interface
+def test_unsat_core_takes_exactly_one_rule(capsys):
+    assert main(["prove", ".", "--component", "deposits", "--unsat-core"]) == 2
+    assert "exactly one --rule" in capsys.readouterr().err
+
+
+def test_vacuity_prints_the_finding_and_the_core(monkeypatch, capsys):
+    core = (_REPO / "tests" / "data" / "cvlr_unsat_core" / "assertion_in_core.txt").read_text()
+    fetched: list[tuple[str, str]] = []
+
+    def fake_fetch(api, link, rule):
+        fetched.append((link, rule))
+        return (core,)
+
+    monkeypatch.setattr(skill, "fetch_unsat_cores", fake_fetch)
+    monkeypatch.setattr(skill, "results_api", lambda: None)
+    assert main(["vacuity", "L", "--rule", "rule_x"]) == 0
+    out = capsys.readouterr().out
+    assert fetched == [("L", "rule_x")]
+    assert out.startswith("The rule's assertion is in the unsat core")
+    assert out.endswith(f"Unsat core data:\n{core}\n")
 
 
 def test_a_units_summaries_compose_from_the_package_file_as_from_the_layers():
@@ -248,7 +289,33 @@ pub fn rule_deposit_returns_more() {
     clog!(amount, returned);
     cvlr_assert!(returned > amount);
 }
+
+#[rule]
+pub fn rule_deposit_of_nothing() {
+    let amount: u64 = nondet();
+    cvlr_assume!(amount < 10);
+    cvlr_assume!(amount > 20);
+    cvlr_assert_eq!(crate::deposit(amount), amount);
+}
 """
+
+
+def _submitted(out: str) -> str:
+    (link,) = [
+        line.removeprefix("submitted: ")
+        for line in out.splitlines()
+        if line.startswith("submitted: ")
+    ]
+    return link
+
+
+def _wait_for(link: str, capsys) -> str:
+    for _ in range(60):
+        main(["wait", link, "--for", "60"])
+        out = capsys.readouterr().out
+        if not out.startswith("RUNNING"):
+            return out
+    raise AssertionError(f"{link} still running")
 
 
 @pytest.mark.expensive
@@ -267,22 +334,28 @@ def test_a_component_that_assumes_a_shared_invariant_is_checked_proved_and_waite
     specs = tmp_path / SPECS_DIR
     (specs / "invariants.rs").write_text(_SHARED)
     (specs / "deposits.rs").write_text(_RULES)
+    layers = tmp_path / SUMMARY_LAYERS_DIR
+    layers.mkdir(parents=True)
+    (layers / "deposits.txt").write_text("; matches nothing\n^no_such_crate::nothing$\n")
     capsys.readouterr()
 
     assert main(["check", str(tmp_path), "--component", "deposits"]) == 0, capsys.readouterr()
     capsys.readouterr()
     assert main(["prove", str(tmp_path), "--component", "deposits"]) == 0, capsys.readouterr()
-    (link,) = [
-        line.removeprefix("submitted: ")
-        for line in capsys.readouterr().out.splitlines()
-        if line.startswith("submitted: ")
-    ]
-
-    for _ in range(60):
-        main(["wait", link, "--for", "60"])
-        out = capsys.readouterr().out
-        if not out.startswith("RUNNING"):
-            break
+    proved = capsys.readouterr().out
+    assert "^no_such_crate::nothing$" in proved, proved
+    out = _wait_for(_submitted(proved), capsys)
     assert out.startswith("FINISHED"), out
     assert "  VERIFIED rule_deposit_returns_its_amount" in out
     assert "  VIOLATED rule_deposit_returns_more" in out
+    assert "  SANITY_FAILED rule_deposit_of_nothing" in out
+
+    rerun = ["prove", str(tmp_path), "--component", "deposits", "--unsat-core"]
+    assert main([*rerun, "--rule", "rule_deposit_of_nothing"]) == 0, capsys.readouterr()
+    link = _submitted(capsys.readouterr().out)
+    assert "  VERIFIED rule_deposit_of_nothing" in _wait_for(link, capsys)
+    # Contradictory bounds are settled before the solver runs, so this job writes no core: what
+    # is checked here is that the core map is read from the real job, and that the agent is told
+    # why there is nothing in it. Reading a core is test_vacuity_prints_the_finding_and_the_core.
+    assert main(["vacuity", link, "--rule", "rule_deposit_of_nothing"]) == 1
+    assert "settled the rule without a solver" in capsys.readouterr().out

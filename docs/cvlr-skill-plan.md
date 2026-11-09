@@ -22,10 +22,10 @@ both pinned to one commit.
 - `eric/solana-skill`, on top of it, is empty. The Solana skill is built there, and the layout
   change is proposed upstream only once the skill works.
 
-In this repository, A1, A2, A4 and I are built: `certora-cvlr setup`, `check`, `prove` and `wait`
-(`composer/cli/certora_cvlr.py`, `composer/spec/cvlr/skill.py`), the interface module
+In this repository, A1–A4 and I are built: `certora-cvlr setup`, `check`, `prove`, `wait` and
+`vacuity` (`composer/cli/certora_cvlr.py`, `composer/spec/cvlr/skill.py`), the interface module
 `composer/spec/cvlr/skill_interface.py`, and the `skill_interface` tests in
-`tests/test_cvlr_skill.py`. A3 is next. Nothing is tagged yet.
+`tests/test_cvlr_skill.py`. S1, the first `SKILL.md`, is next. Nothing is tagged yet.
 
 ## Settled
 
@@ -147,8 +147,17 @@ feature; the ungated `invariants` module is new, and U56 needs it too.
   skill's bounded foreground loop is this one command repeated; there is no detached process to
   manage. `run_prover` is split into `submit_prover_job` and `collect_prover_results` for it.
 
-**A3 — Explain a result.** Over `vacuity.py` (why a rule passed vacuously, from its unsat core)
-and `externals.py` (functions the Prover treated as external). The output is text the agent reads.
+**A3 — Explain a result.** No model call in AutoProver: the skill's agent does the reading the
+pipeline's analyst does, from the same instructions (`vacuity.md` in the reference).
+
+- `prove --unsat-core --rule R` is the pipeline's `explain_vacuity` rerun: the vacuity check off,
+  unsat cores on. `vacuity <link> --rule R` then prints whether the rule's assertion is in the core
+  (`vacuity.core_finding`, decided without a model) and the core itself. Contradictory assumptions
+  the Prover settles before solving, such as two bounds on one value, write no core; `vacuity` says
+  so rather than leaving an empty answer.
+- `wait` appends the Prover's warnings about functions it treated as external
+  (`externals.external_warnings`, the note `verify_rules` gives), and `prove` says which summary
+  directives match no function in the build, as `verify_rules` does.
 
 **A4 — The reference text, shipped.** Rendered by `setup` from the sources the pipeline's agents
 read, so there is no second copy to drift: the baseline facts (`cvlr_baseline_facts.md`), the

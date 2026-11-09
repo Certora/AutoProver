@@ -451,7 +451,7 @@ def _verdicts_note(
     }).render_to(load_jinja_template).strip()
 
 
-def _externals_note(externals: Sequence[str]) -> str | None:
+def externals_note(externals: Sequence[str]) -> str | None:
     """Text for the author about functions this run treated as external, or None.
 
     ``externals`` is the Prover's own warning text. Not a gate. The starting
@@ -469,6 +469,38 @@ def _externals_note(externals: Sequence[str]) -> str | None:
     return _ExternalFunctions.bind({"warnings": "\n\n".join(externals)}).render_to(
         load_jinja_template
     )
+
+
+async def inert_summaries_note(directives: tuple[str, ...], artifact: Path) -> str | None:
+    """A note when a summary directive matches no function in ``artifact``, or when the names
+    cannot be read.
+
+    A summary is a regex over demangled names. One that matches nothing changes nothing, and the
+    prover reports no diagnostic. A symbol the compiler inlined away is absent from the build, so
+    no spelling of it matches.
+
+    Returns None when there is nothing to check or every directive matched. An unreadable symbol
+    table is a sentence, not silence: silence reads as every directive matching.
+    """
+    if not directives:
+        return None
+    try:
+        symbols = await prover_function_names(artifact)
+    except (SymbolsUnavailable, ELFError, OSError):
+        _log.warning("could not read symbols to check summary directives", exc_info=True)
+        return (
+            "The build's function names could not be read, so summary directives "
+            "were not checked against them."
+        )
+    missed = unmatched(directives, symbols)
+    if not missed:
+        return None
+    return _InertSummaries.bind({
+        "total": len(directives),
+        "missed": [
+            {"pattern": pattern, "suggestions": nearest(pattern, symbols)} for pattern in missed
+        ],
+    }).render_to(load_jinja_template)
 
 
 def unaccounted(
@@ -738,37 +770,10 @@ class VerifyRules(
         )
 
     async def _inert_summaries(self, build: SbfRun) -> str | None:
-        """A note when a summary matches nothing, or when the names cannot be read.
-
-        A summary is a regex over demangled names. One that matches nothing
-        changes nothing, and the prover reports no diagnostic. A symbol the
-        compiler inlined away is absent from the build, so no spelling of it
-        matches.
-
-        Returns None when there is nothing to check or every directive matched.
-        An unreadable symbol table is a sentence in the tool result, not silence:
-        silence reads as every directive matching.
-        """
         directives = tuple(d.pattern for d in self.state["summaries"])
         if not directives or not isinstance(build.verdict, Built):
             return None
-        try:
-            symbols = await prover_function_names(build.verdict.manifest.artifact)
-        except (SymbolsUnavailable, ELFError, OSError):
-            _log.warning("could not read symbols to check summary directives", exc_info=True)
-            return (
-                "The build's function names could not be read, so summary directives "
-                "were not checked against them."
-            )
-        missed = unmatched(directives, symbols)
-        if not missed:
-            return None
-        return _InertSummaries.bind({
-            "total": len(directives),
-            "missed": [
-                {"pattern": pattern, "suggestions": nearest(pattern, symbols)} for pattern in missed
-            ],
-        }).render_to(load_jinja_template)
+        return await inert_summaries_note(directives, build.verdict.manifest.artifact)
 
     async def _report(
         self,
@@ -831,7 +836,7 @@ class VerifyRules(
                         )
                     case AlertReport() as alerts:
                         externals = external_warnings(alerts)
-                        if (note := _externals_note(externals.messages)) is not None:
+                        if (note := externals_note(externals.messages)) is not None:
                             lines.append(note)
                 validations = {}
                 if stamped:

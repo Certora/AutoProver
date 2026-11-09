@@ -14,7 +14,15 @@ from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, SbfVerdict
 from composer.cargo.session import Compiled, CompileFailed
 from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
 from composer.prover.core import ProverOptions, ProverReport, make_prover_options
-from composer.spec.cvlr.conf import DEFAULT_FEATURE, OptimisticLoop, TunableConf
+from composer.prover.results import AlertReport, UnreadableAlertReport
+from composer.spec.cvlr.conf import (
+    DEFAULT_FEATURE,
+    CheckVerdicts,
+    CollectUnsatCore,
+    OptimisticLoop,
+    TunableConf,
+)
+from composer.spec.cvlr.externals import external_warnings
 from composer.spec.cvlr.preflight import PreflightFailed
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.prover import BuildRejected, SubmissionFailed
@@ -31,8 +39,10 @@ from composer.spec.cvlr.skill import (
     check,
     prove,
     setup,
+    vacuity,
     wait,
 )
+from composer.spec.cvlr.verify import externals_note
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -111,6 +121,12 @@ def build_parser() -> argparse.ArgumentParser:
         "then depends on it. Give the reason.",
     )
     prove_.add_argument("--msg", help="The job's message on the Prover dashboard.")
+    prove_.add_argument(
+        "--unsat-core",
+        action="store_true",
+        help="Rerun the one rule --rule names with the vacuity check off and unsat cores on, for "
+        "`vacuity` to read. For a rule reported SANITY_FAILED.",
+    )
 
     wait_ = commands.add_parser(
         "wait",
@@ -126,6 +142,14 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="How long to wait before printing RUNNING (default %(default)s).",
     )
+
+    vacuity_ = commands.add_parser(
+        "vacuity",
+        help="Print the unsat core of a rule from a finished `prove --unsat-core` job, and whether "
+        "the rule's own assertion is in it.",
+    )
+    vacuity_.add_argument("link", help="The job link prove printed.")
+    vacuity_.add_argument("--rule", required=True, help="The rule reported SANITY_FAILED.")
     return parser
 
 
@@ -198,6 +222,9 @@ def _prover_options() -> ProverOptions:
 
 
 async def _prove(args: argparse.Namespace) -> int:
+    if args.unsat_core and len(args.rule) != 1:
+        print("certora-cvlr prove: --unsat-core needs exactly one --rule", file=sys.stderr)
+        return 2
     request = ProveRequest(
         component=args.component,
         rules=_rule_selection(args),
@@ -208,6 +235,7 @@ async def _prove(args: argparse.Namespace) -> int:
             ),
         ),
         msg=args.msg,
+        purpose=CollectUnsatCore() if args.unsat_core else CheckVerdicts(),
     )
     try:
         outcome = await prove(
@@ -224,10 +252,12 @@ async def _prove(args: argparse.Namespace) -> int:
         print(f"certora-cvlr prove: {exc}", file=sys.stderr)
         return 1
     match outcome:
-        case JobStarted(link=link, rules=rules, summaries=summaries):
+        case JobStarted(link=link, rules=rules, summaries=summaries, inert_summaries=inert):
             print(f"rules: {', '.join(rules)}")
             if summaries is not None:
                 print(f"summaries: {summaries}")
+            if inert is not None:
+                print(inert)
             print(f"submitted: {link}")
             return 0
         case NoRules(reason=reason):
@@ -261,10 +291,35 @@ async def _wait(args: argparse.Namespace) -> int:
                 print(f"  {status} {rule}")
             print()
             print(outcome.result_str)
+            match outcome.alerts:
+                case UnreadableAlertReport():
+                    print(
+                        "\nThe alert report could not be read, so the functions this job treated "
+                        "as external are unknown."
+                    )
+                case AlertReport() as alerts:
+                    if (note := externals_note(external_warnings(alerts).messages)) is not None:
+                        print(f"\n{note}")
             return 0
         case str():
             print(f"FAILED\n{outcome}")
             return 1
+
+
+async def _vacuity(args: argparse.Namespace) -> int:
+    read = await vacuity(args.link, args.rule)
+    if read is None:
+        print(
+            f"The job wrote no unsat core for {args.rule}. Either it was not a "
+            "`prove --unsat-core` job, or the rule did not verify with the vacuity check off "
+            "(`wait` shows its verdict), or the Prover settled the rule without a solver, which "
+            "writes no core: assumptions that contradict each other directly, such as two bounds "
+            "on one value, are removed before solving. Read the rule's assumptions for that first."
+        )
+        return 1
+    print(read.finding.summary())
+    print(f"\nUnsat core data:\n{read.core}")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -279,5 +334,7 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_prove(args))
         case "wait":
             return asyncio.run(_wait(args))
+        case "vacuity":
+            return asyncio.run(_vacuity(args))
         case _:
             raise AssertionError(args.command)

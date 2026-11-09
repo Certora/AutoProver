@@ -24,8 +24,10 @@ SUBCOMMANDS: dict[str, tuple[str, ...]] = {
         "--loop-iter",
         "--optimistic-loop",
         "--msg",
+        "--unsat-core",
     ),
     "wait": ("--for",),
+    "vacuity": ("--rule",),
 }
 
 #: What ``wait`` prints first: the job is still running, or it finished and the verdicts follow,
@@ -43,6 +45,7 @@ REFERENCE_FILES = (
     "author.md",
     "judge.md",
     "invariants.md",
+    "vacuity.md",
     "recipes/index.md",
 )
 

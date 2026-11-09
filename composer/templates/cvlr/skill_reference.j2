@@ -10,6 +10,7 @@ setup, so do not edit them; they are the version that matches the installed comm
 | `author.md` | The instructions AutoProver gives its own rule author. Read it by section, as a question comes up. |
 | `judge.md` | The instructions AutoProver gives the reviewer of a rule module. |
 | `invariants.md` | Choosing which relationship among account fields to state and prove as an invariant. |
+| `vacuity.md` | Reading an unsat core to explain a rule reported `SANITY_FAILED`. |
 | `recipes/index.md` | Situations and their fixes, by trigger. The recipe with retrieval ID `K1` is `recipes/K1.md`. |
 
 ## Reading text written for AutoProver's agents
@@ -24,9 +25,11 @@ name a tool, this is what it means for you:
 | `cvlr_research` | Read `cvlr.md` and the recipes, then the CVLR crates' own source in the cargo registry, at the versions above. |
 | `get_cvlr_recipe(id)` | Read `recipes/<id>.md`. |
 | `invariant_guidance` | Read `invariants.md`. |
+| `explain_vacuity` | `certora-cvlr prove <project> --component <module> --rule <rule> --unsat-core`, `wait` for it, then `certora-cvlr vacuity <link> --rule <rule>`, and read the core as `vacuity.md` says. |
 | `record_skip`, `unskip_property` | Record the property as skipped, with the reason, where the skill keeps its skips. |
 | `feedback_tool` | Have the judge review the module. |
 | `result`, `give_up` | Finish the component, as the skill says. |
+| `write_rough_draft` | Draft the analysis in your own notes, then refine it before reporting it. |
 | `cargo_check` | `certora-cvlr check <project> --component <module>`. |
 | `verify_rules` | `certora-cvlr prove <project> --component <module>`, then `certora-cvlr wait <link>` until it no longer prints `RUNNING`. |
 | `adjust_prover_config` | The `--loop-iter` and `--optimistic-loop` flags of `prove`. |

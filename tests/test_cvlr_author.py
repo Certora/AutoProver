@@ -47,7 +47,7 @@ from composer.spec.cvlr.state import (
 )
 from composer.spec.cvlr import author
 from composer.spec.cvlr import verify as verify_mod
-from composer.spec.cvlr.verify import CexAnalysis, _externals_note, _unverdicted, _verdicts_note, unaccounted
+from composer.spec.cvlr.verify import CexAnalysis, externals_note, _unverdicted, _verdicts_note, unaccounted
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 _DRAFT_NO_RULES = "//! Every property blocked; see the skips.\n"
@@ -263,8 +263,8 @@ def test_the_author_is_told_which_functions_were_external_and_what_that_means():
     """Not a gate: the starting configuration keeps most platform code external on purpose. But a
     verdict over one of these is conditional on dropped writes, and the author cannot see that
     from the verdict."""
-    assert _externals_note(()) is None
-    note = _externals_note(("solana_account_info::AccountInfo::resize",))
+    assert externals_note(()) is None
+    note = externals_note(("solana_account_info::AccountInfo::resize",))
     assert note is not None
     assert "solana_account_info::AccountInfo::resize" in note
     assert "writes nothing else" in note and "cannot add inlining directives" in note
@@ -273,7 +273,7 @@ def test_the_author_is_told_which_functions_were_external_and_what_that_means():
 def test_the_author_is_shown_how_to_bound_an_external_value_with_edits_it_can_ask_for():
     """Without this the note's only remedies were commentary and skips, so a property over the stake
     program's activation math, which an author can bound with two edits, went unchecked."""
-    note = _externals_note(("solana_stake_interface::state::Delegation::stake_activating_and_deactivating",))
+    note = externals_note(("solana_stake_interface::state::Delegation::stake_activating_and_deactivating",))
     assert note is not None
     assert "an extraction" in note and "`mock_fn`" in note and "`rule_subjects`" in note
 

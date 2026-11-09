@@ -29,7 +29,7 @@ from composer.kb.kb_context import (
     recipe_bodies,
     recipe_index_document,
 )
-from composer.prover.cloud import parse_cloud_link, poll_job
+from composer.prover.cloud import parse_cloud_link, poll_job, results_api
 from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
 from composer.prover.core import (
     ProverCallbacks,
@@ -42,6 +42,9 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.author import render_author_system, render_judge_system
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
+    CheckVerdicts,
+    CollectUnsatCore,
+    ConfPurpose,
     TunableConf,
     tunable_conf,
 )
@@ -67,7 +70,10 @@ from composer.spec.cvlr.prover import (
     write_submission,
 )
 from composer.spec.cvlr.scaffold import ENVS_DIR, HARNESS_DIR, SPECS_DIR, declare_unit_features
-from composer.spec.cvlr.tuning import SUMMARIES, extend_composite
+from composer.spec.cvlr.tuning import SUMMARIES, extend_composite, layer_patterns
+from composer.spec.cvlr.vacuity import CoreFinding, core_finding
+from composer.spec.cvlr.verify import inert_summaries_note
+from composer.spec.source.report_prover import fetch_unsat_cores
 from composer.spec.gen_types import CVLR_INTERNAL_DIR
 from composer.spec.util import slugify_rust_module
 from composer.templates.loader import load_jinja_template
@@ -221,6 +227,9 @@ def reference_documents(
             {"cvlr_versions": cvlr_versions, "caveats": list(caveats)}
         ),
         Path("invariants.md"): load_jinja_template("cvlr_invariant_guidance.j2"),
+        Path("vacuity.md"): load_jinja_template("cvlr_vacuity_system_prompt.j2")
+        + "\n\n"
+        + load_jinja_template("cvlr_vacuity_prompt.j2"),
         Path("recipes") / "index.md": recipe_index_document(CVLR_BUNDLE.label, CVLR_RECIPES),
     }
     docs.update(
@@ -311,6 +320,9 @@ class ProveRequest:
     rules: RuleSelection = field(default_factory=InheritRules)
     settings: TunableConf = TunableConf()
     msg: str | None = None
+    #: :class:`~composer.spec.cvlr.conf.CollectUnsatCore` reruns a rule reported vacuous with the
+    #: vacuity check off, so that :func:`vacuity` can read the core of its proof.
+    purpose: ConfPurpose = CheckVerdicts()
 
 
 @dataclass(frozen=True)
@@ -320,6 +332,8 @@ class JobStarted:
     rules: tuple[str, ...]
     #: The summaries layer composed into this job's conf, when the component has one.
     summaries: Path | None
+    #: Said about the build before the job ran: summary directives that match no function.
+    inert_summaries: str | None = None
 
 
 @dataclass(frozen=True)
@@ -360,8 +374,10 @@ async def prove(
     session = await sbf_session(workspace_root, sandbox=sandbox)
     submission = Submission(
         manifest_path=located.package_dir / "Cargo.toml",
-        stem=module.stem,
+        stem=module.stem
+        + ("_unsat_core" if isinstance(request.purpose, CollectUnsatCore) else ""),
         msg=request.msg or f"{located.package}: {module.module}",
+        purpose=request.purpose,
         settings=request.settings,
         rules=request.rules,
         features=(DEFAULT_FEATURE, module.feature),
@@ -395,7 +411,12 @@ async def prove(
     if isinstance(started, SubmissionFailed):
         return started
     return JobStarted(
-        link=started.link, rules=rules, summaries=layer_path if layer else None
+        link=started.link,
+        rules=rules,
+        summaries=layer_path if layer else None,
+        inert_summaries=await inert_summaries_note(
+            layer_patterns(layer), build.verdict.manifest.artifact
+        ),
     )
 
 
@@ -452,3 +473,20 @@ async def wait(link: str, *, seconds: float, prover_opts: ProverOptions) -> Wait
         ProverCallbacks(),
         None,
     )
+
+
+@dataclass(frozen=True)
+class CoreRead:
+    """The unsat core of a rule's proof, from a job ``prove`` ran with ``CollectUnsatCore``."""
+
+    finding: CoreFinding
+    core: str
+
+
+async def vacuity(link: str, rule: str) -> CoreRead | None:
+    """The first unsat core the job at ``link`` wrote for ``rule``, or ``None`` when it wrote
+    none: the job did not collect cores, or the rule did not verify with the vacuity check off."""
+    cores = await asyncio.to_thread(fetch_unsat_cores, results_api(), link, rule)
+    if not cores:
+        return None
+    return CoreRead(core_finding(cores[0]), cores[0])

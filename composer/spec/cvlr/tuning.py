@@ -291,6 +291,16 @@ class TuningFiles:
         )
 
 
+def layer_patterns(layer: str) -> tuple[str, ...]:
+    """The symbol patterns in a summaries layer written as :func:`render_layer` writes one: every
+    line that is not a ``;`` comment or a ``#[type(...)]`` annotation."""
+    return tuple(
+        line
+        for raw in layer.splitlines()
+        if (line := raw.strip()) and not line.startswith((";", "#["))
+    )
+
+
 def merge_summaries(
     left: list[SummaryDirective], right: list[SummaryDirective]
 ) -> list[SummaryDirective]:
