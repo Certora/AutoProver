@@ -8,14 +8,16 @@ This module provides utilities to:
 - Cache version data for performance
 """
 
+import functools
 import json
 import re
 import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 from packaging.specifiers import SpecifierSet
 from packaging.version import Version
@@ -25,6 +27,7 @@ from certora_autosetup.utils.config_manager import (
     convert_solc_version_to_certora_format,
 )
 from certora_autosetup.utils.logger import logger
+from certora_autosetup.utils.types import ContractHandle
 
 # Minimum solc version that supports viaIR (introduced as settings.viaIR in 0.7.5, stabilized in 0.8.13)
 VIA_IR_MIN_VERSION = Version("0.7.5")
@@ -326,3 +329,78 @@ def resolve_pragma_to_version(
             f"Failed to resolve solc version for pragma {pragma_spec}: {e}", "WARNING", "SolcVersionResolver"
         )
         return None
+
+
+@functools.cache
+def solc_default_evm_version(solc_binary: str) -> Optional[str]:
+    """The default EVM version of ``solc_binary``, or None when the binary
+    cannot be run.
+
+    Read from the metadata of an empty contract compiled with no evmVersion
+    setting: solc records the version it used there. Every solc from 0.4.x on
+    does this, while the ``--help`` text that also names the default changed
+    format over the releases.
+    """
+    request = {
+        "language": "Solidity",
+        "sources": {"probe.sol": {"content": "contract Probe {}"}},
+        "settings": {"outputSelection": {"*": {"*": ["metadata"]}}},
+    }
+    try:
+        result = subprocess.run(
+            [solc_binary, "--standard-json"],
+            input=json.dumps(request),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        metadata = json.loads(json.loads(result.stdout)["contracts"]["probe.sol"]["Probe"]["metadata"])
+        return metadata["settings"]["evmVersion"]
+    except (OSError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+        return None
+
+
+def assign_evm_versions(
+    config: Dict[str, Any],
+    contracts: Sequence[ContractHandle],
+    known: Mapping[str, str],
+) -> None:
+    """Set the conf's EVM version for every contract in the scene, in place.
+
+    ``known`` maps contract names to the EVM version the project's own build
+    uses for them. Every other contract gets the conf's declared
+    ``solc_evm_version`` or, without one, the default of its compiler: the
+    prover requires ``solc_evm_version_map`` to cover every file. One value for
+    all contracts is written as the scalar ``solc_evm_version``.
+    """
+    declared = config.get("solc_evm_version")
+    compiler_map = config.get("compiler_map", {})
+    evm_map = dict(config.get("solc_evm_version_map", {}))
+    evm_map.update(known)
+    for c in contracts:
+        if c.contract_name in evm_map:
+            continue
+        if declared:
+            evm_map[c.contract_name] = declared
+            continue
+        # certoraRun runs plain `solc` when the conf names no compiler.
+        solc_binary = compiler_map.get(c.contract_name) or config.get("solc") or "solc"
+        default_evm = solc_default_evm_version(solc_binary)
+        if default_evm is None:
+            logger.log(
+                f"Cannot read the default EVM version of {solc_binary}; "
+                f"{c.contract_name} stays out of solc_evm_version_map",
+                "ERROR",
+                "SolcVersionResolver",
+            )
+            continue
+        evm_map[c.contract_name] = default_evm
+
+    values = set(evm_map.values())
+    if len(values) == 1 and all(c.contract_name in evm_map for c in contracts):
+        config["solc_evm_version"] = values.pop()
+        config.pop("solc_evm_version_map", None)
+    else:
+        config["solc_evm_version_map"] = evm_map
+        config.pop("solc_evm_version", None)

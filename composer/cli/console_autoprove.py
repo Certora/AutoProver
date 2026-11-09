@@ -34,7 +34,7 @@ async def _main() -> int:
                 print(f"    - {f}")
         print(f"{'=' * 60}")
         if result.all_failed:
-            print("  RUN FAILED: every component failed to generate or gave up.")
+            print(f"  {result.failure_headline}")
             return 1
         if result.n_delivered == 0:
             print(

@@ -1,13 +1,16 @@
-"""Prover confs as data: writing them, and scoping one to a run's rule selection.
+"""Prover confs as data: writing them, scoping one to a run's rule selection, and reading which
+rules a conf checks.
 
 Shared by every ecosystem. What a conf contains is each ecosystem's own policy
 (:func:`composer.spec.source.prover.prover_config_overlay` for CVL,
 :func:`composer.spec.cvlr.conf.solana_conf` for Solana).
 """
 
+import fnmatch
 import json
 import re
 import string
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 #: A conf: the top-level JSON object.
@@ -79,3 +82,36 @@ class ExcludeRules:
 #: A run's rule scope. ``apply_to(conf)`` returns ``conf`` scoped to it, writing only the key the
 #: selection names. Selections are hashable, and equal whenever they name the same rules.
 type RuleSelection = InheritRules | SelectRules | ExcludeRules
+
+
+def _names(conf: Conf, key: str) -> list[str] | None:
+    """A conf's ``rule`` / ``exclude_rule`` entry as a list, or None when the key is absent.
+    certoraRun accepts a single name as well as a list."""
+    match conf.get(key):
+        case None:
+            return None
+        case str(name):
+            return [name]
+        case list(names):
+            return [str(n) for n in names]
+        case other:
+            raise ValueError(f"conf key {key!r} must be a name or a list of names, got {other!r}")
+
+
+def checked_rules(conf: Conf, declared: Iterable[str]) -> list[str]:
+    """The ``declared`` rules a run of ``conf`` checks, in ``declared`` order.
+
+    For any conf, not only ones this package wrote: ``rule`` keeps the rules matching one of its
+    patterns (every rule when absent), then ``exclude_rule`` drops the rules matching one of
+    its. Patterns are globs, as certoraRun reads them, so ``"inv_*"`` names every rule that starts
+    with ``inv_``. The union of this over several confs of one spec is the set of rules those
+    confs check together."""
+    selected, excluded = _names(conf, "rule"), _names(conf, "exclude_rule") or []
+
+    def _matches(name: str, patterns: list[str]) -> bool:
+        return any(fnmatch.fnmatchcase(name, p) for p in patterns)
+
+    return [
+        r for r in declared
+        if (selected is None or _matches(r, selected)) and not _matches(r, excluded)
+    ]

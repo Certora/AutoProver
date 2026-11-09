@@ -11,7 +11,7 @@ from certora_autosetup.parsers.build_system_detector import BuildSystem, BuildSy
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.project_dir import rebase
 from certora_autosetup.utils.types import ContractHandle
-from certora_autosetup.parsers.foundry import FoundryContractExtractor
+from certora_autosetup.parsers.foundry import ArtifactContract, FoundryContractExtractor
 
 
 def split_contract_spec(spec: str) -> tuple[str, str]:
@@ -204,7 +204,7 @@ def resolve_contract_handles(
         if handles_relative_to is not None and handles_relative_to.resolve() != project_root.resolve():
             lookup = rebase(lookup, handles_relative_to, project_root)
         normalized = str(Path(lookup))
-        entries_in_file: list[tuple] | None = None
+        entries_in_file: list[ArtifactContract] | None = None
         for src_path, entries in source_map.items():
             if str(Path(src_path)) == normalized:
                 entries_in_file = entries
@@ -214,7 +214,7 @@ def resolve_contract_handles(
             resolved.append(handle)
             continue
 
-        contract_names = [name for name, _ver in entries_in_file]
+        contract_names = [entry.name for entry in entries_in_file]
 
         if len(contract_names) == 1:
             actual = contract_names[0]

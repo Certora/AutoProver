@@ -43,7 +43,7 @@ from composer.spec.source.harness import (
 )
 from composer.pipeline.cli import autoprover_version, root_cache_key, user_ns
 from composer.pipeline.keys import (
-    AGENT_RESULT_KEY, AGENT_ROUND_KEY, BUG_ANALYSIS_KEY,
+    AGENT_RESULT_KEY, BUG_ANALYSIS_KEY,
     COMMON_SYSTEM_CACHE_KEY, COMPONENT_KEY, FINAL_PROPERTIES_KEY, FORMALIZATION_KEY,
     PRE_PROPERTY_KEY, PROPERTIES_KEY, SYSTEM_ANALYSIS_KEY,
 )
@@ -63,7 +63,8 @@ from composer.spec.source.keys import (
 )
 from composer.spec.source.summarizer import _SummaryCache
 from composer.spec.prop_inference import (
-    _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
+    DEFAULT_MAX_BUG_ROUNDS, _BugAnalysisCache, _AgentResult, _AgentRoundWithHistory,
+    recorded_round_key,
 )
 from composer.spec.cvl_generation import GeneratedCVL, _LastAttemptCache
 from composer.spec.system_model import (
@@ -172,23 +173,32 @@ async def _resolve_bug_key(
     tags: AutoProveCacheTags,
 ) -> CacheKey:
     """The bug-analysis key is parameterized on the threat-model and extra-context
-    digests and the refinement (interactive) flag. All come from the run tags; records
-    written before the ``interactive`` tag existed leave it ``None``, in
-    which case probe both variants and use whichever was written."""
+    digests, the refinement (interactive) flag, the round limit, and whether the run was
+    an evaluate-mode run. All come from the run tags; records written before the
+    ``interactive`` tag existed leave it ``None``, in which case probe both variants and
+    use whichever was written. Records written before the ``max_bug_rounds`` tag existed
+    leave it ``None``; their keys carry neither the round limit nor the evaluate-mode
+    segment, so both are left out."""
     xc_digest = combine_digests(tags.extra_context_digests)
+    existing_specs = (
+        tags.max_bug_rounds is not None and run_mode_name(tags.run_mode) == "evaluate"
+    )
     if tags.interactive is not None:
         return BUG_ANALYSIS_KEY(
             tags.threat_model_digest, with_refinement=tags.interactive,
-            extra_context_digest=xc_digest,
+            extra_context_digest=xc_digest, max_rounds=tags.max_bug_rounds,
+            existing_specs=existing_specs,
         )
     for refine in (False, True):
         candidate = BUG_ANALYSIS_KEY(
             tags.threat_model_digest, refine, extra_context_digest=xc_digest,
+            max_rounds=tags.max_bug_rounds, existing_specs=existing_specs,
         )
         if await feat_ctx.child(candidate).cache_get(_BugAnalysisCache) is not None:
             return candidate
     return BUG_ANALYSIS_KEY(
         tags.threat_model_digest, with_refinement=False, extra_context_digest=xc_digest,
+        max_rounds=tags.max_bug_rounds, existing_specs=existing_specs,
     )
 
 
@@ -213,6 +223,7 @@ async def _resolve_formalization_key(
             bool(tags.interactive),
             xc_digest,
             run_mode_name(tags.run_mode),
+            max_rounds=tags.max_bug_rounds,
         )
     ).cache_get(FinalProperties)
     if final is not None:
@@ -249,17 +260,19 @@ async def _build_component_nodes(
         bug_key = await _resolve_bug_key(feat_ctx, tags)
         async with node_for(feat_ctx, bug_key, "Bug Analysis", _BugAnalysisCache) as bug_ctx:
             async with node_for(bug_ctx, AGENT_RESULT_KEY, "Agent result", _AgentResult) as agent_ctx:
-                # Round indices are dense; probe 0..N until the first miss.
-                i = 0
+                # Round indices are dense; probe 0..N until the first miss. Each
+                # round's key is derived from the rounds before it.
+                prior: list[_AgentRoundWithHistory] = []
                 while True:
+                    i = len(prior)
                     round_node = await leaf(
-                        agent_ctx, AGENT_ROUND_KEY(i),
+                        agent_ctx, recorded_round_key(i, prior, tags.max_bug_rounds),
                         f"Round {i + 1}", _AgentRoundWithHistory,
                     )
                     if round_node.value is None:
                         break
                     yield round_node
-                    i += 1
+                    prior.append(round_node.value)
 
         bug_cache = await feat_ctx.child(bug_key).cache_get(_BugAnalysisCache)
         if bug_cache is None:
@@ -522,6 +535,7 @@ def _resolve_from_inputs(args: argparse.Namespace) -> AutoProveCacheTags | None:
         # Not recoverable from the inputs — the tree builder probes both
         # refinement variants of the bug-analysis key.
         interactive=None,
+        max_bug_rounds=args.max_bug_rounds,
     )
 
 
@@ -590,6 +604,13 @@ async def _async_main(args: argparse.Namespace) -> int:
         return 0
 
 
+def _max_bug_rounds_arg(value: str) -> int | None:
+    """``--max-bug-rounds``: a round limit, or ``none`` for keys with no round-limit segment."""
+    if value.lower() == "none":
+        return None
+    return int(value)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Cache & Memory Explorer for the Auto-Prove pipeline"
@@ -636,6 +657,11 @@ def main() -> int:
                                "digest is suffixed onto per-component cache keys. Defaults "
                                "to the plugins installed in this environment; pass with no "
                                "names to force plugin-free keys.")
+    p_inputs.add_argument("--max-bug-rounds", dest="max_bug_rounds", type=_max_bug_rounds_arg,
+                          default=DEFAULT_MAX_BUG_ROUNDS,
+                          help="The --max-bug-rounds of the original run; it parameterizes the "
+                               f"bug-analysis cache key (default: {DEFAULT_MAX_BUG_ROUNDS}). Pass "
+                               "'none' for a run whose keys predate the round limit.")
 
     args = parser.parse_args()
     return asyncio.run(_async_main(args))

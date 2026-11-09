@@ -45,6 +45,11 @@ class AutoProveCacheTags(BaseModel):
     bug-analysis key variant). ``None`` on records written before this
     field existed — readers must probe both variants."""
 
+    max_bug_rounds: int | None = None
+    """The run's property-inference round limit (``--max-bug-rounds``), which parameterizes
+    ``bug_analysis_key`` and the ``final_props`` leaf. ``None`` on records written before this
+    field existed, whose keys carry no round limit."""
+
     run_mode: str | None = None
     """The run's :class:`~composer.pipeline.run_mode.RunMode` value. A prioritized run
     suffixes its ``final_props`` leaf with the mode, so a reader needs this to know which

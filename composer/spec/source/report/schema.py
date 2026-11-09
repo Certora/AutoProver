@@ -8,7 +8,8 @@ inferred `FormalizedProperty`s it covers, and a `RuleVerdict` may surface under 
 outcome ("Verified" vs "Successful test") is a render-time concern, not stored here.
 
 The report is a **per-run snapshot** — no guarantee that property/group slugs stay stable across
-runs. Bump `schema_version` on a breaking change.
+runs. Bump `schema_version` on a breaking change. A minor bump (3.1 -> 3.2) adds optional fields
+only, so a reader of the new version still loads every older report.
 """
 from enum import Enum
 from typing import Literal
@@ -98,6 +99,172 @@ class RuleVerdict(BaseModel):
         return (self.spec_file, self.name)
 
 
+type CoverageStatus = Literal["covered", "partial", "uncovered"]
+
+type FaithfulnessStatus = Literal["exact", "partial", "wrong"]
+
+
+class PropertyFaithfulness(BaseModel):
+    """A judgement of whether the rules mapped to a property SEMANTICALLY encode its claim,
+    independent of how much they cover. Coverage asks whether the mapped set exercises the whole
+    property; faithfulness asks whether each rule's CVL actually asserts what the property says —
+    the exact quantity, the revert/no-revert direction, non-vacuously. A rule can be faithful but
+    cover little, or cover everything yet assert the wrong thing. Written by the evaluate run when
+    faithfulness judging is enabled; absent otherwise."""
+    status: FaithfulnessStatus = Field(
+        description="exact = the mapped rules jointly assert exactly the claim; partial = they "
+        "assert only part of it, or a part is asserted incorrectly with no other rule covering "
+        "it; wrong = they do not assert the claim at all.")
+    note: str = Field(description="One to three sentences: what the rules faithfully encode and "
+                      "where they diverge from the claim.")
+    vacuity_risk: bool = Field(
+        default=False,
+        description="True when a mapped rule may pass vacuously (its assertion is unreachable or "
+        "trivially true), so a verified verdict would not actually establish the claim.")
+
+
+class PropertyCoverage(BaseModel):
+    """A judgement of how well the rules a property maps to establish it. Written by a run that
+    checks specs it did not author (``run_mode="evaluate"``); absent otherwise."""
+    status: CoverageStatus
+    reason: str = Field(description="Why the rules establish the property fully, partly, or not at all.")
+    added_by_evaluator: bool = Field(
+        default=False,
+        description="True when the property was added during evaluation rather than inferred "
+        "with the rest of the property list.",
+    )
+    faithfulness: PropertyFaithfulness | None = Field(
+        default=None,
+        description="The semantic-faithfulness judgement of the mapped rules, when faithfulness "
+        "judging ran. A `wrong`/`partial` faithfulness lowers the coverage `status`.",
+    )
+
+
+type SceneConcern = Literal[
+    "sound", "over_approximation", "under_approximation", "vacuity_risk",
+    "unresolved_or_havoc", "wrong_resolution",
+]
+type SceneEffect = Literal["false_proof", "false_violation", "vacuity", "timeout_or_cost", "none"]
+
+
+class SceneFinding(BaseModel):
+    """One scene-modelling decision (a summary, link, dispatch choice, or ghost) and its
+    soundness consequence. The scene is everything that stands in for code outside the verified
+    contracts; an unsound choice can let a rule reach a verdict it does not deserve."""
+    target: str = Field(description="The specific summary / link / dispatch / ghost at issue, named concretely.")
+    concern: SceneConcern = Field(description=(
+        "sound = meaning-preserving or a safe over-approx for the sorts that use it; "
+        "over_approximation = adds behaviour; under_approximation = removes reachable behaviour; "
+        "vacuity_risk = assumes away a rule's premise; unresolved_or_havoc = a depended-on call is "
+        "havocked, a risk when that call is expected to have a real effect on the rule's correctness; "
+        "wrong_resolution = linked/dispatched to the wrong implementation."))
+    effect: SceneEffect = Field(description=(
+        "false_proof = a rule could be VERIFIED that should not be (the dangerous case); "
+        "false_violation = a spurious counterexample; vacuity = a rule passes proving nothing; "
+        "timeout_or_cost = a tractability risk only; none = no soundness consequence."))
+    properties_at_risk: list[str] = Field(
+        default_factory=list,
+        description="Titles of the properties this choice endangers, given their sort.")
+    note: str = Field(description="What the scene construct actually does and why it has this effect.")
+
+
+class SceneAssessment(BaseModel):
+    """The soundness of the scene the specs were verified against. Written by the evaluate run
+    when scene judging is enabled; absent otherwise."""
+    overall: Literal["sound", "minor_concerns", "unsound"] = Field(
+        default="sound",
+        description="unsound if any finding is false_proof; minor_concerns if only "
+        "false_violation / vacuity / timeout; else sound.")
+    summary: str = Field(default="", description="A short plain-English verdict on the scene.")
+    findings: list[SceneFinding] = Field(default_factory=list)
+    false_proof_findings: int = Field(
+        default=0, description="How many findings have effect=false_proof.")
+    at_risk_properties: list[str] = Field(
+        default_factory=list,
+        description="Titles of the properties endangered by a false-proof finding.")
+    tractability: list["TractabilityFinding"] = Field(
+        default_factory=list,
+        description="Predicted prover-friendliness of the scene's constructs, with proposed "
+        "improvements. A relative, structural read, independent of soundness — useful even when "
+        "the Prover already ran, except where every run was already fast.")
+    tractability_note: str = Field(
+        default="", description="Overall prover-friendliness of the scene and its main bottleneck.")
+
+
+type CostRisk = Literal["cheap", "moderate", "expensive"]
+
+
+class TractabilityFinding(BaseModel):
+    """One scene construct and its predicted SMT cost, independent of soundness (a sound scene can
+    be expensive and an unsound one cheap). `suggestion` proposes a scene/settings change that
+    would make it cheaper without changing the verdicts — the structural half of improving a slow
+    run; actually applying and re-running is not done here."""
+    target: str = Field(description="The scene construct, named concretely (a summary, ghost, dispatch set, math).")
+    cost_risk: CostRisk = Field(description=(
+        "cheap = little added solver work (NONDET, PER_CALLEE_CONSTANT / CONSTANT, a simple "
+        "symbolic constant, an uninterpreted ghost, an envfree view summary); moderate = keyed "
+        "ghost state with simple reads, a small bounded dispatch set, light linear arithmetic; "
+        "expensive = HAVOC of large/complex state, un-summarized nonlinear math (mulDiv, division, "
+        "exponentiation), precise bitwise or hashing/keccak models, unbounded loops / deep "
+        "recursion, large dispatch sets, heavy quantified ghost axioms."))
+    note: str = Field(description="Why the construct has this cost.")
+    suggestion: str = Field(
+        default="", description="A concrete scene/settings change to make it cheaper WITHOUT "
+        "changing the rules' verdicts. Empty when the construct is already cheap.")
+
+
+type MutantClass = Literal["scene_assumption", "border_callsite", "syntactic"]
+# killed = a rule mapped to the property that was VERIFIED on the original flipped to VIOLATED on the
+# mutant; survived = all such rules still VERIFIED (a spec blind spot); no_signal = no rule mapped to
+# the property was verified on the original, so the mutant is untestable; inconclusive = a rule
+# errored/timed out.
+type MutantStatus = Literal["not_run", "killed", "survived", "no_signal", "inconclusive"]
+
+
+class Mutant(BaseModel):
+    """A minimal, source-level bug injected into the MAIN contract to violate one property, with
+    the author's scenario and the judge's stamp. The runner later applies it and records whether
+    the property's rules caught it."""
+    target_property: str = Field(description="Title of the property the mutant is meant to violate.")
+    mutant_class: MutantClass = Field(description=(
+        "scene_assumption = alters a value/behaviour a verifier might unsoundly treat as fixed; "
+        "border_callsite = changes how the main contract handles a value crossing an external "
+        "boundary; syntactic = a trivial operator/constant tweak."))
+    old_str: str = Field(description="The exact snippet replaced in the main contract.")
+    new_str: str = Field(description="The replacement that introduces the bug.")
+    scenario: str = Field(description="The concrete, reachable execution under which the mutated "
+                          "contract violates the property while the original satisfies it.")
+    rationale: str = Field(description="One line: what assumption/behaviour this breaks.")
+    accepted: bool = Field(default=False, description="Whether the judge accepted the mutant.")
+    is_scene_assumption: bool = Field(
+        default=False, description="The judge's read that this targets an unsound scene assumption.")
+    review_reason: str = Field(default="", description="The judge's reason (esp. for a rejection).")
+    #: --- filled by the runner (Tool 2) ---
+    status: MutantStatus = Field(default="not_run", description="The kill-test outcome.")
+    killed_by: list[str] = Field(
+        default_factory=list,
+        description="Rules mapped to the property that flipped to VIOLATED on the mutant.")
+    run_note: str = Field(default="", description="Why inconclusive/no_signal, when so.")
+
+
+class MutationReport(BaseModel):
+    """Mutation testing of the specs: one or more source-level bugs per property, and whether the
+    property's rules catch them. A SURVIVED mutant is a spec blind spot; the score is the rules'
+    empirical catch-rate over the mutants that could be tested."""
+    author_model: str = ""
+    judge_model: str = ""
+    n_properties: int = 0
+    mutants: list[Mutant] = Field(default_factory=list)
+    covered: int = Field(default=0, description="Properties with at least one accepted mutant.")
+    #: --- filled by the runner (Tool 2) ---
+    killed: int = 0
+    survived: int = 0
+    no_signal: int = 0
+    inconclusive: int = 0
+    mutation_score: float | None = Field(
+        default=None, description="killed / (killed + survived); None when nothing was testable.")
+
+
 class FormalizedProperty(PropertyFormulation):
     """An inferred property (title, methods, sort, description) that at least one CVL rule
     formalizes, tagged with its owning component. ``rule_refs`` are the property→rule edges; the
@@ -108,6 +275,7 @@ class FormalizedProperty(PropertyFormulation):
         default_factory=list,
         description="Identities of the rules that (jointly) formalize this property.",
     )
+    coverage: PropertyCoverage | None = None
 
     @property
     def key(self) -> PropertyKey:
@@ -352,6 +520,61 @@ class Finding(BaseModel):
     provenance: FindingProvenance | None = None
 
 
+type FeedbackSeverity = Literal["info", "warning", "error"]
+
+
+class RuleFeedback(BaseModel):
+    """A review remark on one rule as written: what is wrong or weak about it and how to fix it.
+
+    About the rule's text or its conf, not its verdict, so a VERIFIED rule can carry one. A rule
+    no property claims (an orphan, see ``AutoProverReport.rules``) can carry one as well."""
+    rule: RuleName
+    #: Basename of the spec defining the rule; with ``rule`` it is the rule's identity. ``None``
+    #: when the remark is about a rule name across every spec that declares it.
+    spec_file: str | None = None
+    #: Project-relative path of the conf the remark is about, or ``None`` when it holds for every
+    #: conf that checks the rule.
+    conf: str | None = None
+    severity: FeedbackSeverity
+    #: Open vocabulary, e.g. ``"vacuous"`` or ``"tolerance-accepts-behaviour"``.
+    kind: str
+    explanation: str
+    suggested_fix: str | None = None
+
+
+class ConfCoverage(BaseModel):
+    """Whether the confs that verify one spec, taken together, check every rule of it on every
+    method. A gap is closed by a completing run, and this records what was missing before it."""
+    spec: str = Field(description="Project-relative path of the spec.")
+    confs: list[str] = Field(
+        default_factory=list, description="Project-relative paths of the confs that verify the spec.",
+    )
+    rules_unchecked_before_completion: list[RuleName] = Field(
+        default_factory=list,
+        description="Rules no conf checked, before any completing run.",
+    )
+    methods_excluded: dict[RuleName, list[str]] = Field(
+        default_factory=dict,
+        description="Per parametric rule, the methods no conf instantiated it on, before any "
+        "completing run.",
+    )
+    completion_conf: str | None = Field(
+        default=None,
+        description="Project-relative path of the conf written to close the gap, if one was needed.",
+    )
+    complete: bool = Field(
+        description="Every rule was checked on every method once the completing run (if any) finished.",
+    )
+
+
+class SpecCoverageScore(BaseModel):
+    """A named coverage score with its per-view breakdown, e.g. a static measure of how much of
+    the code the specs constrain. The producer names the score and its views."""
+    name: str
+    score: float
+    views: dict[str, float] = Field(default_factory=dict)
+
+
 class DeprioritizedProperty(PropertyFormulation):
     """A property this run inferred and deliberately did not pursue, with the ranker's reason.
 
@@ -399,11 +622,11 @@ class HoistedClaim(BaseModel):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7"] = "3.7"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8"] = "3.8"
     backend: ReportBackend = "prover"
-    #: How much of the inferred property set the run pursued ("comprehensive" or
-    #: "prioritized"). Absent on reports written before the mode existed, which are all
-    #: comprehensive.
+    #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
+    #: "evaluate" for a run that checked the project's own specs). Absent on reports written
+    #: before the mode existed, which are all comprehensive.
     run_mode: str | None = None
     #: What a prioritized run set aside. Empty for a comprehensive run.
     deprioritized: list[DeprioritizedProperty] = Field(default_factory=list)
@@ -420,6 +643,9 @@ class AutoProverReport(BaseModel):
     #: component name -> prover run link/path
     prover_links: dict[ComponentName, str] = Field(default_factory=dict)
     properties: list[FormalizedProperty]
+    #: Every rule the report shows. A formalizing run keeps only rules some property maps to and
+    #: counts the rest in ``coverage.dropped_orphan_rules``. An evaluate run keeps them all, so
+    #: a rule here may have no property pointing at it.
     rules: list[RuleVerdict]
     groups: list[PropertyGroup]
     #: Why the properties were put in one ``general`` group instead of being grouped: the
@@ -461,3 +687,14 @@ class AutoProverReport(BaseModel):
     #: entry in ``rules``; this list is what keeps a missing write-up from reading as "nothing
     #: was violated". Empty on reports written before schema 3.5.
     findings_unwritten: list[RuleName] = Field(default_factory=list)
+    #: Review remarks on individual rules. Empty for a run that wrote its own rules.
+    rule_feedback: list[RuleFeedback] = Field(default_factory=list)
+    #: Per spec, whether its confs together checked every rule on every method.
+    conf_coverage: list[ConfCoverage] = Field(default_factory=list)
+    #: Coverage scores computed over the specs, when the run produced any.
+    coverage_scores: list[SpecCoverageScore] = Field(default_factory=list)
+    #: Soundness of the scene the specs were verified against (evaluate run, when scene judging
+    #: ran). None for a run that did not assess the scene.
+    scene: SceneAssessment | None = None
+    #: Mutation testing of the specs (evaluate run, when mutation ran). None otherwise.
+    mutation: MutationReport | None = None

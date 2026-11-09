@@ -34,7 +34,7 @@ from composer.spec.service_host import ModelProvider
 from composer.spec.types import SourceIdentifier
 from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
-from .run_mode import RunMode
+from .run_mode import EXTERNAL_MODES, RunMode
 from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
@@ -288,6 +288,26 @@ class AtExit(Protocol):
     ) -> None:
         ...
 
+def verification_target(
+    project_root: pathlib.Path, relative_path: str, contract_name: str, run_mode: RunMode
+) -> tuple[str, str]:
+    """The contract the run analyses, as ``(relative path, contract name)``.
+
+    The Prover instantiates no parametric methods against a library, so verifying one
+    directly comes back vacuous with no error. A run that writes its own specs therefore
+    swaps in a generated harness here, ahead of SourceFields: every later phase (component
+    analysis, CVL authoring, the conf's verify target) has to agree on one contract name,
+    and AutoSetup keys its results by that name too.
+
+    An external mode measures the project's existing specs, which name the contract the
+    user asked for. It keeps the requested target: a harness would give the mode a
+    different main contract, and a failed harness build would stop a run that needs none.
+    """
+    if run_mode in EXTERNAL_MODES:
+        return relative_path, contract_name
+    return swap_library_main_contract_paths(project_root, relative_path, contract_name)
+
+
 @asynccontextmanager
 async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUnit](
     args: PipelineArgs,
@@ -321,13 +341,8 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
 
     relative_path = str(full_contract_path.relative_to(project_root))
 
-    # The Prover instantiates no parametric methods against a library, so verifying one
-    # directly comes back vacuous with no error. Swap in a generated harness here, ahead
-    # of SourceFields: every later phase — component analysis, CVL authoring, the conf's
-    # verify target — has to agree on one contract name, and AutoSetup keys its results
-    # by that name too.
-    relative_path, contract_name = swap_library_main_contract_paths(
-        project_root, relative_path, contract_name
+    relative_path, contract_name = verification_target(
+        project_root, relative_path, contract_name, run_mode
     )
 
     # Set up services.
@@ -475,6 +490,7 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                     threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
                     extra_context_digests=[d.to_digest() for d in extra_context],
                     interactive=args.interactive,
+                    max_bug_rounds=args.max_bug_rounds,
                     run_mode=run_mode.value,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(

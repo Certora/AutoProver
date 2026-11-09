@@ -7,11 +7,12 @@ traverses below the run root, in tree order::
     ├── {analysis key}                         SYSTEM_ANALYSIS_KEY  → ecosystem App model
     └── {properties key}                       PROPERTIES_KEY       → Properties
         ├── {unit digest}[-{plugin digest}]    COMPONENT_KEY        → ComponentGroup
-        │   ├── bug_analysis[|refine][-tm-…][-xc-…]
+        │   ├── bug_analysis[|refine][-tm-…][-xc-…][-es][-r{max rounds}]
         │   │                                  BUG_ANALYSIS_KEY     → _BugAnalysisCache
         │   │   └── agent_bug_analysis         AGENT_RESULT_KEY     → _AgentResult
-        │   │       └── round-{i}              AGENT_ROUND_KEY      → _AgentRoundWithHistory
-        │   ├── final_props[|refine][-tm-…][-xc-…]
+        │   │       └── round-{i}[-{earlier rounds digest}]
+        │   │                                  AGENT_ROUND_KEY      → _AgentRoundWithHistory
+        │   ├── final_props[|refine][-tm-…][-xc-…][-r{max rounds}][-mode-…]
         │   │                                  FINAL_PROPERTIES_KEY → FinalProperties
         │   └── {props digest}                 FORMALIZATION_KEY    → backend result (FormT)
         │       └── plugin-artifacts           PLUGIN_ARTIFACTS_KEY → RegisteredArtifacts
@@ -108,11 +109,13 @@ def _final_properties_key(
     with_refinement: bool,
     extra_context_digest: str | None,
     run_mode: RunModeName,
+    max_rounds: int | None = None,
 ) -> str:
-    # Parameterized exactly like BUG_ANALYSIS_KEY: the component namespace is
+    # Parameterized like BUG_ANALYSIS_KEY: the component namespace is
     # shared across runs, so the entry must be keyed by what distinguishes one
     # run's extraction from another's — a single fixed leaf would be
-    # last-write-wins across divergent runs.
+    # last-write-wins across divergent runs. The evaluate-mode notice that
+    # BUG_ANALYSIS_KEY marks with ``-es`` is covered here by the run mode.
     base_key = "final_props"
     if with_refinement:
         base_key += "|refine"
@@ -120,6 +123,8 @@ def _final_properties_key(
         base_key += "-tm-" + threat_model_digest
     if extra_context_digest is not None:
         base_key += "-xc-" + extra_context_digest
+    if max_rounds is not None:
+        base_key += f"-r{max_rounds}"
     if run_mode != "comprehensive":
         # A prioritized run writes a *pruned* batch under this component. Without the mode
         # in the key it would overwrite the comprehensive record at the same fixed leaf, and
