@@ -808,27 +808,6 @@ ones it was not, and say that the exclusion is the run's scope rather than a fin
 code. The run overview could say how many pursued properties were narrowed. This should ship with,
 or before, the first prioritized Solana runs that users see.
 
-**U51. A cloud job that never leaves the queue is reported as a failed job.** `cloud_results` polls
-a job for `runtime_bound + 5 min` (`prover/core.py`, `poll_timeout`), counted from submission, so
-queue time uses up the budget meant for the Prover's runtime. On the 2026-11-06 stake run
-(`70635f3a`) an EC2 throttling incident in us-west-2 kept job `01413cbd` `RUNNABLE` for over 25
-minutes. The poll timed out, `poll_job`'s `TimeoutError` became `CloudJobError(JobStatus.UNKNOWN)`,
-and the author was told "Prover cloud job did not produce results (status UNKNOWN). The job and its
-failure output are at …" (`cloud_job_failure_message`). Nothing says the job never started, so the
-author cannot tell an infrastructure delay from a halt on its own rules. It resubmitted, but it
-could as well have cut or weakened rules that were never run. The abandoned job is not cancelled,
-so it runs for nothing once capacity returns.
-
-The fix has three parts, all in shared code (`prover/cloud.py`, `prover/core.py`), so CVL runs get
-it too:
-
-- Count the runtime bound from the first `RUNNING` status. Bound queue time separately and
-  generously, or not at all.
-- Make "never started" an outcome of its own rather than `UNKNOWN`. The text should say how long the
-  job waited, that this is an infrastructure delay and not a verdict, and that the same draft should
-  be resubmitted unchanged.
-- Cancel a job the poll gives up on, if the cloud API allows it.
-
 U51 to U55 come from a prioritized benchmark run on a Solana lending program's liquidity layer
 (dev cloud, 2026-11-05): 53 rules, 20 Prover jobs, 6 of them halted. Each is general.
 
@@ -887,6 +866,56 @@ carries a reason meant for the project's owner, with each blocked item's problem
 The Solana executor (AIAutoProver `s3_autoprove_solana`) should write it where the workflow's
 status is shown, the same way a run's report is. This is the preflight counterpart of the deferred
 fix for a Prover job's FAILED reason.
+
+**U56. A cloud job that never leaves the queue is reported as a failed job.** `cloud_results` polls
+a job for `runtime_bound + 5 min` (`prover/core.py`, `poll_timeout`), counted from submission, so
+queue time uses up the budget meant for the Prover's runtime. On the 2026-11-06 stake run
+(`70635f3a`) an EC2 throttling incident in us-west-2 kept job `01413cbd` `RUNNABLE` for over 25
+minutes. The poll timed out, `poll_job`'s `TimeoutError` became `CloudJobError(JobStatus.UNKNOWN)`,
+and the author was told "Prover cloud job did not produce results (status UNKNOWN). The job and its
+failure output are at …" (`cloud_job_failure_message`). Nothing says the job never started, so the
+author cannot tell an infrastructure delay from a halt on its own rules. It resubmitted, but it
+could as well have cut or weakened rules that were never run. The abandoned job is not cancelled,
+so it runs for nothing once capacity returns.
+
+The fix has three parts, all in shared code (`prover/cloud.py`, `prover/core.py`), so CVL runs get
+it too:
+
+- Count the runtime bound from the first `RUNNING` status. Bound queue time separately and
+  generously, or not at all.
+- Make "never started" an outcome of its own rather than `UNKNOWN`. The text should say how long the
+  job waited, that this is an infrastructure delay and not a verdict, and that the same draft should
+  be resubmitted unchanged.
+- Cancel a job the poll gives up on, if the cloud API allows it.
+
+**U57. Programs on a zero-dependency framework (Pinocchio, jiminy) are refused in preflight.** A
+platform generation is recognised by a witness crate the package links, `solana-program` or
+`solana-account-info` ([reference.py](../composer/spec/cvlr/reference.py)). A program written on
+Pinocchio or jiminy links neither. Each framework brings its own entrypoint, account type and
+syscall bindings, and the `solana-*` crates in such a workspace are typically dev-dependencies for
+Mollusk tests. `select_package` therefore refuses the package: "on no Solana platform generation
+this build supports. It builds none of the platform crates that identify one." A dev-cloud run on
+2026-11-09 against a jiminy program stopped there, before any LLM call. The refusal is right for
+this build. Every reference set pins `cvlr-solana`, whose account helpers produce
+`solana-account-info`'s `AccountInfo`, and the scaffold, the prompts and the examples all assume
+that type. Nothing in this repo mentions either framework outside one benchmark note. New programs
+that care about compute units increasingly use these frameworks, so expect this refusal more often.
+
+Practitioners already verify Pinocchio code. The P-Token specs depend on `cvlr` alone, not
+`cvlr-solana`. They build nondet accounts themselves, transmuting a
+`CVT_nondet_solana_account_space` buffer into Pinocchio's `AccountInfo` (`cvlr_new_account_info`,
+`cvlr_deserialize_nondet_accounts_unchecked`). That works because Pinocchio's `AccountInfo` is a
+pointer into the runtime's serialized account. Whether jiminy's account type allows the same
+construction is unchecked. Support needs:
+
+- A platform generation per framework, with its witness (`pinocchio`, `jiminy-entrypoint`) and a
+  reference set of `cvlr` plus a shim for nondet accounts, instruction data and sysvars. Where the
+  shim lives is open: a `cvlr-solana` feature is the better home if more than one framework or
+  project needs it, the scaffold otherwise.
+- Prompts and examples written against the framework's account type rather than `AccountInfo`.
+- Before either: a refusal that names the framework. When the package links a known one, say that
+  Pinocchio or jiminy programs are not supported yet. Do not list generations the owner has no way
+  to move to. This is cheap, and it reaches users only once U55 lands.
 
 ## Leads from the certora-cvlr-kb ledger
 
