@@ -23,9 +23,10 @@ A document over budget is replaced by a short text block naming it, never an err
 
 Bedrock admits a request against the account's input-tokens-per-minute quota by its input
 tokens plus its ``max_tokens``, before the model has produced anything. A ``max_tokens``
-far above what a turn really produces therefore throttles a run long before its real usage
-reaches the quota. ``AUTOPROVER_BEDROCK_MAX_TOKENS`` (default 64,000) caps ``max_tokens``
-on Bedrock requests; see :data:`DEFAULT_MAX_TOKENS`.
+far above what a turn really produces therefore throttles a run before its real usage
+reaches the quota. ``AUTOPROVER_BEDROCK_MAX_TOKENS`` (default 128,000) caps ``max_tokens``
+on Bedrock requests, so an account with a small quota can reserve less per request; see
+:data:`DEFAULT_MAX_TOKENS`.
 
 Transient failures are retried, deterministic ones are not (see
 :meth:`composer.llm.anthropic.AnthropicService.should_retry`). Besides the HTTP statuses the
@@ -123,18 +124,17 @@ def max_request_bytes() -> int:
 
 
 MAX_TOKENS_ENV_VAR = "AUTOPROVER_BEDROCK_MAX_TOKENS"
-DEFAULT_MAX_TOKENS = 64_000
+DEFAULT_MAX_TOKENS = 128_000
 """The ``max_tokens`` cap on Bedrock requests when ``AUTOPROVER_BEDROCK_MAX_TOKENS`` is unset.
 
 A turn's output is its thinking plus its visible text and tool calls. On models before 4.6
 thinking takes a fixed budget, ``--thinking-tokens`` (16,384 by default), which has to stay
 below ``max_tokens``; on 4.6 and later thinking is adaptive and bounded only by
-``max_tokens``. The longest visible output a composer turn produces is a tool call carrying a
-whole spec or harness file, a few thousand to some tens of thousands of tokens. 64,000 holds
-the default thinking budget plus about 47,000 tokens of such output, and is Anthropic's
-suggested ``max_tokens`` for streamed requests; it reserves half the quota that the
-128,000-token default would. A turn that reaches the cap ends with ``stop_reason``
-``max_tokens``, so a lower cap trades quota for a higher chance of a cut-off turn."""
+``max_tokens``, so one turn of a property-writing agent can produce well over 100,000 tokens.
+The default matches composer's own 128,000 and the model limit, so by default no turn is cut
+off earlier on Bedrock than on the Anthropic API. Bedrock reserves ``max_tokens`` against the
+input-token quota when it admits a request; lowering this setting reserves less quota per
+request, at the price of turns that end with ``stop_reason`` ``max_tokens``."""
 
 
 def max_output_tokens() -> int:

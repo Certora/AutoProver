@@ -190,7 +190,7 @@ Anthropic API, so `ANTHROPIC_API_KEY` is required with either backend.
 |---|---|---|
 | `AUTOPROVER_LLM_BACKEND` | `anthropic` | `anthropic` or `bedrock`. Case and surrounding spaces are ignored; any other value stops the run when a model is built. |
 | `AWS_REGION` (or `AWS_DEFAULT_REGION`) | none | The Bedrock region. Required for `bedrock`: without it the run stops when a model is built. |
-| `AUTOPROVER_BEDROCK_MAX_TOKENS` | `64000` | Upper limit on `max_tokens` in a Bedrock request. A lower value is used unchanged. |
+| `AUTOPROVER_BEDROCK_MAX_TOKENS` | `128000` | Upper limit on `max_tokens` in a Bedrock request. A lower value is used unchanged. |
 | `AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES` | `8000000` | Largest base64 size of one document sent inline. |
 | `AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES` | `16000000` | Largest size of a whole serialized request. |
 
@@ -210,8 +210,9 @@ the Anthropic model ids (`claude-opus-5-5`). Only the request sent to Bedrock ca
 Bedrock id to `--model`.
 
 **max_tokens.** Bedrock reserves a request's `max_tokens` against the account's tokens-per-minute quota before the
-model answers, so an oversized `max_tokens` throttles a run long before its real usage reaches the quota. Bedrock
-requests therefore cap `max_tokens` at `AUTOPROVER_BEDROCK_MAX_TOKENS`. A turn that reaches the cap is cut off.
+model answers, so an oversized `max_tokens` throttles a run before its real usage reaches the quota. Bedrock
+requests cap `max_tokens` at `AUTOPROVER_BEDROCK_MAX_TOKENS`. The default, 128000, is the same as on the Anthropic API.
+If the quota is small, a lower value reserves less quota per request, but a turn that reaches the cap is cut off.
 
 **PDFs and other files.** Bedrock has no Files API. On Bedrock, a PDF design document (or any other binary file the
 pipeline gives the model) is sent inline as base64 in every request of the conversation that carries it, with its
