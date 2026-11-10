@@ -13,12 +13,15 @@ dropped from its unit. A unit-local property stays where it is.
 Usually a group's shared property is one of its members, exactly as extracted. Extraction is not
 reliable about stating a claim whole, though: one run stated lamport conservation once over every
 instruction, the next only per instruction group. So when no member states the whole claim, the
-model may write one property that is exactly the conjunction of its members, over the union of the
-entry points they name. Validation holds it to that union, and :class:`Hoisted` records which
-shared properties were written here rather than extracted. Like :mod:`composer.spec.prioritize`,
-this is one structured call validated in Python.
-Unlike prioritization, a plan that will not validate does not fail the run: the caller formalizes
-the units unhoisted, which costs duplicate work and loses nothing.
+model may write one property that is exactly the conjunction of its members. Validation holds it
+to its members: it names no entry point none of them names, keeps one of every member's, and spans
+more than one component. Not the exact union, because a member also names the instructions it
+excludes ("every handler except `delegate_stake`"). :class:`Hoisted` records which shared properties
+were written here rather than extracted. Like :mod:`composer.spec.prioritize`, this is one
+structured call validated in Python.
+Unlike prioritization, a plan that will not validate does not fail the run: its valid groups are
+kept (:func:`salvage`), and with none the caller formalizes the units unhoisted, which costs
+duplicate work and loses nothing.
 """
 
 import logging

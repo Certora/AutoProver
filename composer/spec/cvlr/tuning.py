@@ -183,6 +183,16 @@ def compose_env(
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"
 
 
+def extend_composite(package_composite: str, unit_layer: str) -> str:
+    """A unit's composite, from the package composite the scaffold wrote and the unit's layer.
+
+    The same text as :func:`compose_env` with ``unit_layer``, for a caller that has the package
+    composite on disk but not the dialect it was spelled in."""
+    if not unit_layer:
+        return package_composite
+    return package_composite.rstrip("\n") + "\n" + unit_layer.rstrip("\n") + "\n"
+
+
 #: A summary body. A ``#[type(...)]`` annotation is optional. Omitting it means
 #: the return is unconstrained, which is the usual case for a formatting path
 #: nothing asserts over.
@@ -279,6 +289,16 @@ class TuningFiles:
             for family in ENV_FAMILIES
             if not (self.envs_dir / family.composite).is_file()
         )
+
+
+def layer_patterns(layer: str) -> tuple[str, ...]:
+    """The symbol patterns in a summaries layer written as :func:`render_layer` writes one: every
+    line that is not a ``;`` comment or a ``#[type(...)]`` annotation."""
+    return tuple(
+        line
+        for raw in layer.splitlines()
+        if (line := raw.strip()) and not line.startswith((";", "#["))
+    )
 
 
 def merge_summaries(

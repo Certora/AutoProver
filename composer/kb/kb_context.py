@@ -120,7 +120,7 @@ def kb_loader[C: str](recipes: RecipeSet[C]) -> Callable[[str], str | None]:
     return loader
 
 
-def _recipe_index_document[C: str](label: str, recipes: RecipeSet[C]) -> str:
+def recipe_index_document[C: str](label: str, recipes: RecipeSet[C]) -> str:
     model = _kb_model(recipes)
     params: RecipeIndexParams = {
         "kb_retrieval_name": recipes.tool_name,
@@ -131,6 +131,12 @@ def _recipe_index_document[C: str](label: str, recipes: RecipeSet[C]) -> str:
     return recipes.index_template.bind(params).render_to(load_jinja_template)
 
 
+def recipe_bodies[C: str](recipes: RecipeSet[C]) -> dict[str, str]:
+    """Every recipe's body, keyed by its retrieval id, for a reader outside AutoProver."""
+    kb_resource_dir = files() / "resources"
+    return {r.id: (kb_resource_dir / r.file).read_text() for r in _kb_model(recipes).recipes}
+
+
 @cache
 def context_documents[C: str](bundle: KnowledgeBundle[C]) -> tuple[str, ...]:
     """The bundle's documents, the recipe index last. The index is appended rather than listed
@@ -138,7 +144,7 @@ def context_documents[C: str](bundle: KnowledgeBundle[C]) -> tuple[str, ...]:
     titled = [(s.title, s.loader()) for s in bundle.specs]
     if bundle.recipes is not None:
         titled.append(
-            (f"{bundle.label} Recipes", _recipe_index_document(bundle.label, bundle.recipes))
+            (f"{bundle.label} Recipes", recipe_index_document(bundle.label, bundle.recipes))
         )
     return tuple(
         f"""

@@ -837,6 +837,31 @@ async def run_prover(
         ProverReport — rule outcomes and the rendered report text
         str — error message
     """
+    job = await submit_prover_job(folder, args, prover_opts, callbacks)
+    if isinstance(job, str):
+        return job
+    return await collect_prover_results(job, tool_call_id, prover_opts, callbacks, cex)
+
+
+@dataclass(frozen=True)
+class SubmittedJob:
+    """A job certoraRun accepted. On the cloud path nothing has been waited for yet."""
+
+    link: str
+    is_local_link: bool
+    #: certoraRun's output from the submission. Empty for a job known only by its link.
+    stdout: str = ""
+    #: The submission's wall-clock, which is the run time of a local job.
+    local_runtime_ms: int = 0
+
+
+async def submit_prover_job(
+    folder: Path,
+    args: list[str],
+    prover_opts: ProverOptions,
+    callbacks: ProverCallbacks,
+) -> SubmittedJob | str:
+    """Run certoraRun up to the job link. Returns an error message as a string."""
 
     # 1. Build effective args.
     effective_args = args + prover_opts.cli_args()
@@ -891,18 +916,35 @@ async def run_prover(
     assert run_result is not None and run_result["sort"] == "success" and run_result["link"] is not None
 
     await callbacks.on_prover_link(run_result["link"])
+    return SubmittedJob(
+        link=run_result["link"],
+        is_local_link=run_result["is_local_link"],
+        stdout=stdout,
+        local_runtime_ms=local_runtime_ms,
+    )
 
+
+async def collect_prover_results(
+    job: SubmittedJob,
+    tool_call_id: str,
+    prover_opts: ProverOptions,
+    callbacks: ProverCallbacks,
+    cex: CexHandler | None,
+) -> ProverReport | str:
+    """Wait for a submitted job's verdicts, then parse and report them. Returns an error message
+    as a string, like :func:`run_prover`."""
+    stdout = job.stdout
     # 7. Result retrieval: cloud vs local
     if prover_opts.cloud:
         results_cm = cloud_results(
-            run_result["link"],
+            job.link,
             poll_callback=callbacks.on_cloud_poll,
             poll_timeout=prover_opts.runtime_bound + 5 * 60,
         )
     else:
-        if not run_result["is_local_link"]:
+        if not job.is_local_link:
             return f"Prover did not produce local results.\nstdout:\n{stdout}"
-        results_cm = _local_results(Path(run_result["link"]), local_runtime_ms)
+        results_cm = _local_results(Path(job.link), job.local_runtime_ms)
 
     # 8. Parse results + run analysis. Both happen inside ``results_cm`` so
     # the report directory (which contains ``inputs/.certora_sources`` —
@@ -981,6 +1023,6 @@ async def run_prover(
         alerts=alerts,
         incomplete=incomplete,
         result_str=result_str,
-        link=run_result["link"],
+        link=job.link,
         certora_run_stdout=stdout,
     )

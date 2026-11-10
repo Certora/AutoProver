@@ -34,7 +34,9 @@ from composer.prover.core import (
     ProverCallbacks,
     ProverOptions,
     ProverReport,
+    SubmittedJob,
     run_prover,
+    submit_prover_job,
 )
 from composer.prover.conf import InheritRules, RuleSelection, dump_conf
 from composer.spec.cvlr.conf import (
@@ -234,3 +236,23 @@ async def submit(
         cex=cex,
         tool_call_id=tool_call_id,
     )
+
+
+async def start_submission(
+    prepared: Prepared,
+    *,
+    prover_opts: ProverOptions,
+    callbacks: ProverCallbacks | None = None,
+) -> SubmittedJob | SubmissionFailed:
+    """Hand the conf to the prover and return once the job is accepted, without waiting for it.
+
+    The crate is free again when this returns (:func:`prepare_submission`)."""
+    job = await submit_prover_job(
+        prepared.session.workdir,
+        [str(prepared.conf_path)],
+        prover_opts,
+        callbacks if callbacks is not None else ProverCallbacks(),
+    )
+    if isinstance(job, str):
+        return SubmissionFailed(prepared.build, job)
+    return job

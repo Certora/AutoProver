@@ -867,7 +867,38 @@ The Solana executor (AIAutoProver `s3_autoprove_solana`) should write it where t
 status is shown, the same way a run's report is. This is the preflight counterpart of the deferred
 fix for a Prover job's FAILED reason.
 
-**U56. A cloud job that never leaves the queue is reported as a failed job.** `cloud_results` polls
+**U56. An invariant one unit proves cannot be assumed by another.** Each unit's harness module is
+declared behind its own cargo feature (`harness.declare_modules`), so units build in isolation and
+one unit's broken draft cannot break a sibling's build. The same isolation keeps every predicate in
+its unit. A component cannot call the protocol unit's invariant, and nothing tells its author which
+invariants have been proved. Hoisting (`composer/spec/hoist.py`) moves a property several
+components state into the shared "Protocol invariants" unit and dispatches that unit first. But the
+hoisted claims reach only the report (`HoistedClaim`), and dispatching first is scheduling, not a
+dependency. So a component that needs solvency to exclude an unproduced pre-state (U36) proves it
+again, or falls back to U37's second and third remedies, a justification rule or a bare
+`cvlr_assume!`, for a fact another unit may already have proved.
+
+The CVL skill has the shape that fixes it: `invariants.spec` is proved before any component,
+changed only at a barrier, and imported by every spec. For CVLR:
+
+- An `invariants` module under `specs/`, gated on `certora` rather than a unit feature, so every
+  unit's build compiles it. Its invariants are proved as U37 describes, with the writers listed
+  across the whole program, not one component, and a gate of every base case and step VERIFIED,
+  none expected-to-fail.
+- The unit that writes it runs to that gate before the others start. That makes the staged
+  formalizer order a dependency, not a queue position. A later unit's request for a new invariant
+  goes through the staging writer, then the gate runs again before any unit uses it.
+- Each later unit's prompt lists the proved predicates and the step rules behind each. The judge
+  rejects a `cvlr_assume!` of a shared predicate that did not prove.
+- The shared module owns the trait impls its invariants need. Units are never compiled together
+  today, so two can each write `impl Nondet for Pool`. With a module every unit compiles, a unit
+  that repeats one of its impls fails with `E0119`.
+
+U37's recipe has not yet been exercised by a run, so this is worth building after the first run
+that proves an invariant, not before. `docs/cvlr-skill-plan.md` designs the same module for the
+Solana skill, where the orchestrator plays the staging writer.
+
+**U57. A cloud job that never leaves the queue is reported as a failed job.** `cloud_results` polls
 a job for `runtime_bound + 5 min` (`prover/core.py`, `poll_timeout`), counted from submission, so
 queue time uses up the budget meant for the Prover's runtime. On the 2026-11-06 stake run
 (`70635f3a`) an EC2 throttling incident in us-west-2 kept job `01413cbd` `RUNNABLE` for over 25
@@ -888,7 +919,7 @@ it too:
   be resubmitted unchanged.
 - Cancel a job the poll gives up on, if the cloud API allows it.
 
-**U57. Programs on a zero-dependency framework (Pinocchio, jiminy) are refused in preflight.** A
+**U58. Programs on a zero-dependency framework (Pinocchio, jiminy) are refused in preflight.** A
 platform generation is recognised by a witness crate the package links, `solana-program` or
 `solana-account-info` ([reference.py](../composer/spec/cvlr/reference.py)). A program written on
 Pinocchio or jiminy links neither. Each framework brings its own entrypoint, account type and

@@ -7,6 +7,7 @@ program's own file reaches into ``specs``
 (:func:`composer.spec.cvlr.scaffold._harness_files`).
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import override
@@ -155,27 +156,46 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
         return written
 
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
-        """Write ``specs/mod.rs``, with every unit's module behind its cargo feature.
+        """Write ``specs/mod.rs`` naming every unit (:func:`declare_modules`).
 
-        Called once, before any unit stages a draft, so the file names every unit.
-        rustc does not read a module whose ``cfg`` is disabled, and that module
-        does not enter dep-info: a missing file does not fail another unit's
-        build, and one unit's draft does not rebuild another's. The units are
-        never compiled together, so two ``impl Nondet for Foo`` do not collide
-        (``E0119``).
-
-        Names are unique. Component analysis rejects sibling components whose
-        slugs collide.
+        Called once, before any unit stages a draft, so the file names every unit. Names are
+        unique: component analysis rejects sibling components whose slugs collide.
         """
-        target = self._artifact_dir()
-        declarations = "".join(
-            f'#[cfg(feature = "{m.feature}")]\npub mod {m.module};\n'
-            for m in sorted(modules, key=lambda m: m.module)
-        )
-        mod_rs = target / "mod.rs"
-        mod_rs.write_text(
-            "//! The rules. One module per unit, each gated on its own cargo feature, so a\n"
-            "//! build selects exactly one unit's rules.\n"
-            "\n" + declarations
-        )
-        return (mod_rs,)
+        return (declare_modules(self._artifact_dir(), modules),)
+
+
+#: The module a skill run states its structural invariants in, compiled whenever the ``certora``
+#: feature is on, so every unit's rules can assume them. The rules that prove them are a unit of
+#: their own (:data:`composer.spec.cvlr.skill.INVARIANT_RULES`).
+SHARED_INVARIANTS = "invariants"
+
+
+def declare_modules(
+    specs_dir: Path, units: Sequence[HarnessModule], *, shared: Sequence[str] = ()
+) -> Path:
+    """Write ``specs_dir/mod.rs``: every unit's module behind its cargo feature, and each module in
+    ``shared`` ungated.
+
+    rustc does not read a module whose ``cfg`` is disabled, and that module does not enter
+    dep-info: a missing file does not fail another unit's build, and one unit's draft does not
+    rebuild another's. The units are never compiled together, so two ``impl Nondet for Foo`` do
+    not collide (``E0119``). A shared module is compiled with every unit, so a trait impl it makes
+    is one no unit may repeat.
+
+    Raises :class:`ValueError` when a unit and a shared module have the same name.
+    """
+    if clashes := sorted({u.module for u in units} & set(shared)):
+        raise ValueError(f"a unit module has the name of a shared module: {', '.join(clashes)}")
+    declarations = "".join(f"pub mod {m};\n" for m in sorted(shared)) + "".join(
+        f'#[cfg(feature = "{m.feature}")]\npub mod {m.module};\n'
+        for m in sorted(units, key=lambda m: m.module)
+    )
+    header = (
+        "//! The rules. One module per unit, each gated on its own cargo feature, so a\n"
+        "//! build selects exactly one unit's rules.\n"
+    )
+    if shared:
+        header += "//! The ungated modules are compiled with every unit.\n"
+    mod_rs = specs_dir / "mod.rs"
+    mod_rs.write_text(header + "\n" + declarations)
+    return mod_rs
