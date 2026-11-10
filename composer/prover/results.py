@@ -470,17 +470,52 @@ class Hotspot:
 
 
 @dataclass(frozen=True)
+class StaticAnalysis:
+    """The rule never reached the solver: the program it drives is too large to encode."""
+
+    def render(self) -> str:
+        return "static analysis (the rule did not reach the solver)"
+
+
+@dataclass(frozen=True)
+class Solving:
+    attempted: int
+    #: The total weight of the splits proved, in percent.
+    proved: int
+    depth: int
+    max_depth: int
+
+    def render(self) -> str:
+        return (
+            f"solving (splits attempted {self.attempted}, {self.proved} % proved, "
+            f"splitting depth {self.depth} of {self.max_depth})"
+        )
+
+
+@dataclass(frozen=True)
+class OtherPhase:
+    """A phase this build does not recognise, in the Prover's words with line breaks collapsed."""
+
+    detail: str
+
+    def render(self) -> str:
+        return self.detail
+
+
+type VerificationPhase = StaticAnalysis | Solving | OtherPhase
+
+
+@dataclass(frozen=True)
 class RuleStatistics:
     """Where an unfinished rule stood, from the Prover's ``rule_live_statistics_*.json``."""
 
-    #: The Prover's verification phase, with its line breaks collapsed.
-    phase: str
+    phase: VerificationPhase
     path_count: str | None
     branching: tuple[Hotspot, ...]
     nonlinear: tuple[Hotspot, ...]
 
     def render(self, top: int = 2) -> str:
-        parts = [self.phase]
+        parts = [self.phase.render()]
         if self.path_count is not None:
             parts.append(f"path count {self.path_count}")
         for what, spots in (("branching", self.branching), ("nonlinear ops", self.nonlinear)):
@@ -518,17 +553,14 @@ _SPLITS = re.compile(
 )
 
 
-def _phase(label: str) -> str:
+def _phase(label: str) -> VerificationPhase:
     detail = " ".join(label.removeprefix(_PHASE_PREFIX).split())
     if detail == "static analysis":
-        return "static analysis (the rule did not reach the solver)"
+        return StaticAnalysis()
     if (splits := _SPLITS.fullmatch(detail)) is not None:
-        attempted, proved, depth, max_depth = splits.groups()
-        return (
-            f"solving (splits attempted {attempted}, {proved} % proved, "
-            f"splitting depth {depth} of {max_depth})"
-        )
-    return detail
+        attempted, proved, depth, max_depth = (int(g) for g in splits.groups())
+        return Solving(attempted, proved, depth, max_depth)
+    return OtherPhase(detail)
 
 
 def parse_rule_statistics(text: str) -> RuleStatistics | None:
@@ -540,7 +572,7 @@ def parse_rule_statistics(text: str) -> RuleStatistics | None:
     if not isinstance(sections, list):
         return None
     by_label: dict[str, dict] = {}
-    phase: str | None = None
+    phase: VerificationPhase | None = None
     for section in sections:
         if not isinstance(section, dict) or not isinstance(label := section.get("label"), str):
             continue

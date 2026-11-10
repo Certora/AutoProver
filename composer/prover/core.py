@@ -29,7 +29,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Protocol, cast, override, Awaitable
+from typing import Any, AsyncIterator, Callable, Mapping, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
 import json
 import logging
@@ -67,6 +67,7 @@ from composer.prover.results import (
     UnreadableAlertReport,
     read_alert_report,
     read_and_format_run_result,
+    RuleStatistics,
     read_rule_statistics,
 )
 from composer.templates.loader import load_jinja_template
@@ -169,6 +170,10 @@ class ProverReport:
     incomplete: dict[RulePath, IncompleteCheck] = field(default_factory=dict)
     #: What the Prover said about each instance that ended in ``ERROR``.
     errors: dict[RulePath, list[ProverMessage]] = field(default_factory=dict)
+    #: Where each ``TIMEOUT`` instance stood when it was stopped, for those with statistics.
+    statistics: dict[RulePath, RuleStatistics] = field(default_factory=dict)
+    #: The job hit its time limit, so the rules it had not finished are ``TIMEOUT``.
+    halted: bool = False
 
     def rule_outcomes(self) -> dict[str, StatusCodes]:
         """One status per rule. A non-``VERIFIED`` instance is kept over a later ``VERIFIED`` one."""
@@ -756,18 +761,26 @@ _STUCK_HEADING = (
 )
 
 
-def _stuck_note(results: list[RuleResult], tree_view_dir: Path) -> str | None:
-    """One line per ``TIMEOUT`` rule with statistics: its phase, path count and hotspots."""
-    lines: list[str] = []
+def _timeout_statistics(
+    results: list[RuleResult], tree_view_dir: Path
+) -> dict[RulePath, RuleStatistics]:
+    """Where each ``TIMEOUT`` instance with statistics stood when it was stopped."""
+    found: dict[RulePath, RuleStatistics] = {}
     for result in results:
         if result.status != "TIMEOUT" or result.live_check_info is None:
             continue
-        stats = read_rule_statistics(tree_view_dir, result.live_check_info)
-        if stats is not None:
-            lines.append(f"* {result.name}: {stats.render()}")
-    if not lines:
+        if (stats := read_rule_statistics(tree_view_dir, result.live_check_info)) is not None:
+            found[result.path] = stats
+    return found
+
+
+def _stuck_note(statistics: Mapping[RulePath, RuleStatistics]) -> str | None:
+    """One line per timed-out instance: its phase, path count and hotspots."""
+    if not statistics:
         return None
-    return "\n".join([_STUCK_HEADING, *lines])
+    return "\n".join(
+        [_STUCK_HEADING, *(f"* {path.pprint()}: {stats.render()}" for path, stats in statistics.items())]
+    )
 
 
 def _failure_advice(alerts: tuple[ErrorAlert, ...]) -> str:
@@ -994,7 +1007,8 @@ async def collect_prover_results(
                     rule_entries=[(r, None) for r in all_results],
                     diagnoses=[],
                 )
-            if (stuck := _stuck_note(all_results, emv_path / "Reports" / "treeView")) is not None:
+            statistics = _timeout_statistics(all_results, emv_path / "Reports" / "treeView")
+            if (stuck := _stuck_note(statistics)) is not None:
                 result_str = f"{result_str}\n\n{stuck}"
             if fetched.halted:
                 result_str = f"{_HALTED_NOTE}\n\n{result_str}"
@@ -1026,6 +1040,8 @@ async def collect_prover_results(
         alerts=alerts,
         incomplete=incomplete,
         errors={r.path: r.messages for r in parsed.values() if r.status == "ERROR"},
+        statistics=statistics,
+        halted=fetched.halted,
         result_str=result_str,
         link=job.link,
         certora_run_stdout=stdout,

@@ -37,11 +37,20 @@ from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
 from composer.cargo.symbols import SymbolsUnavailable, nearest, prover_function_names, unmatched
-from composer.kb.kb_context import Symptom, pushed_recipes
+from composer.kb.kb_context import (
+    ErrorSymptom,
+    GeneratedSymptom,
+    JobSymptom,
+    StatusSymptom,
+    Symptom,
+    TimeoutSymptom,
+    pushed_recipes,
+)
 from composer.prover.cloud import results_api
 from composer.prover.core import (
     CexHandler,
     ProverOptions,
+    ProverReport,
     TrivialFanoutCexHandler,
 )
 from composer.prover.ptypes import (
@@ -49,13 +58,12 @@ from composer.prover.ptypes import (
     GeneratedKind,
     IncompleteCheck,
     PropertyViolation,
-    ProverMessage,
     RuleResult,
     StatusCodes,
     classify_violation,
 )
 from composer.prover.accounting import RunAccounting
-from composer.prover.results import AlertReport, UnreadableAlertReport
+from composer.prover.results import AlertReport, StaticAnalysis, UnreadableAlertReport
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
@@ -421,21 +429,39 @@ class VerifyDeps:
         )
 
 
+def symptoms(report: ProverReport) -> set[Symptom]:
+    """What in ``report`` a recipe can be pushed on."""
+    found: set[Symptom] = {
+        GeneratedSymptom(generated=check.kind)
+        for check in report.incomplete.values()
+        if isinstance(check.kind, GeneratedKind)
+    }
+    found |= {
+        ErrorSymptom(error=message.code)
+        for messages in report.errors.values()
+        for message in messages
+        if isinstance(message.code, AnalysisErrorKind)
+    }
+    if "SANITY_FAILED" in report.raw_rule_status.values():
+        found.add(StatusSymptom(status="SANITY_FAILED"))
+    if any(isinstance(stats.phase, StaticAnalysis) for stats in report.statistics.values()):
+        found.add(TimeoutSymptom(timeout="static analysis"))
+    if report.halted:
+        found.add(JobSymptom(job="halted"))
+    return found
+
+
 def _verdicts_note(
     status: Mapping[str, StatusCodes],
     incomplete: Mapping[str, IncompleteCheck],
     unexcused: Sequence[str],
     unverdicted: list[str],
     *,
-    errors: Collection[ProverMessage] = (),
+    symptoms: Collection[Symptom] = (),
     stamped: bool,
 ) -> str:
     """The author's notes on this run's verdicts, or an empty string when there are none."""
     ordered = sorted(incomplete.items())
-    symptoms: set[Symptom] = {
-        stopped.kind for _, stopped in ordered if isinstance(stopped.kind, GeneratedKind)
-    }
-    symptoms |= {e.code for e in errors if isinstance(e.code, AnalysisErrorKind)}
     return _Verdicts.bind({
         "marked_verified": [name for name in unexcused if status[name] == "VERIFIED"],
         "incomplete": [{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
@@ -822,7 +848,7 @@ class VerifyRules(
                     incomplete,
                     unaccounted(status, expected, incomplete),
                     unverdicted,
-                    errors=[m for messages in report.errors.values() for m in messages],
+                    symptoms=symptoms(report),
                     stamped=stamped,
                 )
                 if note:

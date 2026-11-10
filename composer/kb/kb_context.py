@@ -5,6 +5,7 @@ from functools import cache
 from importlib.resources import files
 from dataclasses import dataclass
 from pydantic import BaseModel, ConfigDict, Field, BeforeValidator
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 import yaml
 
 from graphcore.graph import CacheMarker
@@ -213,38 +214,53 @@ def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
 type CvlrChannel = Literal["RULE", "MOCK", "EDIT", "CONF", "SKIP"]
 
 
-#: What ``verify_rules`` can recognise in a result: a generated assertion's kind, or an error's code.
-type Symptom = GeneratedKind | AnalysisErrorKind
+_SYMPTOM = ConfigDict(extra="forbid")
 
 
-class GeneratedSymptom(BaseModel):
+@pydantic_dataclass(frozen=True, config=_SYMPTOM)
+class GeneratedSymptom:
     """A rule stopped on an assertion the Prover generated, of this kind."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     generated: GeneratedKind
 
-    @property
-    def symptom(self) -> Symptom:
-        return self.generated
 
-
-class ErrorSymptom(BaseModel):
+@pydantic_dataclass(frozen=True, config=_SYMPTOM)
+class ErrorSymptom:
     """A rule ended in an error with this code, written as the number (``error: 3308``)."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
 
     error: AnalysisErrorKind
 
-    @property
-    def symptom(self) -> Symptom:
-        return self.error
+
+@pydantic_dataclass(frozen=True, config=_SYMPTOM)
+class StatusSymptom:
+    """A rule came back with this status."""
+
+    status: Literal["SANITY_FAILED"]
+
+
+@pydantic_dataclass(frozen=True, config=_SYMPTOM)
+class TimeoutSymptom:
+    """A rule timed out in this phase."""
+
+    timeout: Literal["static analysis"]
+
+
+@pydantic_dataclass(frozen=True, config=_SYMPTOM)
+class JobSymptom:
+    """The job as a whole ended this way."""
+
+    job: Literal["halted"]
+
+
+#: What ``verify_rules`` can recognise in a result, and so what a recipe can be pushed on. A value
+#: is equal to the index entry that names it, which is how a result finds its recipes.
+type Symptom = GeneratedSymptom | ErrorSymptom | StatusSymptom | TimeoutSymptom | JobSymptom
 
 
 class CvlrRecipe(KBRecipe[CvlrChannel]):
     #: The symptoms that make ``verify_rules`` attach this recipe's body to its result, so the
     #: author gets it without having to recognise the situation.
-    pushed_on: list[GeneratedSymptom | ErrorSymptom] = Field(default_factory=list)
+    pushed_on: list[Symptom] = Field(default_factory=list)
 
 
 CVLR_RECIPES = RecipeSet[CvlrChannel, CvlrRecipe](
@@ -276,7 +292,7 @@ def pushed_recipes(symptoms: Collection[Symptom]) -> list[str]:
     return [
         (kb_resource_dir / r.file).read_text()
         for r in _kb_model(CVLR_RECIPES).recipes
-        if any(s.symptom in symptoms for s in r.pushed_on)
+        if any(s in symptoms for s in r.pushed_on)
     ]
 
 

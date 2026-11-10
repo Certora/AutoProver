@@ -21,13 +21,27 @@ from types import SimpleNamespace
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-from composer.prover.core import _incomplete
+from composer.prover.core import ProverReport, _incomplete
 from composer.prover.ptypes import GeneratedKind, IncompleteCheck, RulePath, RuleResult, StatusCodes
-from composer.prover.results import SOLANA_TRACE, counterexample, prover_message
+from composer.prover.results import (
+    SOLANA_TRACE,
+    RuleStatistics,
+    Solving,
+    StaticAnalysis,
+    VerificationPhase,
+    counterexample,
+    prover_message,
+)
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.pipeline import CvlrFormalizer
 from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
-from composer.spec.cvlr.verify import BuildPermit, _CaptureCallbacks, _verdicts_note, unaccounted
+from composer.spec.cvlr.verify import (
+    BuildPermit,
+    _CaptureCallbacks,
+    _verdicts_note,
+    symptoms,
+    unaccounted,
+)
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 FIXTURES = Path(__file__).parent / "data" / "solana_cex"
@@ -208,9 +222,40 @@ def test_a_genuine_expected_failure_still_satisfies_the_gate():
     assert unaccounted(status, expected, ()) == []
 
 
-def _note(**incomplete: IncompleteCheck) -> str:
+def _report_note(report: ProverReport) -> str:
+    """The note ``verify_rules`` writes for ``report`` when nothing is marked expected-to-fail."""
+    status = report.rule_outcomes()
+    incomplete = {path.rule: check for path, check in report.incomplete.items()}
     return _verdicts_note(
-        {name: "VIOLATED" for name in incomplete}, incomplete, [], [], stamped=False
+        status, incomplete, sorted(status), [], symptoms=symptoms(report), stamped=False
+    )
+
+
+def _report(status: dict[str, StatusCodes], **fields) -> ProverReport:
+    return ProverReport(
+        raw_rule_status={RulePath(rule=name): code for name, code in status.items()},
+        result_str="",
+        link="L",
+        certora_run_stdout="",
+        **fields,
+    )
+
+
+def _note(**incomplete: IncompleteCheck) -> str:
+    return _report_note(
+        _report(
+            {name: "VIOLATED" for name in incomplete},
+            incomplete={RulePath(rule=name): check for name, check in incomplete.items()},
+        )
+    )
+
+
+def _errored(**messages: str) -> str:
+    return _report_note(
+        _report(
+            {name: "ERROR" for name in messages},
+            errors={RulePath(rule=name): [prover_message(m)] for name, m in messages.items()},
+        )
     )
 
 
@@ -248,31 +293,36 @@ def test_the_gate_gives_each_kind_its_remedy_once():
 
 def test_the_gate_pushes_the_pointer_analysis_recipe_on_an_error_code():
     """An ERROR carries no counterexample, so its code is the only thing a recipe can be keyed on."""
-    note = _verdicts_note(
-        {"r": "ERROR", "s": "ERROR"},
-        {},
-        ["r", "s"],
-        [],
-        errors=[
-            prover_message("[3308] illegal dereference of an absolute address"),
-            prover_message("In s: [3006] illegal store of a stack pointer"),
-        ],
-        stamped=False,
+    note = _errored(
+        r="[3308] illegal dereference of an absolute address",
+        s="In s: [3006] illegal store of a stack pointer",
     )
     assert note.count("### K10.") == 1
     assert "### K11." not in note
 
 
 def test_the_gate_pushes_the_sizing_recipe_on_a_dynamic_memcpy():
-    note = _verdicts_note(
-        {"r": "ERROR"}, {}, ["r"], [],
-        errors=[prover_message("[3005] memcpy with dynamically sized length")], stamped=False,
-    )
+    note = _errored(r="[3005] memcpy with dynamically sized length")
     assert "### K11." in note and "### K10." not in note
 
 
 def test_an_error_with_no_listed_code_pushes_nothing():
-    note = _verdicts_note(
-        {"r": "ERROR"}, {}, ["r"], [], errors=[prover_message("Rule r timed-out")], stamped=False
-    )
-    assert "### K" not in note
+    assert "### K" not in _errored(r="Rule r timed-out")
+
+
+def test_the_gate_pushes_the_vacuity_recipe_on_a_sanity_failure():
+    assert "### K12." in _report_note(_report({"r": "SANITY_FAILED", "s": "VERIFIED"}))
+
+
+def test_the_gate_pushes_the_stand_in_recipe_on_a_rule_that_never_reached_the_solver():
+    def stopped(phase: VerificationPhase) -> ProverReport:
+        stats = RuleStatistics(phase=phase, path_count=None, branching=(), nonlinear=())
+        return _report({"r": "TIMEOUT"}, statistics={RulePath(rule="r"): stats})
+
+    assert "### K8." in _report_note(stopped(StaticAnalysis()))
+    assert "### K8." not in _report_note(stopped(Solving(4, 50, 2, 10)))
+
+
+def test_the_gate_pushes_the_halted_job_recipe_when_the_job_hit_its_limit():
+    assert "### K9." in _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}, halted=True))
+    assert "### K9." not in _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}))

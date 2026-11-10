@@ -105,25 +105,8 @@ Read the outcome:
   **First check the rule ends with `core::mem::forget(accounts);`** (see "Reaching a handler"): the
   dropped account array is the most common cause measured on this backend.
 
-  **Start with `explain_vacuity(rule)`.** It reruns that one rule with the vacuity check off, about
-  as fast as an ordinary run, and reads the unsat core of the proof. Its first line settles the
-  question above: if the rule's own assertion is not in the core, the core's constraints contradict
-  each other and the analysis names them; if it is, your assumptions are not the cause and weakening
-  them will not help. What a core cannot show is anything after the assertion: it is the core of the
-  rule's proof, and the vacuity check's `satisfy` comes later, after the drops.
-
-  If you need to go further, **diagnose with `cvlr_assert!(false)`, not `cvlr_satisfy!`.** A
-  satisfy rule also turns every assertion into an assumption, so it assumes away exactly the one
-  causing the vacuity and reports the path reachable while the real rule stays vacuous. Measured:
-  three submissions of satisfy diagnostics, every one VERIFIED, on a rule whose every path hit the unwinding assertion inside a
-  CPI's instruction encoder; the first diagnostic ending in `cvlr_assert!(false)` came back
-  VIOLATED with the loop in its trace. Copy the real rule, replace its final assertion with
-  `cvlr_assert!(false)`, and `clog!` the values the assertion reads:
-  - VIOLATED on `false` → the path is live, and the trace shows a concrete execution. If a
-    generated assertion fired first, that is the cause; if the logged values satisfy your
-    postcondition, the vacuity comes from code after the assertion, not from the program.
-  - Still vacuous → add the rule's assumptions back into the copy one at a time; the one that makes
-    it vacuous is the contradiction.
+  `verify_rules` attaches recipe K12 to a vacuous result: `explain_vacuity(rule)` first, then a copy
+  of the rule ending in `cvlr_assert!(false)`, never `cvlr_satisfy!`.
 * **A timeout.** The job ran out of time. A halted job returns no per-rule verdicts, so one rule
   hides every other rule in the submission. The next submission is the same draft without the rule
   you added last, or that rule alone. Leave `loop_iter` where it is, and add no summary, until that
@@ -132,36 +115,9 @@ Read the outcome:
   draft with those rules removed verified the rest in minutes. One extra rule in a draft that
   otherwise verified did the same. Resubmitting the halted set unchanged will halt again.
 
-  When the rule by itself still halts, look at what the handler does first.
-  - A `HashSet` insert goes through SipHash or `hashbrown`'s rehash. The iteration count tracks
-    `loop_iter`, and `hash_one` is external, so `contains` can disagree with `insert`. Ask the
-    editor to replace that set with a loop-free signer set.
-  - A bincode walk of a `[u8; 32]`, a `Pubkey` field of the account struct the handler serializes,
-    did the same: iteration 2 at bound 2, iteration 4 at bound 4. Ask the editor to mock the state
-    accessor with a value stand-in.
-  - A `Vec` whose bytes come from an allocator the prover treats as external, such as a vote
-    account's credit history, is the same kind of loop.
-
-  Drive the program's own function below that handler, the accounting it wraps, and name that
-  function as the rule's subject. A copy of the handler written in the harness is a verdict about
-  your code. If the property is about the handler's own checks and there is no function below
-  them, `record_skip` and name the halted job. A summary of a function the compiler has inlined
-  into the handler matches no symbol, and the halt stays.
-
-  A rule that came back with a verdict, and stopped short of its own assertion, is a different
-  case. The other rules in the job already have results.
-  - A product of two `u64`s into a `u128` timed out twice with the factors unbounded, and verified
-    below `2^32`. Bound both factors, and say in the commentary that the bound is the domain of
-    the proof. A property about behaviour at the top of the `u64` range cannot take that bound.
-  - One rule ranging over several account-list lengths, or both pre-state variants, timed out.
-    One rule per length or variant verified. Split it that way.
-  - `collect_signers` walking the account list the rule passed stops on the unwinding assertion
-    until `loop_iter` equals that length. Raise the bound to the length the rule passed.
-  - A walk of one iteration per epoch, with nothing in the program bounding how far activation is
-    from now, does not finish at a higher bound. Assume a small distance and record it as the
-    domain.
-
-  Re-running an unchanged timing-out rule will time out again.
+  Recipe K9 has what to do when the rule alone still halts, and the measured cases of a rule that
+  came back with a verdict but stopped short. `verify_rules` attaches it when the job halted with
+  some verdicts; when it returned none, fetch it.
 * **A rule the prover could not analyze** → an *error* rather than a verdict, so it comes back as
   neither VERIFIED nor VIOLATED. On this backend it is usually the pointer analysis refusing
   something on a path your rule reaches: `[3308]` illegal dereference of an absolute address (a

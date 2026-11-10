@@ -418,7 +418,14 @@ named there, "When a rule should fail", and the judge's checklist.
    took the baseline facts' "When the Prover cannot follow the program's own data"; what that section
    said about munges in general stays there, as "Asking for a munge".
 5. **K8, K9, K12**, pushed on the statistics phase, the failed job's alert type and
-   `SANITY_FAILED`.
+   `SANITY_FAILED`. Done, except one push. K8 is pushed on `timeout: static analysis`
+   (`RuleStatistics.phase` is now `StaticAnalysis | Solving | OtherPhase`), not yet on a hotspot
+   share. K12 is pushed on `status: SANITY_FAILED`. K9 is pushed on `job: halted`, from the
+   report's `halted`, which covers a job that hit its limit and still returned verdicts. A job that
+   returned none reaches `verify_rules` as `run_prover`'s string, with the alert types already
+   rendered into it, so K9 is not pushed there; Step 3 tells the author to fetch it. Pushing it
+   there needs `run_prover`'s failure typed, which every caller of `run_prover`, CVL's included,
+   would have to take.
 
 Steps 1–3 take roughly 25 KB off the author's standing text, and steps 4–5 another 10 KB.
 

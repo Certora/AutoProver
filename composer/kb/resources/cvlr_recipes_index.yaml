@@ -134,3 +134,35 @@ recipes:
   file: recipes/cvlr-k11-state-the-analysis-cannot-size.md
   pushed_on:
   - error: 3005
+- id: K8
+  name: A bounded stand-in for a computation that will not finish
+  triggers:
+  - A TIMEOUT that survives a small job, or a probe rule that drives the function alone times out
+  - A timed-out rule's statistics line says `static analysis`
+  - One function holds most of a timed-out rule's branching or nonlinear share
+  channel: [MOCK, EDIT]
+  file: recipes/cvlr-k8-a-bounded-stand-in.md
+  pushed_on:
+  - timeout: static analysis
+  search_terms:
+  - mock_fn
+- id: K9
+  name: A halted job, and which rule halted it
+  triggers:
+  - A job that reaches its time limit, with no verdicts or with rules cut off as TIMEOUT
+  - A rule that still times out when submitted alone
+  channel: [RULE, EDIT, SKIP]
+  file: recipes/cvlr-k9-a-halted-job.md
+  pushed_on:
+  - job: halted
+- id: K12
+  name: Diagnosing a vacuous rule
+  triggers:
+  - A rule reported `SANITY_FAILED`
+  - You are about to write a `cvlr_satisfy!` rule to find out why another rule is vacuous
+  channel: RULE
+  file: recipes/cvlr-k12-diagnosing-a-vacuous-rule.md
+  pushed_on:
+  - status: SANITY_FAILED
+  search_terms:
+  - explain_vacuity
