@@ -228,10 +228,10 @@ def test_the_gate_tells_an_overflow_stop_how_to_get_past_it_and_not_a_loop_remed
 def test_the_gate_bounds_an_overflow_stop_once_and_then_moves_on():
     """The bound is not always the lever: the stop follows the code's layout, so a rule that still
     stops with it in place is restated below the handler or skipped, not reworded again."""
-    note = _note(r=_overflow("Cannot overflow: inferred pointer"))
+    note = " ".join(_note(r=_overflow("Cannot overflow: inferred pointer")).split())
     assert "once" in note
-    assert "again with the bound in place" in note
-    assert "takes no AccountInfo" in note
+    assert "comes back with the bound in place" in note
+    assert "takes no `AccountInfo`" in note
     assert "skip the property" in note
 
 
@@ -241,6 +241,6 @@ def test_the_gate_gives_each_kind_its_remedy_once():
         b=_overflow("Cannot overflow: computing TAC map index"),
         c=_overflow("Cannot overflow: inferred pointer"),
     )
-    assert note.count("trip count") == 1
-    assert note.count("1 << 63") == 1
+    assert note.count("### K4.") == 1
+    assert note.count("### K5.") == 1
     assert "expect_rule_failure" in note

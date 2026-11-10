@@ -240,7 +240,7 @@ async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart(gat
 
     assert "validations" not in out.update
     assert f"rule_b: {_LOOP.assertion}" in _text(out)
-    assert "A loop needed more iterations" in _text(out)
+    assert "### K4. A loop the bound does not finish" in _text(out)
 
 
 async def test_a_kind_this_version_does_not_know_does_not_stamp_when_marked(gate: _Gate):
@@ -262,7 +262,7 @@ async def test_a_limit_without_advice_of_its_own_is_reported_by_its_message(gate
 
     assert "validations" not in out.update
     assert "rule_b: CPI call could not be resolved" in _text(out)
-    assert "A loop needed more iterations" not in _text(out)
+    assert "### K4. A loop the bound does not finish" not in _text(out)
 
 
 async def test_a_rule_marked_before_its_first_run_is_stamped_by_that_run(gate: _Gate):

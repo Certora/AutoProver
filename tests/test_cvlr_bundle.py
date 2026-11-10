@@ -9,10 +9,16 @@ that varies per run cannot live here, and one that names a tool only the author 
 import re
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from composer.kb.kb_context import (
     CVLR_BUNDLE,
     CVLR_FACTS_BUNDLE,
     CVLR_RECIPES,
+    CvlrChannel,
+    CvlrRecipe,
+    IndexModel,
     _kb_model,
     context_documents,
 )
@@ -87,3 +93,13 @@ def test_the_facts_bundle_is_the_same_facts_without_the_index():
     facts are the same document either way, so the two cannot drift."""
     assert context_documents(CVLR_FACTS_BUNDLE) == context_documents(CVLR_BUNDLE)[:1]
     assert "get_cvlr_recipe" not in "".join(context_documents(CVLR_FACTS_BUNDLE))
+
+
+def test_a_recipe_is_pushed_only_on_a_kind_the_prover_names():
+    """A kind misspelled in the index would push its recipe on nothing, and no run would say so."""
+    with pytest.raises(ValidationError):
+        IndexModel[CvlrChannel, CvlrRecipe].model_validate(
+            {"channels": {}, "recipes": [{"id": "R0", "name": "n", "triggers": [], "file": "f.md",
+                                          "channel": "RULE",
+                                          "pushed_on": [{"generated": "loopUnwound"}]}]}
+        )

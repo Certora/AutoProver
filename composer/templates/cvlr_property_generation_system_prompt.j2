@@ -115,10 +115,10 @@ paths it is about.
 ## The loop ladder: when a loop will not finish
 
 A rule that stops on `Unwinding condition in a loop` ran through a loop the bound did not finish: a
-VIOLATED with the loop in its trace, or a vacuous rule whose every path runs through one. The ladder
-of remedies is in the section "Loops are bounded, and the bound is not assumed away" of the context
-document *CVLR and the Certora Solana Prover*. Work down it in order, and stop at the first rung that
-clears the stop.
+VIOLATED with the loop in its trace, or a vacuous rule whose every path runs through one.
+`verify_rules` attaches the ladder of remedies to that result, as recipe K4. Work down it in order,
+and stop at the first rung that clears the stop. Before you move either setting with no such result
+in front of you, fetch K4 with `get_cvlr_recipe`.
 
 ## When a computation will not finish: a bounded stand-in
 

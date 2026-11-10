@@ -230,9 +230,8 @@ be stale; the tool is authoritative.
    the property.
 
 5. **What the loops were allowed to skip.** The loop remedies, and the order the author is meant to
-   try them in, are in the section "Loops are bounded, and the bound is not assumed away" of the
-   context document *CVLR and the Certora Solana Prover*, at the start of your input. Your job is to
-   check the two remedies whose cost falls on the verdicts rather than on the prover's running time.
+   try them in, are recipe K4; fetch it with `get_cvlr_recipe`. Your job is to check the two
+   remedies whose cost falls on the verdicts rather than on the prover's running time.
 
    **A `cvlr_assume!` that bounds a trip count** is the first remedy on that list and the honest
    one, *when the rule says so*. The rule then proves its property for collections up to that

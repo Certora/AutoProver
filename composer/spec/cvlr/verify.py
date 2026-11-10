@@ -37,6 +37,7 @@ from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
 from composer.cargo.symbols import SymbolsUnavailable, nearest, prover_function_names, unmatched
+from composer.kb.kb_context import pushed_recipes
 from composer.prover.cloud import results_api
 from composer.prover.core import (
     CexHandler,
@@ -120,8 +121,8 @@ class _VerdictsParams(TypedDict):
     marked_verified: list[str]
     #: Stopped on an assertion the Prover generated.
     incomplete: list[_IncompleteRule]
-    #: The kinds among ``incomplete`` the author gets advice for, each once, from :data:`_ADVISED`.
-    advised: list[GeneratedKind]
+    #: The bodies of the recipes pushed on the kinds among ``incomplete``, each once.
+    recipes: list[str]
     #: Listed by the build, with no verdict in the report.
     unverdicted: list[str]
     #: Violated on their own assertion, unmarked.
@@ -417,11 +418,6 @@ class VerifyDeps:
         )
 
 
-#: The kinds of generated assertion the author gets advice for. The Prover's message carries its
-#: own advice for the rest.
-_ADVISED = (GeneratedKind.LOOP_UNWINDING, GeneratedKind.CANNOT_OVERFLOW)
-
-
 def _verdicts_note(
     status: Mapping[str, StatusCodes],
     incomplete: Mapping[str, IncompleteCheck],
@@ -435,11 +431,9 @@ def _verdicts_note(
     return _Verdicts.bind({
         "marked_verified": [name for name in unexcused if status[name] == "VERIFIED"],
         "incomplete": [{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
-        "advised": [
-            kind
-            for kind in dict.fromkeys(stopped.kind for _, stopped in ordered)
-            if isinstance(kind, GeneratedKind) and kind in _ADVISED
-        ],
+        "recipes": pushed_recipes(
+            {stopped.kind for _, stopped in ordered if isinstance(stopped.kind, GeneratedKind)}
+        ),
         "unverdicted": unverdicted,
         "property_failures": [
             name for name in unexcused if status[name] == "VIOLATED" and name not in incomplete

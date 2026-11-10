@@ -1,4 +1,4 @@
-from typing import override
+from typing import Any, override
 
 from pydantic import Field
 
@@ -7,9 +7,9 @@ from langchain_core.tools import BaseTool
 from graphcore.tools.schemas import WithAsyncImplementation
 
 from composer.ui.tool_display import CommonTools, tool_display_of
-from .kb_context import KnowledgeBundle, kb_loader
+from .kb_context import KBRecipe, KnowledgeBundle, kb_loader
 
-def kb_tools[C: str](bundle: KnowledgeBundle[C]) -> list[BaseTool]:
+def kb_tools[C: str, R: KBRecipe[Any]](bundle: KnowledgeBundle[C, R]) -> list[BaseTool]:
     """The bundle's recipe tool, or none at all: a family with no recipes yet contributes no
     tool rather than one that answers every id with a miss."""
     if bundle.recipes is None:

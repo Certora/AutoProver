@@ -138,10 +138,13 @@ def test_the_author_is_told_which_prover_settings_are_its_own_and_which_are_not(
 
 
 def test_raising_the_loop_bound_is_placed_last_on_its_ladder():
-    prompt = _flat(_author_system_prompt())
+    from composer.kb.kb_context import CVLR_RECIPES, kb_loader
 
-    loop_rung = prompt.index("Raise the bound, having tried the first two")
-    assert prompt.index("Constrain what determines the trip count") < loop_rung
+    recipe = kb_loader(CVLR_RECIPES)("K4")
+    assert recipe is not None
+    ladder = _flat(recipe)
+    loop_rung = ladder.index("Raise the bound, having tried the first two")
+    assert ladder.index("Constrain what determines the trip count") < loop_rung
 
 
 def test_the_author_is_told_to_call_the_handler_not_anchors_dispatch():
@@ -442,8 +445,20 @@ def test_every_bundle_section_the_judge_cites_exists():
     cited = re.findall(r'the section "([^"]+)"', _flat(_judge_system_prompt()))
     bundle = (files("composer.kb") / "resources" / "cvlr_baseline_facts.md").read_text()
     headings = set(re.findall(r"^## (.+)$", bundle, re.MULTILINE))
-    assert len(cited) == 3  # vacuity (2), loops (5), clog! (7)
+    assert len(cited) == 2  # vacuity (2), clog! (7)
     assert set(cited) <= headings, set(cited) - headings
+
+
+def test_every_recipe_the_judge_cites_exists():
+    """The judge defers to recipes as it does to bundle sections, and a renumbered recipe would
+    leave it pointing at nothing."""
+    import re
+
+    from composer.kb.kb_context import CVLR_RECIPES, _kb_model
+
+    cited = set(re.findall(r"recipe (K\d+)", _flat(_judge_system_prompt())))
+    assert "K4" in cited
+    assert cited <= {r.id for r in _kb_model(CVLR_RECIPES).recipes}
 
 
 def test_the_judge_is_told_a_missing_clog_can_make_a_counterexample_wrong():

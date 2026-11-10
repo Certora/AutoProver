@@ -402,7 +402,10 @@ named there, "When a rule should fail", and the judge's checklist.
    Solana skill sends its agent to, with a pointer to that section. So step 1 removes about 2 KB,
    and the rest comes off when step 2 moves the ladder into K4.
 2. **Push mechanism (§4)** with K4 and K5, replacing `_ADVISED` and the paragraphs in `verdicts.j2`.
-   Behaviour-preserving for those two kinds, so a good check of the mechanism.
+   Behaviour-preserving for those two kinds, so a good check of the mechanism. Done: `pushed_on` is
+   a field of `CvlrRecipe` only, so the CVL index cannot set it, and it has one symptom family so
+   far (`generated:`); the others join it as their steps land. The baseline facts keep a short
+   "Loops are bounded" section with the facts and a pointer to K4, and the judge's §5 cites K4.
 3. **Pulled recipes that need nothing new:** K6, K7, K13, K14, and the move into
    `invariant_guidance()`.
 4. **Analysis errors by code (§3.4)**, then K10 and K11 pushed on them.

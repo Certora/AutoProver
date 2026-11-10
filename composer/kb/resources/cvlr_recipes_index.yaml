@@ -51,3 +51,24 @@ recipes:
   - Clock::get
   - Rent::get
   - minimum_balance
+- id: K4
+  name: A loop the bound does not finish
+  triggers:
+  - A rule stops on `Unwinding condition in a loop`
+  - You are about to raise `loop_iter` or turn on `optimistic_loop`
+  - A property over a loop whose trip count is set by account data
+  channel: [CONF, RULE]
+  file: recipes/cvlr-k4-loop-the-bound-does-not-finish.md
+  pushed_on:
+  - generated: loopUnwinding
+  search_terms:
+  - loop_iter
+  - optimistic_loop
+- id: K5
+  name: '`Cannot overflow` on an inferred pointer'
+  triggers:
+  - "A rule stops on `Cannot overflow: inferred pointer` or `Cannot overflow: computing TAC map index`"
+  channel: [RULE, SKIP]
+  file: recipes/cvlr-k5-cannot-overflow-inferred-pointer.md
+  pushed_on:
+  - generated: cannotOverflow

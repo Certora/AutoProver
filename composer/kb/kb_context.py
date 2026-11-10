@@ -1,12 +1,15 @@
-from typing import Callable, Literal, Annotated, Mapping, Sequence, TypedDict, cast, TYPE_CHECKING
+from typing import (
+    Any, Callable, Collection, Literal, Annotated, Mapping, Sequence, TypedDict, cast, TYPE_CHECKING
+)
 from functools import cache
 from importlib.resources import files
 from dataclasses import dataclass
-from pydantic import BaseModel, Field, BeforeValidator
+from pydantic import BaseModel, ConfigDict, Field, BeforeValidator
 import yaml
 
 from graphcore.graph import CacheMarker
 
+from composer.prover.ptypes import GeneratedKind
 from composer.templates.loader import load_jinja_template
 from composer.spec.gen_types import TypedTemplate
 
@@ -37,12 +40,12 @@ class KBRecipe[C: str](BaseModel):
     channel: Annotated[list[C], BeforeValidator(_one_or_many)]
 
 
-class IndexModel[C: str](BaseModel):
+class IndexModel[C: str, R: KBRecipe[Any]](BaseModel):
     #: What each channel means for the agent reading it. Rendered with the index: a channel tells a
     #: stuck agent whether the fix is in its action space, which it cannot do if only the index file
     #: says what the name means.
     channels: dict[C, str]
-    recipes: list[KBRecipe[C]]
+    recipes: list[R]
 
 
 class RecipeIndexParams(TypedDict):
@@ -66,19 +69,19 @@ class ContextSpec:
 
 
 @dataclass(frozen=True)
-class RecipeSet[C: str]:
+class RecipeSet[C: str, R: KBRecipe[Any]]:
     """The on-demand half of a bundle: an index that goes in front of every agent, and bodies
     fetched by id. A family acquires one when it has recipes to serve; until then it has none, and
     that is the whole of the difference."""
 
     tool_name: str
     index_resource: str
-    parse_index: Callable[[object], IndexModel[C]]
+    parse_index: Callable[[object], IndexModel[C, R]]
     index_template: TypedTemplate[RecipeIndexParams]
 
 
 @dataclass(frozen=True)
-class KnowledgeBundle[C: str]:
+class KnowledgeBundle[C: str, R: KBRecipe[Any]]:
     """One agent family's practice knowledge: context documents that go in front of every agent,
     and optionally a recipe set.
 
@@ -90,22 +93,22 @@ class KnowledgeBundle[C: str]:
     #: Names the manual this family's knowledge sits beside, in the recipe index preamble.
     label: str
     specs: tuple[ContextSpec, ...]
-    recipes: RecipeSet[C] | None = None
+    recipes: RecipeSet[C, R] | None = None
 
 
 # Not memoized, unlike the public entry points below: ``functools.cache`` erases a generic return
 # type, and every caller is itself cached, so this parses at most twice per recipe set.
-def _kb_model[C: str](recipes: RecipeSet[C]) -> IndexModel[C]:
+def _kb_model[C: str, R: KBRecipe[Any]](recipes: RecipeSet[C, R]) -> IndexModel[C, R]:
     index_text = (files() / "resources" / recipes.index_resource).read_text()
     return recipes.parse_index(yaml.safe_load(index_text))
 
 
-def _kb_index[C: str](recipes: RecipeSet[C]) -> Mapping[str, str]:
+def _kb_index[C: str, R: KBRecipe[Any]](recipes: RecipeSet[C, R]) -> Mapping[str, str]:
     return {r.id: r.file for r in _kb_model(recipes).recipes}
 
 
 @cache
-def kb_loader[C: str](recipes: RecipeSet[C]) -> Callable[[str], str | None]:
+def kb_loader[C: str, R: KBRecipe[Any]](recipes: RecipeSet[C, R]) -> Callable[[str], str | None]:
     ind = _kb_index(recipes)
     kb_resource_dir = files() / "resources"
 
@@ -120,7 +123,7 @@ def kb_loader[C: str](recipes: RecipeSet[C]) -> Callable[[str], str | None]:
     return loader
 
 
-def recipe_index_document[C: str](label: str, recipes: RecipeSet[C]) -> str:
+def recipe_index_document[C: str, R: KBRecipe[Any]](label: str, recipes: RecipeSet[C, R]) -> str:
     model = _kb_model(recipes)
     params: RecipeIndexParams = {
         "kb_retrieval_name": recipes.tool_name,
@@ -131,14 +134,14 @@ def recipe_index_document[C: str](label: str, recipes: RecipeSet[C]) -> str:
     return recipes.index_template.bind(params).render_to(load_jinja_template)
 
 
-def recipe_bodies[C: str](recipes: RecipeSet[C]) -> dict[str, str]:
+def recipe_bodies[C: str, R: KBRecipe[Any]](recipes: RecipeSet[C, R]) -> dict[str, str]:
     """Every recipe's body, keyed by its retrieval id, for a reader outside AutoProver."""
     kb_resource_dir = files() / "resources"
     return {r.id: (kb_resource_dir / r.file).read_text() for r in _kb_model(recipes).recipes}
 
 
 @cache
-def context_documents[C: str](bundle: KnowledgeBundle[C]) -> tuple[str, ...]:
+def context_documents[C: str, R: KBRecipe[Any]](bundle: KnowledgeBundle[C, R]) -> tuple[str, ...]:
     """The bundle's documents, the recipe index last. The index is appended rather than listed
     among ``specs`` because it is rendered from the bundle rather than read from a file."""
     titled = [(s.title, s.loader()) for s in bundle.specs]
@@ -158,7 +161,9 @@ Title: {title}
     )
 
 
-def with_context[C: str](bundle: KnowledgeBundle[C], prompt: "PromptInput") -> "PromptInput":
+def with_context[C: str, R: KBRecipe[Any]](
+    bundle: KnowledgeBundle[C, R], prompt: "PromptInput"
+) -> "PromptInput":
     """The bundle's context documents (cache marker on the trailing block; the TTL is whatever the
     builder's cache manager applies) followed by ``prompt`` — the standard initial-prompt shape for
     an agent in that family. Goes through the initial prompt rather than ``front_matter`` so the
@@ -169,14 +174,14 @@ def with_context[C: str](bundle: KnowledgeBundle[C], prompt: "PromptInput") -> "
 
 KB_INDEX_TEMPLATE = TypedTemplate[RecipeIndexParams]("kb_index.j2")
 
-CVL_RECIPES = RecipeSet[CvlChannel](
+CVL_RECIPES = RecipeSet[CvlChannel, KBRecipe[CvlChannel]](
     tool_name="get_cvl_recipe",
     index_resource="cvl_recipes_index.yaml",
-    parse_index=lambda raw: IndexModel[CvlChannel].model_validate(raw),
+    parse_index=lambda raw: IndexModel[CvlChannel, KBRecipe[CvlChannel]].model_validate(raw),
     index_template=KB_INDEX_TEMPLATE,
 )
 
-CVL_BUNDLE = KnowledgeBundle[CvlChannel](
+CVL_BUNDLE = KnowledgeBundle[CvlChannel, KBRecipe[CvlChannel]](
     label="CVL",
     recipes=CVL_RECIPES,
     specs=(
@@ -207,10 +212,25 @@ def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
 #: SKIP is ``record_skip`` — the honest terminal channel, which CVL has no peer for.
 type CvlrChannel = Literal["RULE", "MOCK", "EDIT", "CONF", "SKIP"]
 
-CVLR_RECIPES = RecipeSet[CvlrChannel](
+
+class GeneratedSymptom(BaseModel):
+    """A rule stopped on an assertion the Prover generated, of this kind."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    generated: GeneratedKind
+
+
+class CvlrRecipe(KBRecipe[CvlrChannel]):
+    #: The symptoms that make ``verify_rules`` attach this recipe's body to its result, so the
+    #: author gets it without having to recognise the situation.
+    pushed_on: list[GeneratedSymptom] = Field(default_factory=list)
+
+
+CVLR_RECIPES = RecipeSet[CvlrChannel, CvlrRecipe](
     tool_name="get_cvlr_recipe",
     index_resource="cvlr_recipes_index.yaml",
-    parse_index=lambda raw: IndexModel[CvlrChannel].model_validate(raw),
+    parse_index=lambda raw: IndexModel[CvlrChannel, CvlrRecipe].model_validate(raw),
     index_template=KB_INDEX_TEMPLATE,
 )
 
@@ -222,12 +242,22 @@ _CVLR_SPECS = (
 )
 
 #: For the agents that hold ``get_cvlr_recipe``: the author and the judge.
-CVLR_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", recipes=CVLR_RECIPES, specs=_CVLR_SPECS)
+CVLR_BUNDLE = KnowledgeBundle[CvlrChannel, CvlrRecipe](label="CVLR", recipes=CVLR_RECIPES, specs=_CVLR_SPECS)
 
 #: The same facts without the recipe index, for a reader that cannot retrieve a recipe. The index
 #: says "retrieve the pointed file before acting", and its channels name the author's tools, so for
 #: any other reader it is an instruction it cannot follow about tools it does not have.
-CVLR_FACTS_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", specs=_CVLR_SPECS)
+CVLR_FACTS_BUNDLE = KnowledgeBundle[CvlrChannel, CvlrRecipe](label="CVLR", specs=_CVLR_SPECS)
+
+
+def pushed_recipes(kinds: Collection[GeneratedKind]) -> list[str]:
+    """The bodies of the CVLR recipes pushed on any of ``kinds``, each once, in index order."""
+    kb_resource_dir = files() / "resources"
+    return [
+        (kb_resource_dir / r.file).read_text()
+        for r in _kb_model(CVLR_RECIPES).recipes
+        if any(s.generated in kinds for s in r.pushed_on)
+    ]
 
 
 def with_cvlr_context(prompt: "PromptInput") -> "PromptInput":
