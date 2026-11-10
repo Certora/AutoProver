@@ -61,6 +61,12 @@ dependencies = [
     # [bedrock] extra brings boto3/botocore, which those clients sign with.
     # <1.0 matches langchain-anthropic 1.4's own anthropic<1.0 requirement.
     "anthropic[bedrock]>=0.122.0,<1.0",
+    # composer/llm/bedrock_chat.py overrides private ChatAnthropic methods (_client,
+    # _async_client, _create, _acreate, _get_request_payload and the stream-event and
+    # output hooks) and imports langchain_anthropic._client_utils. Those can change in
+    # any minor release, so the upper bound moves only after the Bedrock tests pass on
+    # the new release.
+    "langchain-anthropic>=1.4.0,<1.5",
     "openai>=1.50.0",
     "wcmatch>=8.5.0",
     "python-dotenv>=1.0.0",

@@ -538,6 +538,26 @@ def test_bedrock_clients_back_off_for_minutes_without_retry_after(bedrock_env) -
         assert max(waits) <= 60
 
 
+@pytest.mark.asyncio
+async def test_sdk_retry_loop_sleeps_with_the_bedrock_backoff(bedrock_env, monkeypatch) -> None:
+    # Through the SDK's real retry loop, so a rename of the overridden hook fails here.
+    import anyio
+    slept: list[float] = []
+
+    async def record(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(anyio, "sleep", record)
+    exc, attempts = await _invoke_failing(monkeypatch, _error(429, "ThrottlingException"))
+    assert isinstance(exc, anthropic.RateLimitError)
+    assert attempts == _MAX_RETRIES + 1
+    assert len(slept) == _MAX_RETRIES
+    # The Bedrock waits for the first two retries are 1 s and 2 s, less up to a quarter of
+    # jitter; the SDK's own would be at most 0.5 s and 1 s.
+    assert 0.75 <= slept[0] <= 1.0
+    assert 1.5 <= slept[1] <= 2.0
+
+
 def test_bedrock_clients_honour_retry_after(bedrock_env) -> None:
     llm = _build()
     assert set(_retry_waits(llm._async_client, httpx.Headers({"retry-after": "7"}))) == {7.0}

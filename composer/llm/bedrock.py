@@ -165,9 +165,9 @@ RETRY_MAX_DELAY_SECONDS = 60.0
 """The backoff of the SDK's own retries on Bedrock, when the response names no
 ``retry-after``: the wait doubles from :data:`RETRY_INITIAL_DELAY_SECONDS` up to this value,
 so the 8 retries span about three minutes. The SDK's defaults (0.5 s doubling to 8 s, about
-35 s in all) suit an API that sends ``retry-after`` on every 429. Bedrock throttles against a
-per-account tokens-per-minute quota that parallel requests share, and a minute-long quota
-window needs waits of the same order."""
+35 s in all) suit an API that usually sends ``retry-after`` on a 429. Bedrock throttles
+against a per-account tokens-per-minute quota that parallel requests share, and a
+minute-long quota window needs waits of the same order."""
 
 
 def retry_delay_seconds(retries_done: int) -> float:

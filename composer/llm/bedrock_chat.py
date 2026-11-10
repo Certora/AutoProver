@@ -25,7 +25,9 @@ from typing import Any, override
 
 import anthropic
 import boto3
+import httpx
 import botocore.exceptions
+from anthropic._models import FinalRequestOptions
 from langchain_anthropic import ChatAnthropic
 from langchain_anthropic._client_utils import (
     _get_default_async_httpx_client, _get_default_httpx_client,
@@ -169,8 +171,8 @@ class CredentialErrorMiddleware(anthropic.Middleware):
 def _bedrock_retry_timeout(
     client: anthropic.AnthropicBedrockMantle | anthropic.AsyncAnthropicBedrockMantle,
     remaining_retries: int,
-    options: Any,
-    response_headers: Any,
+    options: FinalRequestOptions,
+    response_headers: httpx.Headers | None,
 ) -> float:
     """The SDK's retry wait with the Bedrock backoff of
     :func:`composer.llm.bedrock.retry_delay_seconds`: a ``retry-after`` of up to a minute is
@@ -186,7 +188,10 @@ def _bedrock_retry_timeout(
 class _MantleClient(anthropic.AnthropicBedrockMantle):
     @override
     def _calculate_retry_timeout(
-        self, remaining_retries: int, options: Any, response_headers: Any = None
+        self,
+        remaining_retries: int,
+        options: FinalRequestOptions,
+        response_headers: httpx.Headers | None = None,
     ) -> float:
         return _bedrock_retry_timeout(self, remaining_retries, options, response_headers)
 
@@ -194,7 +199,10 @@ class _MantleClient(anthropic.AnthropicBedrockMantle):
 class _AsyncMantleClient(anthropic.AsyncAnthropicBedrockMantle):
     @override
     def _calculate_retry_timeout(
-        self, remaining_retries: int, options: Any, response_headers: Any = None
+        self,
+        remaining_retries: int,
+        options: FinalRequestOptions,
+        response_headers: httpx.Headers | None = None,
     ) -> float:
         return _bedrock_retry_timeout(self, remaining_retries, options, response_headers)
 

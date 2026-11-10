@@ -222,11 +222,12 @@ After that, the run-wide retry policy takes over, as on the Anthropic API.
 pipeline gives the model) is sent inline as base64 in every request of the conversation that carries it, with its
 prompt-cache marker kept. Bedrock rejects a request over 20 MB, and base64 makes a file about a third larger. A
 document over `AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES` is replaced by a short text note naming it. When a request is
-over `AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES`, documents are replaced the same way, latest first, until it fits. If Bedrock still rejects a request as too large, the request is sent again with more
-documents replaced, up to 3 times, and the lower limit stays for the rest of that conversation. The
-first replacement of each document is logged as a warning, later ones of the same document at DEBUG. Binary files
-other than PDFs are always replaced by such a note on Bedrock. A thread started on the Anthropic API that refers to a
-Files API upload cannot continue on Bedrock: its first Bedrock request fails with an error naming the file.
+over `AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES`, documents are replaced the same way, latest first, until it fits. If
+Bedrock still rejects a request as too large, the request is sent again with more documents replaced, up to 3 times,
+and the lower limit stays for the rest of that conversation. The first replacement of each document is logged as a
+warning, later ones of the same document at DEBUG. Binary files other than PDFs are always replaced by such a note on
+Bedrock. A thread started on the Anthropic API that refers to a Files API upload cannot continue on Bedrock: its first
+Bedrock request fails with an error naming the file.
 
 **Docker.** `scripts/autoprove` and `scripts/docker-compose.yml` pass `AUTOPROVER_LLM_BACKEND`, the region variables,
 the Bedrock limits above, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`,

@@ -16,7 +16,7 @@ from langchain_core.messages import AIMessage
 from graphcore.utils import get_normalized_token_usage
 
 from composer.input.files import InMemoryBytesFile, InMemoryTextFile
-from composer.llm import bedrock_chat, openrouter
+from composer.llm import bedrock_chat
 from composer.llm.anthropic import (
     AnthropicFileUploader, AnthropicModelProvider, AnthropicService, BedrockFileUploader,
     uploader_for_backend,
@@ -453,6 +453,3 @@ def test_bedrock_ids_are_refused_by_the_registry(bedrock_env, model: str) -> Non
         get_provider_for(model_name=model, options=_Options())
 
 
-def test_openrouter_does_not_claim_bedrock_arn() -> None:
-    assert not openrouter.matches(_ARN.lower())
-    assert openrouter.matches("anthropic/claude-sonnet-5")

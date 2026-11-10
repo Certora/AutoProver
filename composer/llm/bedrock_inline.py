@@ -18,7 +18,7 @@ Kept free of langchain imports, like :mod:`composer.llm.bedrock`.
 
 import json
 import logging
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from composer.llm.bedrock import BACKEND_ENV_VAR
 
@@ -81,15 +81,18 @@ def _map_content_blocks(
     and of each message, in request order, descending into ``tool_result`` content. Only the
     dicts and lists along the way are copied; ``payload`` itself is left unchanged."""
 
-    def map_list(blocks: list[Any]) -> list[Any]:
-        out: list[Any] = []
+    def map_list(blocks: list[object]) -> list[object]:
+        out: list[object] = []
         for block in blocks:
             if not isinstance(block, dict):
                 out.append(block)
-            elif block.get("type") == "tool_result" and isinstance(block.get("content"), list):
-                out.append({**block, "content": map_list(block["content"])})
+                continue
+            content_block = cast(dict[str, Any], block)
+            content = content_block.get("content")
+            if content_block.get("type") == "tool_result" and isinstance(content, list):
+                out.append({**content_block, "content": map_list(cast(list[object], content))})
             else:
-                out.append(fn(block))
+                out.append(fn(content_block))
         return out
 
     result = dict(payload)
