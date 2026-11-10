@@ -107,6 +107,7 @@ def _final_properties_key(
     extra_context_digest: str | None,
     run_mode: RunModeName,
     max_rounds: int | None = None,
+    property_generator: str | None = None,
 ) -> str:
     # Parameterized like BUG_ANALYSIS_KEY: the component namespace is
     # shared across runs, so the entry must be keyed by what distinguishes one
@@ -128,6 +129,9 @@ def _final_properties_key(
         # an offline walker reconstructing the formalization edge would read a one-property
         # batch as if it were everything inference found.
         base_key += "-mode-" + run_mode
+    if property_generator is not None:
+        # A generated batch is not the native extraction's, so it gets its own record too.
+        base_key += "-gen-" + property_generator
     return base_key
 
 #: The property batch as it left the property pipeline (post-inference plugin

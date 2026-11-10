@@ -48,12 +48,12 @@ class PropertySet(BaseModel):
             raise ValueError(f"invalid property set {path}: {e}") from e
 
     def loadable_in(self, run_mode: RunMode) -> bool:
-        """Whether a run in ``run_mode`` may load this set. A comprehensive set and an evaluate
-        set are the same thing: every inferred property of every component. A prioritized set
-        holds only the chosen focus, so it loads only into a prioritized run."""
+        """Whether a run in ``run_mode`` may load this set. A comprehensive, an evaluate and a
+        property-generation set are the same thing: every inferred property of every component.
+        A prioritized set holds only the chosen focus, so it loads only into a prioritized run."""
         if self.run_mode is run_mode:
             return True
-        unranked = {RunMode.COMPREHENSIVE, RunMode.EVALUATE}
+        unranked = {RunMode.COMPREHENSIVE, RunMode.EVALUATE, RunMode.PROPERTY_GENERATION}
         return self.run_mode in unranked and run_mode in unranked
 
     def analyzed[App: BaseApplication](self, ty: type[App]) -> App:

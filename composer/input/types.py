@@ -158,6 +158,11 @@ class PropertySetOptions(Protocol):
              "is written, without formalizing or reporting.",
         default=False,
     )]
+    property_generator: Annotated[Optional[str], OptionalArg(
+        help="The installed property generator that replaces component analysis and property "
+             "inference ('native', the default, runs the built-in ones). Also settable as "
+             "AUTOPROVER_PROPERTY_GENERATOR; this flag wins."
+    )]
 
 class UploadPaths(Protocol):
     spec_file: str

@@ -120,6 +120,7 @@ class _Run:
 
     source = _Source()
     run_mode = RunMode.COMPREHENSIVE
+    property_generator = None
     env = None
     ctx = _Ctx()
 

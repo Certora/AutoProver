@@ -55,3 +55,8 @@ class AutoProveCacheTags(BaseModel):
     suffixes its ``final_props`` leaf with the mode, so a reader needs this to know which
     variant to look under. ``None`` on records written before this field existed, which
     are all comprehensive."""
+
+    property_generator: str | None = None
+    """The installed property generator the run used in place of the native analysis and
+    extraction, which suffixes the ``final_props`` leaf. ``None`` for the native ones, and on
+    records written before this field existed."""

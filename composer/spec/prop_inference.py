@@ -491,7 +491,10 @@ async def _run_bug_analysis_inner[U: FeatureUnit](
         # A round that keeps nothing ends the loop, whether it proposed nothing or
         # only restated earlier rounds.
         if len(next_result.items) == 0:
-            assert last_round_convo is not None
+            if last_round_convo is None:
+                # The first round found nothing: the component has no properties, and that
+                # round's conversation is the history a refinement continues from.
+                last_round_convo = next_result.agent_conversation
             break
 
         prev_rounds.append(next_result)
