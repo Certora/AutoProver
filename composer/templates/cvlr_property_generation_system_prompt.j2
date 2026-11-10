@@ -246,9 +246,8 @@ The editor's charter is nine kinds, and knowing them tells you what is worth ask
   extracted piece proves nothing about the checks that stayed in the enclosing function, so declare
   it in `rule_subjects` for what it is.
 * **`swap_derive`** moves a type's derived (de)serializer behind your unit's feature so you can
-  supply the impls yourself. The context document's section "When the Prover cannot follow the
-  program's own data" covers it, under the symptom that calls for it — it is the widest-reaching
-  kind and the one with the most for you to get right afterwards.
+  supply the impls yourself. Recipe K11 covers it, under the symptom that calls for it — it is the
+  widest-reaching kind and the one with the most for you to get right afterwards.
 
 One more thing people reach for, and you should prefer the honest version of it. Shrinking a bounded collection —
 the array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over

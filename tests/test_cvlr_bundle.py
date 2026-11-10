@@ -103,3 +103,11 @@ def test_a_recipe_is_pushed_only_on_a_kind_the_prover_names():
                                           "channel": "RULE",
                                           "pushed_on": [{"generated": "loopUnwound"}]}]}
         )
+
+
+def test_a_recipe_is_pushed_only_on_a_code_the_build_lists():
+    with pytest.raises(ValidationError):
+        IndexModel[CvlrChannel, CvlrRecipe].model_validate(
+            {"channels": {}, "recipes": [{"id": "R0", "name": "n", "triggers": [], "file": "f.md",
+                                          "channel": "RULE", "pushed_on": [{"error": 9999}]}]}
+        )

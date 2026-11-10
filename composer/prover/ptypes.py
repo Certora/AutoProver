@@ -1,4 +1,4 @@
-from enum import StrEnum
+from enum import IntEnum, StrEnum
 from typing import Literal, Optional, TypeVar
 from dataclasses import dataclass, field
 
@@ -180,6 +180,36 @@ def classify_violation(cex: Counterexample) -> PropertyViolation | IncompleteChe
             return PropertyViolation()
 
 
+class AnalysisErrorKind(IntEnum):
+    """The Solana Prover's analysis errors a recipe is pushed on, by the ``[NNNN]`` code that
+    starts their message (``FormattedErrorMessage`` in the Prover's ``sbf/support/Errors.kt``)."""
+
+    UNKNOWN_PROVENANCE_DEREF = 3003
+    DYNAMIC_MEMCPY = 3005
+    STACK_POINTER_STORE = 3006
+    ABSOLUTE_ADDRESS_DEREF = 3308
+
+
+@dataclass(frozen=True)
+class UnknownCode:
+    """A ``[NNNN]`` code :class:`AnalysisErrorKind` does not list."""
+
+    code: int
+
+
+@dataclass(frozen=True)
+class Uncoded:
+    """A message with no ``[NNNN]`` code."""
+
+
+@dataclass(frozen=True)
+class ProverMessage:
+    """An error or warning the Prover reported on a rule, whole, with the code that starts it."""
+
+    code: AnalysisErrorKind | UnknownCode | Uncoded
+    text: str
+
+
 @dataclass
 class RuleResult:
     """
@@ -187,13 +217,13 @@ class RuleResult:
     name is the name of the rule, status is the status of the rule.
     If status == VIOLATED, then counterexample is non-null.
 
-    If status == ERROR, error_msg is non-none
+    If status == ERROR or SKIPPED, ``messages`` carries what the Prover said about it.
     """
     path: RulePath
     counterexample: Counterexample | None
     status: StatusCodes
 
-    error_messages: list[str] = field(default_factory=list)
+    messages: list[ProverMessage] = field(default_factory=list)
 
     live_check_info : str | None = field(default=None)
 

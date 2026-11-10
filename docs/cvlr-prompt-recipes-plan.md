@@ -411,7 +411,12 @@ named there, "When a rule should fail", and the judge's checklist.
    draft: the two moves past a CPI and that the descent must reach the program's own function, what
    neither move can show, that `seeds` acceptance is a skip, and the bumps-type rule (with this
    program's names when the analysis supplies them). The system prompt went from 47 KB to 36 KB.
-4. **Analysis errors by code (§3.4)**, then K10 and K11 pushed on them.
+4. **Analysis errors by code (§3.4)**, then K10 and K11 pushed on them. Done, with different
+   names from §3.4's sketch: a message is a `ProverMessage(code, text)` in `composer/prover/ptypes.py`,
+   since SKIPPED rules' warnings ride in the same list, and `RuleResult.error_messages` became
+   `messages`. `ProverReport.errors` carries each ERROR instance's messages to `verify_rules`. K11
+   took the baseline facts' "When the Prover cannot follow the program's own data"; what that section
+   said about munges in general stays there, as "Asking for a munge".
 5. **K8, K9, K12**, pushed on the statistics phase, the failed job's alert type and
    `SANITY_FAILED`.
 

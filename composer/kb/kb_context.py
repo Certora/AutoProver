@@ -9,7 +9,7 @@ import yaml
 
 from graphcore.graph import CacheMarker
 
-from composer.prover.ptypes import GeneratedKind
+from composer.prover.ptypes import AnalysisErrorKind, GeneratedKind
 from composer.templates.loader import load_jinja_template
 from composer.spec.gen_types import TypedTemplate
 
@@ -213,6 +213,10 @@ def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
 type CvlrChannel = Literal["RULE", "MOCK", "EDIT", "CONF", "SKIP"]
 
 
+#: What ``verify_rules`` can recognise in a result: a generated assertion's kind, or an error's code.
+type Symptom = GeneratedKind | AnalysisErrorKind
+
+
 class GeneratedSymptom(BaseModel):
     """A rule stopped on an assertion the Prover generated, of this kind."""
 
@@ -220,11 +224,27 @@ class GeneratedSymptom(BaseModel):
 
     generated: GeneratedKind
 
+    @property
+    def symptom(self) -> Symptom:
+        return self.generated
+
+
+class ErrorSymptom(BaseModel):
+    """A rule ended in an error with this code, written as the number (``error: 3308``)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    error: AnalysisErrorKind
+
+    @property
+    def symptom(self) -> Symptom:
+        return self.error
+
 
 class CvlrRecipe(KBRecipe[CvlrChannel]):
     #: The symptoms that make ``verify_rules`` attach this recipe's body to its result, so the
     #: author gets it without having to recognise the situation.
-    pushed_on: list[GeneratedSymptom] = Field(default_factory=list)
+    pushed_on: list[GeneratedSymptom | ErrorSymptom] = Field(default_factory=list)
 
 
 CVLR_RECIPES = RecipeSet[CvlrChannel, CvlrRecipe](
@@ -250,13 +270,13 @@ CVLR_BUNDLE = KnowledgeBundle[CvlrChannel, CvlrRecipe](label="CVLR", recipes=CVL
 CVLR_FACTS_BUNDLE = KnowledgeBundle[CvlrChannel, CvlrRecipe](label="CVLR", specs=_CVLR_SPECS)
 
 
-def pushed_recipes(kinds: Collection[GeneratedKind]) -> list[str]:
-    """The bodies of the CVLR recipes pushed on any of ``kinds``, each once, in index order."""
+def pushed_recipes(symptoms: Collection[Symptom]) -> list[str]:
+    """The bodies of the CVLR recipes pushed on any of ``symptoms``, each once, in index order."""
     kb_resource_dir = files() / "resources"
     return [
         (kb_resource_dir / r.file).read_text()
         for r in _kb_model(CVLR_RECIPES).recipes
-        if any(s.generated in kinds for s in r.pushed_on)
+        if any(s.symptom in symptoms for s in r.pushed_on)
     ]
 
 

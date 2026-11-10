@@ -18,15 +18,19 @@ from pydantic import Field, BaseModel, ValidationError
 
 from composer.certora_env import ProverApp
 from composer.prover.ptypes import (
+    AnalysisErrorKind,
     AssertOrigin,
     Counterexample,
     GeneratedAssertion,
     GeneratedKind,
+    ProverMessage,
     RulePath,
     RuleResult,
     SourceSpan,
     StatusCodes,
     UnclassifiedAssertion,
+    Uncoded,
+    UnknownCode,
     UnknownKind,
     UserAssertion,
 )
@@ -217,18 +221,20 @@ def flatten_tree_view(
                 path=effective_path,
                 counterexample=None,
                 status=stat,
-                error_messages=list(messages)
+                messages=[prover_message(m) for m in sorted(messages)]
             )]
     elif stat == "SKIPPED":
         warning_message = [
-            i.message for i in r.errors if i.severity == "error" or i.severity == "warning"
+            prover_message(i.message)
+            for i in r.errors
+            if i.severity == "error" or i.severity == "warning"
         ]
         return [
             RuleResult(
                 path=effective_path,
                 counterexample=None,
                 status=stat,
-                error_messages=warning_message
+                messages=warning_message
             )
         ]
     if stat == "VERIFIED":
@@ -628,6 +634,22 @@ def assert_origin(reported: object) -> AssertOrigin:
             return GeneratedAssertion(UnknownKind(kind))
         case _:
             return UnclassifiedAssertion()
+
+
+#: The code at the start of a Prover error. A Prover before EVMVerifier#8815 prefixes an encoding
+#: failure with ``In <rule>: ``.
+_ERROR_CODE = re.compile(r"(?:In \S+: )?\[(\d+)\]")
+
+
+def prover_message(text: str) -> ProverMessage:
+    """A message the Prover reported on a rule, with the ``[NNNN]`` code that starts it."""
+    match _ERROR_CODE.match(text):
+        case None:
+            return ProverMessage(Uncoded(), text)
+        case m if int(m[1]) in AnalysisErrorKind:
+            return ProverMessage(AnalysisErrorKind(int(m[1])), text)
+        case m:
+            return ProverMessage(UnknownCode(int(m[1])), text)
 
 
 def counterexample(dump: dict[str, object], shape: TraceShape) -> Counterexample | None:

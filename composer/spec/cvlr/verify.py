@@ -16,7 +16,7 @@ from dataclasses import dataclass, field, replace
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
-from collections.abc import Callable, Container, Sequence
+from collections.abc import Callable, Collection, Container, Sequence
 from typing import AsyncIterator, Mapping, TypedDict, override
 
 from elftools.common.exceptions import ELFError
@@ -37,7 +37,7 @@ from composer.cargo.features import CargoFeature
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CargoSession, CompileFailed, CompileRun, Compiled
 from composer.cargo.symbols import SymbolsUnavailable, nearest, prover_function_names, unmatched
-from composer.kb.kb_context import pushed_recipes
+from composer.kb.kb_context import Symptom, pushed_recipes
 from composer.prover.cloud import results_api
 from composer.prover.core import (
     CexHandler,
@@ -45,9 +45,11 @@ from composer.prover.core import (
     TrivialFanoutCexHandler,
 )
 from composer.prover.ptypes import (
+    AnalysisErrorKind,
     GeneratedKind,
     IncompleteCheck,
     PropertyViolation,
+    ProverMessage,
     RuleResult,
     StatusCodes,
     classify_violation,
@@ -121,7 +123,8 @@ class _VerdictsParams(TypedDict):
     marked_verified: list[str]
     #: Stopped on an assertion the Prover generated.
     incomplete: list[_IncompleteRule]
-    #: The bodies of the recipes pushed on the kinds among ``incomplete``, each once.
+    #: The bodies of the recipes pushed on the kinds among ``incomplete`` and the codes of the
+    #: run's errors, each once.
     recipes: list[str]
     #: Listed by the build, with no verdict in the report.
     unverdicted: list[str]
@@ -424,16 +427,19 @@ def _verdicts_note(
     unexcused: Sequence[str],
     unverdicted: list[str],
     *,
+    errors: Collection[ProverMessage] = (),
     stamped: bool,
 ) -> str:
     """The author's notes on this run's verdicts, or an empty string when there are none."""
     ordered = sorted(incomplete.items())
+    symptoms: set[Symptom] = {
+        stopped.kind for _, stopped in ordered if isinstance(stopped.kind, GeneratedKind)
+    }
+    symptoms |= {e.code for e in errors if isinstance(e.code, AnalysisErrorKind)}
     return _Verdicts.bind({
         "marked_verified": [name for name in unexcused if status[name] == "VERIFIED"],
         "incomplete": [{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
-        "recipes": pushed_recipes(
-            {stopped.kind for _, stopped in ordered if isinstance(stopped.kind, GeneratedKind)}
-        ),
+        "recipes": pushed_recipes(symptoms),
         "unverdicted": unverdicted,
         "property_failures": [
             name for name in unexcused if status[name] == "VIOLATED" and name not in incomplete
@@ -816,6 +822,7 @@ class VerifyRules(
                     incomplete,
                     unaccounted(status, expected, incomplete),
                     unverdicted,
+                    errors=[m for messages in report.errors.values() for m in messages],
                     stamped=stamped,
                 )
                 if note:

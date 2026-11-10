@@ -52,6 +52,7 @@ from composer.prover.cloud import CloudJobError, CloudResultsUnavailable, cloud_
 from composer.prover.ptypes import (
     IncompleteCheck,
     PropertyViolation,
+    ProverMessage,
     RulePath,
     RuleResult,
     StatusCodes,
@@ -166,6 +167,8 @@ class ProverReport:
     #: a limit of its own (:func:`composer.prover.ptypes.classify_violation`). Every other violated
     #: instance found something about the program.
     incomplete: dict[RulePath, IncompleteCheck] = field(default_factory=dict)
+    #: What the Prover said about each instance that ended in ``ERROR``.
+    errors: dict[RulePath, list[ProverMessage]] = field(default_factory=dict)
 
     def rule_outcomes(self) -> dict[str, StatusCodes]:
         """One status per rule. A non-``VERIFIED`` instance is kept over a later ``VERIFIED`` one."""
@@ -499,8 +502,8 @@ def _report_without_analysis(results: list[RuleResult]) -> str:
     lines: list[str] = []
     for r in results:
         lines.append(f"{r.name}: {r.status}")
-        for message in r.error_messages or ():
-            lines.append(f"  {message}")
+        for message in r.messages:
+            lines.append(f"  {message.text}")
     return "\n".join(lines)
 
 
@@ -1022,6 +1025,7 @@ async def collect_prover_results(
         raw_rule_status=raw_rule_results,
         alerts=alerts,
         incomplete=incomplete,
+        errors={r.path: r.messages for r in parsed.values() if r.status == "ERROR"},
         result_str=result_str,
         link=job.link,
         certora_run_stdout=stdout,

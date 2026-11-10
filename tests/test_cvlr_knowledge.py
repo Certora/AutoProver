@@ -429,9 +429,8 @@ def test_the_author_is_warned_that_a_summary_is_unsound():
     """It is a sharper instrument than the mirror it replaces: summarizing the code a property is
     about gives a passing rule that checked nothing, and unlike a mirror it leaves no trace in the
     harness at all."""
-    prompt = _flat(_author_task_prompt())
-    assert "summarizing the code a property is *about*" in prompt
-    assert "never the handler" in prompt
+    assert "never the handler" in _flat(_author_task_prompt())
+    assert "summarizing the code a property is *about*" in _recipe("K10")
 
 
 def test_the_judge_weighs_summaries_the_same_way_it_weighs_mirrors():
@@ -562,7 +561,7 @@ def test_an_unanalyzable_handler_skip_names_the_tool_it_tried():
 def test_the_author_is_told_a_directive_can_match_nothing():
     """Otherwise the only feedback is a repeat of the same error, and the response to that is to
     guess another spelling — which is what happened five times in one unit."""
-    prompt = _flat(_author_task_prompt())
+    prompt = _recipe("K10")
     assert "matched **no symbol at all**" in prompt
     assert "the library function one level out" in prompt
 
@@ -572,7 +571,7 @@ def test_no_specific_symbol_is_offered_as_a_worked_example():
     no build of that program — the compiler inlines it. Two separate runs wrote it because the
     prompt did, kept it after being told it matched nothing, and paid a submission each time. A
     prompt cannot know a build's symbols; the report can, so it is the report's job."""
-    prompt = _flat(_author_task_prompt())
+    prompt = _flat(_author_task_prompt()) + _recipe("K10")
     assert "VaultError" not in prompt
 
 
@@ -580,7 +579,7 @@ def test_the_author_is_told_when_to_stop_summarizing():
     """Nothing bounded the remedy, so it did not stop: eleven directives over nine submissions,
     seven matching real symbols, walking a formatting chain frame by frame while the error stayed
     identical. The code was inlined into the handler, where no summary reaches."""
-    prompt = _flat(_author_task_prompt())
+    prompt = _recipe("K10")
     assert "Give up on this remedy after about three directives down one path" in prompt
     assert "inlined *into the handler itself*" in prompt
 

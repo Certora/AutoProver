@@ -112,3 +112,25 @@ recipes:
   file: recipes/cvlr-k14-validating-with-try-accounts.md
   search_terms:
   - try_accounts
+- id: K10
+  name: A rule the pointer analysis refuses
+  triggers:
+  - A rule ends in `[3308]` illegal dereference of an absolute address, or `[3006]` illegal store of
+    a stack pointer
+  - You are about to write a `summarize_for_prover` directive
+  channel: [MOCK, SKIP]
+  file: recipes/cvlr-k10-a-rule-the-pointer-analysis-refuses.md
+  pushed_on:
+  - error: 3308
+  - error: 3006
+- id: K11
+  name: State the analysis cannot size, variable-length collections and `swap_derive`
+  triggers:
+  - A rule ends in `[3005]` memcpy with dynamically sized length
+  - An internal error out of `ScalarDomain`
+  - A submission that fails with no per-rule verdicts at all
+  - You are about to ask the editor for a `swap_derive`
+  channel: [EDIT, SKIP]
+  file: recipes/cvlr-k11-state-the-analysis-cannot-size.md
+  pushed_on:
+  - error: 3005

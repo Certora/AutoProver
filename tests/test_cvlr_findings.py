@@ -23,7 +23,7 @@ from langgraph.store.memory import InMemoryStore
 
 from composer.prover.core import _incomplete
 from composer.prover.ptypes import GeneratedKind, IncompleteCheck, RulePath, RuleResult, StatusCodes
-from composer.prover.results import SOLANA_TRACE, counterexample
+from composer.prover.results import SOLANA_TRACE, counterexample, prover_message
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.pipeline import CvlrFormalizer
 from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
@@ -244,3 +244,35 @@ def test_the_gate_gives_each_kind_its_remedy_once():
     assert note.count("### K4.") == 1
     assert note.count("### K5.") == 1
     assert "expect_rule_failure" in note
+
+
+def test_the_gate_pushes_the_pointer_analysis_recipe_on_an_error_code():
+    """An ERROR carries no counterexample, so its code is the only thing a recipe can be keyed on."""
+    note = _verdicts_note(
+        {"r": "ERROR", "s": "ERROR"},
+        {},
+        ["r", "s"],
+        [],
+        errors=[
+            prover_message("[3308] illegal dereference of an absolute address"),
+            prover_message("In s: [3006] illegal store of a stack pointer"),
+        ],
+        stamped=False,
+    )
+    assert note.count("### K10.") == 1
+    assert "### K11." not in note
+
+
+def test_the_gate_pushes_the_sizing_recipe_on_a_dynamic_memcpy():
+    note = _verdicts_note(
+        {"r": "ERROR"}, {}, ["r"], [],
+        errors=[prover_message("[3005] memcpy with dynamically sized length")], stamped=False,
+    )
+    assert "### K11." in note and "### K10." not in note
+
+
+def test_an_error_with_no_listed_code_pushes_nothing():
+    note = _verdicts_note(
+        {"r": "ERROR"}, {}, ["r"], [], errors=[prover_message("Rule r timed-out")], stamped=False
+    )
+    assert "### K" not in note

@@ -8,10 +8,6 @@ These rules stopped on an assertion the prover generated rather than one of your
 {% for rule in incomplete %}  {{ rule.name }}{% if rule.assertion %}: {{ rule.assertion }}{% endif %}
 {% endfor -%}
 None of these says whether the rule's property holds.
-{%- for recipe in recipes %}
-
-{{ recipe }}
-{%- endfor %}
 expect_rule_failure does not account for one of these: a marking claims a real defect, and none has been shown.
 {% endif %}
 {%- if unverdicted %}
@@ -26,7 +22,9 @@ the rule, or mark it with expect_rule_failure and say why the failure is real.
 {%- if unfinished %}
 {{ unfinished | join(", ") }} did not reach a property verdict. A timeout, an error, a sanity failure, or a skip is not a
 finding, and expect_rule_failure does not account for one.
-{% endif %}
+{% endif %}{%- for recipe in recipes %}
+{{ recipe }}
+{% endfor %}
 {%- if stamped %}
 Every rule is accounted for. This draft is stamped.
 {% endif %}
