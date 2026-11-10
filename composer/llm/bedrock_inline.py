@@ -18,7 +18,7 @@ Kept free of langchain imports, like :mod:`composer.llm.bedrock`.
 
 import json
 import logging
-from typing import Any, Callable, cast
+from typing import Any, Callable, TypeGuard
 
 from composer.llm.bedrock import BACKEND_ENV_VAR
 
@@ -74,6 +74,15 @@ def serialized_request_size(payload: dict[str, Any]) -> int:
     return _serialized_size(payload)
 
 
+def _is_block(value: object) -> TypeGuard[dict[str, Any]]:
+    """Whether ``value`` is a content block: a JSON object, whose keys are strings."""
+    return isinstance(value, dict)
+
+
+def _is_list(value: object) -> TypeGuard[list[object]]:
+    return isinstance(value, list)
+
+
 def _map_content_blocks(
     payload: dict[str, Any], fn: Callable[[dict[str, Any]], dict[str, Any]]
 ) -> dict[str, Any]:
@@ -84,15 +93,14 @@ def _map_content_blocks(
     def map_list(blocks: list[object]) -> list[object]:
         out: list[object] = []
         for block in blocks:
-            if not isinstance(block, dict):
+            if not _is_block(block):
                 out.append(block)
                 continue
-            content_block = cast(dict[str, Any], block)
-            content = content_block.get("content")
-            if content_block.get("type") == "tool_result" and isinstance(content, list):
-                out.append({**content_block, "content": map_list(cast(list[object], content))})
+            content = block.get("content")
+            if block.get("type") == "tool_result" and _is_list(content):
+                out.append({**block, "content": map_list(content)})
             else:
-                out.append(fn(content_block))
+                out.append(fn(block))
         return out
 
     result = dict(payload)

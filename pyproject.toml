@@ -60,6 +60,11 @@ dependencies = [
     # does SigV4 signing (and AWS credential refresh) off the event loop. The
     # [bedrock] extra brings boto3/botocore, which those clients sign with.
     # <1.0 matches langchain-anthropic 1.4's own anthropic<1.0 requirement.
+    # composer/llm/bedrock_chat.py also uses private SDK names: the clients'
+    # _calculate_retry_timeout and _parse_retry_after_header, and
+    # anthropic._models.FinalRequestOptions. tests/test_bedrock_retry.py runs a
+    # 429 through the real retry loop, so a lock update that renames them fails
+    # the suite.
     "anthropic[bedrock]>=0.122.0,<1.0",
     # composer/llm/bedrock_chat.py overrides private ChatAnthropic methods (_client,
     # _async_client, _create, _acreate, _get_request_payload and the stream-event and
