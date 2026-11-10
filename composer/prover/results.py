@@ -514,6 +514,12 @@ class RuleStatistics:
     branching: tuple[Hotspot, ...]
     nonlinear: tuple[Hotspot, ...]
 
+    @property
+    def top_share(self) -> int | None:
+        """The largest share any one function holds, of branching or of nonlinear operations."""
+        shares = [spots[0].share for spots in (self.branching, self.nonlinear) if spots]
+        return max(shares, default=None)
+
     def render(self, top: int = 2) -> str:
         parts = [self.phase.render()]
         if self.path_count is not None:

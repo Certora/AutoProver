@@ -25,6 +25,7 @@ from composer.prover.core import ProverReport, _incomplete
 from composer.prover.ptypes import GeneratedKind, IncompleteCheck, RulePath, RuleResult, StatusCodes
 from composer.prover.results import (
     SOLANA_TRACE,
+    Hotspot,
     RuleStatistics,
     Solving,
     StaticAnalysis,
@@ -38,6 +39,7 @@ from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
 from composer.spec.cvlr.verify import (
     BuildPermit,
     _CaptureCallbacks,
+    DOMINANT_SHARE,
     _verdicts_note,
     symptoms,
     unaccounted,
@@ -321,6 +323,22 @@ def test_the_gate_pushes_the_stand_in_recipe_on_a_rule_that_never_reached_the_so
 
     assert "### K8." in _report_note(stopped(StaticAnalysis()))
     assert "### K8." not in _report_note(stopped(Solving(4, 50, 2, 10)))
+
+
+def test_the_gate_pushes_the_stand_in_recipe_when_one_function_holds_the_time():
+    def stopped(branching: int | None, nonlinear: int | None) -> ProverReport:
+        stats = RuleStatistics(
+            phase=Solving(4, 50, 2, 10),
+            path_count=None,
+            branching=() if branching is None else (Hotspot("f", branching),),
+            nonlinear=() if nonlinear is None else (Hotspot("g", nonlinear),),
+        )
+        return _report({"r": "TIMEOUT"}, statistics={RulePath(rule="r"): stats})
+
+    assert "### K8." in _report_note(stopped(DOMINANT_SHARE, None))
+    assert "### K8." in _report_note(stopped(10, DOMINANT_SHARE + 30))
+    assert "### K8." not in _report_note(stopped(DOMINANT_SHARE - 1, DOMINANT_SHARE - 1))
+    assert "### K8." not in _report_note(stopped(None, None))
 
 
 def test_the_gate_pushes_the_halted_job_recipe_when_the_job_hit_its_limit():

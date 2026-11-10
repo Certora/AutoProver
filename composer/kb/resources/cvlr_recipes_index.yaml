@@ -144,6 +144,7 @@ recipes:
   file: recipes/cvlr-k8-a-bounded-stand-in.md
   pushed_on:
   - timeout: static analysis
+  - timeout: dominant function
   search_terms:
   - mock_fn
 - id: K9

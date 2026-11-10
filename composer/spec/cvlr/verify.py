@@ -437,6 +437,14 @@ class VerifyDeps:
         )
 
 
+#: The share of a timed-out rule's branching or nonlinear operations, in percent, at which one
+#: function is taken to be where its time goes. Set from the klend benchmark's timeouts: the
+#: fixed-point division authors later replaced with a stand-in held 44–65 %, the handler logic the
+#: rules were about at most 28 %. Placed near the low edge of that gap because a recipe sent in vain
+#: costs a few KB of text and one missed costs prover rounds.
+DOMINANT_SHARE = 40
+
+
 def symptoms(report: ProverReport) -> set[Symptom]:
     """What in ``report`` a recipe can be pushed on."""
     found: set[Symptom] = {
@@ -454,6 +462,16 @@ def symptoms(report: ProverReport) -> set[Symptom]:
         found.add(StatusSymptom(status="SANITY_FAILED"))
     if any(isinstance(stats.phase, StaticAnalysis) for stats in report.statistics.values()):
         found.add(TimeoutSymptom(timeout="static analysis"))
+    for path, stats in report.statistics.items():
+        dominant = stats.top_share is not None and stats.top_share >= DOMINANT_SHARE
+        if dominant:
+            found.add(TimeoutSymptom(timeout="dominant function"))
+        # Read back after a benchmark to move DOMINANT_SHARE: which timeouts were told, and at
+        # what share, against whether a stand-in for that function then cleared them.
+        _log.info(
+            "cvlr timeout statistics: rule=%s phase=%s top_share=%s dominant=%s",
+            path.pprint(), stats.phase.render(), stats.top_share, dominant,
+        )
     if report.halted:
         found.add(JobSymptom(job="halted"))
     return found

@@ -240,9 +240,9 @@ class StatusSymptom:
 
 @pydantic_dataclass(frozen=True, config=_SYMPTOM)
 class TimeoutSymptom:
-    """A rule timed out in this phase."""
+    """A rule timed out before reaching the solver, or with one function holding most of it."""
 
-    timeout: Literal["static analysis"]
+    timeout: Literal["static analysis", "dominant function"]
 
 
 @pydantic_dataclass(frozen=True, config=_SYMPTOM)

@@ -418,9 +418,12 @@ named there, "When a rule should fail", and the judge's checklist.
    took the baseline facts' "When the Prover cannot follow the program's own data"; what that section
    said about munges in general stays there, as "Asking for a munge".
 5. **K8, K9, K12**, pushed on the statistics phase, the failed job's alert type and
-   `SANITY_FAILED`. Done, except one push. K8 is pushed on `timeout: static analysis`
-   (`RuleStatistics.phase` is now `StaticAnalysis | Solving | OtherPhase`), not yet on a hotspot
-   share. K12 is pushed on `status: SANITY_FAILED`. K9 is pushed on `job: halted`: from the
+   `SANITY_FAILED`. Done. K8 is pushed on `timeout: static analysis` (`RuleStatistics.phase` is
+   now `StaticAnalysis | Solving | OtherPhase`) and on `timeout: dominant function`, when one
+   function holds at least `DOMINANT_SHARE` (40 %) of a timed-out rule's branching or nonlinear
+   operations. The 40 comes from the klend benchmark's timeouts (`composer/spec/cvlr/verify.py`
+   says how); `verify_rules` logs every timed-out rule's top share so the next benchmark can move
+   it. K12 is pushed on `status: SANITY_FAILED`. K9 is pushed on `job: halted`: from the
    report's `halted` when the job still returned verdicts, and from the failure when it returned
    none. For the second, `run_prover` returns a `ProverFailure` (`JobFailed | ResultsUnavailable |
    RunFailed`) rather than a string; a `JobFailed` that is `HALTED`, or carries an "Out of
