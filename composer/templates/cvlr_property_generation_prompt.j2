@@ -102,10 +102,8 @@ Read the outcome:
   assumptions contradicting each other or the program, or an assertion that fails on every path.
   Find out which before weakening anything.
 
-  **First check the rule ends with `core::mem::forget(accounts);`.** The vacuity check's `satisfy`
-  sits at the very end of the rule function, after its locals are dropped, and dropping the
-  16-account array is a loop `loop_iter: 2` cannot finish — so a rule that lets the array drop can be
-  vacuous with nothing wrong in it. It is the most common cause measured on this backend.
+  **First check the rule ends with `core::mem::forget(accounts);`** (see "Reaching a handler"): the
+  dropped account array is the most common cause measured on this backend.
 
   **Start with `explain_vacuity(rule)`.** It reruns that one rule with the vacuity check off, about
   as fast as an ordinary run, and reads the unsat core of the proof. Its first line settles the

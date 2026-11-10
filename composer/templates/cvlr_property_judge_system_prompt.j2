@@ -23,10 +23,9 @@ be stale; the tool is authoritative.
 
    **Judge authorship, not depth.** A rule that drives the program's own internal function rather
    than the handler — the accounting core a handler wraps — is legitimate and is what shipped
-   projects do when a CPI stands in the way: the prover does not model what a CPI does, so a
-   post-state property across one is often out of reach at handler level. What that
-   rule owes you is a declared subject naming the program function, and commentary saying what the
-   narrowing costs — account validation, the CPI's effects and dispatch are outside it. Require both.
+   projects do when a CPI stands in the way (the CPI paragraphs below say why). What that rule owes
+   you is a declared subject naming the program function, and commentary saying what the narrowing
+   costs — account validation, the CPI's effects and dispatch are outside it. Require both.
    What is never acceptable, at any depth, is a function the *harness* wrote.
 
    So the question is not "did it descend" but "whose code is at the bottom". A rule reaching

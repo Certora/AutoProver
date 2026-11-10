@@ -87,60 +87,38 @@ Read it rather than assuming a default. `loop_iter` is the loop bound the loop l
 prover spends its time, never what a green verdict means. A bound too low shows up as a violation,
 not as a weaker green.
 
-`optimistic_loop` is not, and it is on the list for one reason: the sound remedies for a loop run
-out before the problem does. A trip count the analysis cannot fix is answered by none of them, and
-the choice left is to assume the loop finishes or to abandon the handler. Turning it on makes every
-verdict in this unit's next submission conditional on an assumption nothing checked: that every loop
-finishes within `loop_iter` iterations. From then on the bound is part of what a green verdict
-means, and lowering it weakens every verdict in the unit. So `why` has to carry which bounds you
-tried and what they reported. Read the loop ladder below before reaching for it.
+`optimistic_loop` is not. Turning it on makes every verdict in this unit's next submission
+conditional on an assumption nothing checked: that every loop finishes within `loop_iter`
+iterations. From then on the bound is part of what a green verdict means, and lowering it weakens
+every verdict in the unit. So `why` has to carry which bounds you tried and what they reported.
 
 Still not yours, and for these say which setting is in your way and why — a `record_skip` with
 something actionable in it, not a workaround: a `rule_sanity` downgrade stops vacuity being
 reported, the memory-model flags are unsound by name and measurably fix nothing, and no other
 prover flag is yours to set.
 
-**Both come at the end of the loop ladder, and the ladder below says so.** A rule that will not
-finish is usually telling you something about the rule, and a setting that makes the symptom go
-away leaves you shipping a proof you understand less well. The conf you change ships with the
-deliverable, so the `why` you give is what a reader gets.
+**Both come at the end of the loop ladder below.** A rule that will not finish is usually telling
+you something about the rule, and a setting that makes the symptom go away leaves you shipping a
+proof you understand less well. The conf you change ships with the deliverable, so the `why` you
+give is what a reader gets.
 
 **`-solanaTACSoundSignedMath` asserts things you did not write.** It is in `prover_args` because
 without it a `u64` compared against `u64::MAX` is decided wrongly. Its price is a check of its own:
 the prover asserts that every value it takes for a pointer stays below `2^64`, and it sometimes takes
 for a pointer an expression built from a number read out of an account. The rule then stops on
 `Cannot overflow: inferred pointer` (or `Cannot overflow: computing TAC map index`) before it reaches
-its property. That verdict says nothing about the program. When a rule stops on one, bound the
-account-data values on its path once, `cvlr_assume!(x < 1 << 63)`, and record each bound as an
-assumption. If the same stop comes back with the bound in place, stop working on that rule's shape.
-Which expressions the prover takes for pointers depends on how the code is laid out: two rules that
-mean the same thing, one verifying and one stopping, differ only in statement order. Instead, state
-the property against the program's own logic below the handler, a function that takes no
-`AccountInfo`, if the program has one; otherwise skip the property and give the stop as the reason.
-Do not bound ahead of time: a property about wrapping at the top of the range (a `checked_add` that
-must fail at `u64::MAX`) loses exactly the paths it is about. Such a property cannot take the bound,
-so skip it and give that reason.
+its property. That verdict says nothing about the program, and `verify_rules` says what to do when
+a rule stops on one. Do not bound account data ahead of time to prevent it: a property about
+wrapping at the top of the range (a `checked_add` that must fail at `u64::MAX`) loses exactly the
+paths it is about.
 
 ## The loop ladder: when a loop will not finish
 
 A rule that stops on `Unwinding condition in a loop` ran through a loop the bound did not finish: a
-VIOLATED with the loop in its trace, or a vacuous rule whose every path runs through one. Work down
-these in order, and stop at the first that clears it.
-
-1. **Bound what sets the trip count.** A loop over account data runs as many times as the data
-   allows. `cvlr_assume!` the length into the bound, in the rule, and record it as an assumption; the
-   report states it. Do not shrink the collection instead (see the editor section below).
-2. **Get the loop out of the property's way.** If the loop is in code the property does not depend
-   on, summarize the function that holds it with `summarize_for_prover`, or ask `code_editor` to
-   munge it. If the property is *about* the loop, neither is honest: `record_skip` and name the loop.
-3. **Raise `loop_iter`.** Keep it as low as the property allows. Cost grows exponentially, and above
-   3 or 4 it grows faster than the answer is usually worth.
-4. **Turn `optimistic_loop` on**, only for a loop whose trip count the analysis cannot fix. The sign
-   is that raising the bound does not clear it, because the iteration the violation reports goes up
-   with the bound. Check that by moving the bound and reading what comes back; a loop that clears at
-   3 is not this case. A CPI's instruction encoder is the measured example (see "Reaching a handler"
-   below). With it on, the rest of the handler is reachable again, under the assumption described
-   above.
+VIOLATED with the loop in its trace, or a vacuous rule whose every path runs through one. The ladder
+of remedies is in the section "Loops are bounded, and the bound is not assumed away" of the context
+document *CVLR and the Certora Solana Prover*. Work down it in order, and stop at the first rung that
+clears the stop.
 
 ## When a computation will not finish: a bounded stand-in
 
@@ -268,8 +246,9 @@ The editor's charter is nine kinds, and knowing them tells you what is worth ask
   extracted piece proves nothing about the checks that stayed in the enclosing function, so declare
   it in `rule_subjects` for what it is.
 * **`swap_derive`** moves a type's derived (de)serializer behind your unit's feature so you can
-  supply the impls yourself. It has its own section below, under the symptom that calls for it —
-  it is the widest-reaching kind and the one with the most for you to get right afterwards.
+  supply the impls yourself. The context document's section "When the Prover cannot follow the
+  program's own data" covers it, under the symptom that calls for it — it is the widest-reaching
+  kind and the one with the most for you to get right afterwards.
 
 One more thing people reach for, and you should prefer the honest version of it. Shrinking a bounded collection —
 the array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over
@@ -294,8 +273,8 @@ is cheaper and is the shape the extraction guidance asks for. Build the accounts
 has the best fidelity: the real `Context`, the real target, and real account validation when the
 struct comes from `try_accounts` (below). Prefer it.
 
-But a handler that performs a CPI rarely carries a post-state property at handler level. The prover
-does not model what a CPI does: it keeps every value the call would change as it was before the call.
+But a handler that performs a CPI rarely carries a post-state property at handler level. **What a
+CPI does is not modelled**: the prover keeps every value the call would change as it was before the call.
 That is measured for lamports, and the same mechanism covers token balances and account data. Building
 the call's instruction also runs a loop that no loop bound discharges, so a rule through it stops on
 the unwinding assertion unless loops are assumed to finish. And a handler's error paths often reach
@@ -592,12 +571,6 @@ A zero-copy `AccountLoader` field behaves differently and more conveniently: `lo
 account's bytes directly, so a handler's writes through its own loader are visible through yours with
 no write-back involved. Retain the loader before the call — `let reserve = ix.reserve.clone();` — and
 `load()` it before and after.
-
-**What a CPI does is not modelled.** The prover keeps every value a cross-program invocation would
-change as it was before the call. So a property about what the CPI *did* — lamports actually moved, a
-token balance actually changed — fails against a correct program, and a property that needs the CPI
-*not* to have moved something passes having checked nothing. Assert over the program's own recorded
-state, which is the part it is responsible for.
 
 ## State invariants: a base case and one step per writer
 

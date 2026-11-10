@@ -396,7 +396,11 @@ named there, "When a rule should fail", and the judge's checklist.
 
 ## 7. Order of work
 
-1. **Duplicates (§5).** Prompt-only. Removes about 6 KB from the author's context.
+1. **Duplicates (§5).** Prompt-only. Removes about 6 KB from the author's context. Until K4 exists,
+   the loop ladder's one copy is the baseline facts' section, which the author and judge both load
+   and the judge already cites; the system prompt keeps the heading "The loop ladder", which the
+   Solana skill sends its agent to, with a pointer to that section. So step 1 removes about 2 KB,
+   and the rest comes off when step 2 moves the ladder into K4.
 2. **Push mechanism (§4)** with K4 and K5, replacing `_ADVISED` and the paragraphs in `verdicts.j2`.
    Behaviour-preserving for those two kinds, so a good check of the mechanism.
 3. **Pulled recipes that need nothing new:** K6, K7, K13, K14, and the move into

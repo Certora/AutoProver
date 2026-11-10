@@ -151,11 +151,15 @@ any violation that needs more iterations to reach. It is the last resort, below 
 what follows is the order to work through first:
 
 1. **Constrain what determines the trip count.** Usually the loop is over a collection whose length is
-   nondeterministic, so `cvlr_assume!` a bound on that length. This is the honest fix: the rule then
-   states the bound it proves under, and the report says so.
+   nondeterministic, so `cvlr_assume!` a bound on that length, in the rule, and record it as an
+   assumption. This is the honest fix: the rule then states the bound it proves under, and the report
+   says so. Shrinking the collection in the program instead is unsound in a direction nothing
+   reports.
 2. **Ask whether the loop is even in your property's way.** A loop in a borsh deserialization path or
-   a logging helper is not what the property is about; a summary for that function is the same trade
-   as any other summary, with the same obligation to justify it.
+   a logging helper is not what the property is about. Summarize the function that holds it with
+   `summarize_for_prover`, or ask `code_editor` to munge it; either is the same trade as any other
+   summary, with the same obligation to justify it. If the property is *about* the loop, neither is
+   honest: `record_skip` and name the loop.
 3. **Raise the bound, having tried the first two.** `adjust_prover_config` sets `loop_iter`. Cost
    grows exponentially with it, so raise it to the smallest number the property needs and say in
    the `why` what you bounded first and why it was not enough. Above 3 or 4 it grows faster than
@@ -166,6 +170,7 @@ what follows is the order to work through first:
    cannot fix is not answered by constraining the inputs, by a summary, or by unrolling further —
    the bound goes up and the reported iteration goes up with it, forever. Establish that it is that
    case by moving the bound and reading what comes back, because a loop that discharges at 3 is not.
+   A CPI's instruction encoder is the measured example.
 
    What it costs is not confined to the loop you were fighting: **every rule in the unit's next
    submission is verified under the assumption**, so each of their verdicts becomes conditional on
