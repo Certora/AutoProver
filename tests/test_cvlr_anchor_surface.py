@@ -247,6 +247,14 @@ def _model_withdraw() -> SolanaInstruction:
 # -- what the author is told ----------------------------------------------------------------------
 
 
+def _k14() -> str:
+    from composer.kb.kb_context import CVLR_RECIPES, kb_loader
+
+    recipe = kb_loader(CVLR_RECIPES)("K14")
+    assert recipe is not None
+    return recipe
+
+
 def _render(example) -> str:
     return env.get_template("cvlr_property_generation_system_prompt.j2").render(
         module="withdrawals",
@@ -264,26 +272,26 @@ def test_the_prompt_rules_out_the_module_the_failing_draft_reached_for(tmp_path:
 
     assert "`WithdrawBumps`" in rendered
     assert "__client_accounts_withdraw" in rendered
-    assert "Nothing a rule builds" in rendered
+    assert "nothing a rule builds lives in" in " ".join(rendered.split())
 
 
 def test_the_prompt_states_the_relationship_rather_than_a_derived_path(tmp_path: Path) -> None:
     """A module path derived from the file would be a fresh guess — a private `mod` with a
-    `pub use` would make it wrong. The relationship holds however the struct is reached."""
-    surface = read_surface(_write(tmp_path))
-    rendered = _render(worked_example(_component(_model_withdraw()), [], surface))
+    `pub use` would make it wrong. The relationship holds however the struct is reached, so it is
+    stated once, in the recipe, rather than per program."""
+    recipe = _k14()
 
-    assert "whatever path reaches the struct reaches it" in rendered
-    assert "always valid" in rendered
+    assert "whatever path reaches the struct reaches it" in recipe
+    assert "always valid" in recipe
 
 
 def test_the_generated_names_are_stated_even_with_no_example() -> None:
     """The rules are Anchor's, not this program's: a run with no analyzed component still needs
     them, since the trap is the same one."""
-    rendered = _render(None)
-
-    assert "__client_accounts_<snake>" in rendered
-    assert "instruction::<Handler in PascalCase>::DISCRIMINATOR" in rendered
+    assert "recipe K14" in _render(None)
+    recipe = _k14()
+    assert "__client_accounts_<snake>" in recipe
+    assert "instruction::<Handler in PascalCase>::DISCRIMINATOR" in recipe
 
 
 # -- the worked example prefers the source ---------------------------------------------------------

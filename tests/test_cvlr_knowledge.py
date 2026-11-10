@@ -263,6 +263,15 @@ def test_the_author_is_told_a_cpi_moves_nothing_in_the_model():
 # the tests for having closed them.
 
 
+def _recipe(id: str) -> str:
+    """A CVLR recipe's body, wrapping collapsed as :func:`_flat` does."""
+    from composer.kb.kb_context import CVLR_RECIPES, kb_loader
+
+    body = kb_loader(CVLR_RECIPES)(id)
+    assert body is not None, id
+    return _flat(body)
+
+
 def _flat(text: str) -> str:
     """Prompt text with line wrapping collapsed.
 
@@ -335,11 +344,13 @@ def test_descending_below_the_handler_is_allowed_only_into_the_program_s_own_cod
     """
     prompt = _flat(_author_system_prompt())
     assert "Start at the handler, and descend only for a reason you can name" in prompt
-    assert "The function must be the program's" in prompt
-    assert "writing your own version of that function in this module is not descending" in prompt
+    # the authorship line stays standing; the shape and its obligations are recipe K7
+    assert "The function must be the program's" in prompt and "Recipe K7" in prompt
+    recipe = _recipe("K7")
+    assert "writing your own version of that function in this module is not descending" in recipe
     # the descent has to reach the report, or it is a silent narrowing
-    assert "Declare it" in prompt
-    assert "Say what it costs, in the commentary" in prompt
+    assert "Declare it" in recipe
+    assert "Say what it costs, in the commentary" in recipe
 
 
 def test_avoiding_the_dispatcher_is_justified_by_cost_not_by_pointer_analysis():
@@ -601,11 +612,13 @@ def test_the_author_is_told_what_a_cpi_stand_in_cannot_do():
     can produce. The 2026-09-21 run paid two prover jobs to find them, which is the cost this text
     exists to stop repeating.
     """
-    prompt = _flat(_author_system_prompt())
+    assert "Recipe K6" in _flat(_author_system_prompt())
+    prompt = _recipe("K6")
     assert "Move nothing." in prompt
     assert "Decode nothing." in prompt
     assert "[3003] dereference of a register with unknown provenance" in prompt
     assert "Instruction::new_with_bincode" in prompt
+    prompt = _flat(_author_system_prompt())
     # And the reason the second one needs a *second* swap: the kind redirects a name, not a function.
     assert "swaps a whole module the same way" in prompt
 
@@ -682,7 +695,7 @@ def test_the_descent_example_is_real_code_against_the_test_scenario():
     The two details a first draft got wrong are pinned below: `nondet()` is implemented for scalars
     and not for `Pubkey`, and the transition returns a `Split` rather than mutating an out-param.
     """
-    prompt = _author_system_prompt()
+    prompt = _recipe("K7")
     assert "crate::vault_accounting::apply_withdrawal(&mut vault, amount, true).unwrap()" in prompt
     assert "authority: Pubkey::default()" in prompt
     assert "cvlr_assert!(before - vault.balance == amount);" in prompt

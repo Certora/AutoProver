@@ -72,3 +72,43 @@ recipes:
   file: recipes/cvlr-k5-cannot-overflow-inferred-pointer.md
   pushed_on:
   - generated: cannotOverflow
+- id: K6
+  name: Taking a CPI out from under a handler
+  triggers:
+  - A handler performs a CPI and the property is about the handler's own bookkeeping
+  - A rule stops on `[3003]` with `alloc/src/rc.rs` in the trace
+  - A VIOLATED rule over a value decoded back out of an instruction's bytes
+  channel: EDIT
+  file: recipes/cvlr-k6-taking-a-cpi-out-from-under-a-handler.md
+  search_terms:
+  - swap_import
+  - invoke_signed
+- id: K7
+  name: Descending to the program's state-transition core
+  triggers:
+  - A handler-level rule is blocked by a CPI, by account validation or by error formatting, and the
+    program has an accounting function below the handler
+  channel: RULE
+  file: recipes/cvlr-k7-descend-to-the-state-transition-core.md
+- id: K13
+  name: Acceptance through a `seeds` constraint
+  triggers:
+  - An acceptance property whose validation runs through a `seeds` constraint, including `init` on a
+    PDA
+  - A property that a non-canonical PDA is refused
+  channel: SKIP
+  file: recipes/cvlr-k13-acceptance-through-seeds.md
+  search_terms:
+  - find_program_address
+  - create_program_address
+- id: K14
+  name: Validating an accounts struct with `try_accounts`
+  triggers:
+  - A property enforced by the accounts struct's `#[account(...)]` constraints rather than by the
+    handler body
+  - You need a name `#[derive(Accounts)]` generates (the bumps type, the discriminant) and cannot find
+    it in the source
+  channel: RULE
+  file: recipes/cvlr-k14-validating-with-try-accounts.md
+  search_terms:
+  - try_accounts

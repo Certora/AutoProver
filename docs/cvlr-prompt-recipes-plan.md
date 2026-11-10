@@ -407,7 +407,10 @@ named there, "When a rule should fail", and the judge's checklist.
    far (`generated:`); the others join it as their steps land. The baseline facts keep a short
    "Loops are bounded" section with the facts and a pointer to K4, and the judge's §5 cites K4.
 3. **Pulled recipes that need nothing new:** K6, K7, K13, K14, and the move into
-   `invariant_guidance()`.
+   `invariant_guidance()`. Done. Each moved passage leaves a pointer that keeps what shapes a first
+   draft: the two moves past a CPI and that the descent must reach the program's own function, what
+   neither move can show, that `seeds` acceptance is a skip, and the bumps-type rule (with this
+   program's names when the analysis supplies them). The system prompt went from 47 KB to 36 KB.
 4. **Analysis errors by code (§3.4)**, then K10 and K11 pushed on them.
 5. **K8, K9, K12**, pushed on the statistics phase, the failed job's alert type and
    `SANITY_FAILED`.

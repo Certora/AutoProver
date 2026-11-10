@@ -271,7 +271,7 @@ is cheaper and is the shape the extraction guidance asks for. Build the accounts
 
 **Start at the handler, and descend only for a reason you can name.** A rule that drives the handler
 has the best fidelity: the real `Context`, the real target, and real account validation when the
-struct comes from `try_accounts` (below). Prefer it.
+struct comes from `try_accounts` (recipe K14). Prefer it.
 
 But a handler that performs a CPI rarely carries a post-state property at handler level. **What a
 CPI does is not modelled**: the prover keeps every value the call would change as it was before the call.
@@ -280,91 +280,27 @@ the call's instruction also runs a loop that no loop bound discharges, so a rule
 the unwinding assertion unless loops are assumed to finish. And a handler's error paths often reach
 formatting code the pointer analysis refuses ([3308]).
 
-Earlier runs reported a CPI changing fields of the caller's deserialized `Account<T>` that the handler
-never writes. A direct probe does not reproduce that: the deserialized copy is untouched across an
-`invoke`. If a counterexample shows it, report what the counterexample shows rather than assuming that
-cause.
+When that happens you have two moves, and they trade fidelity against reach:
 
-When that happens you have two moves, and they trade fidelity against reach.
+* **Descend to the program's own state-transition function**, the accounting core the handler
+  wraps, and drive it with `nondet()` domain structs rather than accounts. No `Context`, no accounts
+  struct, no CPI in the way; this is what shipped verification projects do. The function must be
+  the program's: writing your own version of it is reimplementing, never descending. Recipe K7
+  has the shape and what the rule then owes the report.
+* **Keep the handler and take the CPI out from under it**, with a stand-in the editor swaps in for
+  the name the call goes through. Recipe K6 has the stand-in to write, and the two things it must
+  not do.
 
-The first is to descend to **the program's own state-transition function** — the accounting core the
-handler wraps — and drive it with `nondet()` domain structs rather than accounts:
+If the handler has neither a core to descend to nor a CPI you can take out, the property is not
+reachable today. Skip it and say so.
 
-```rust
-// The accounting core, driven directly. Only the fields this transition reads need to be
-// nondeterministic — `nondet()` is implemented for scalars, not for `Pubkey`.
-let mut vault = VaultState { authority: Pubkey::default(), balance: nondet(), bump: nondet() };
-let amount: u64 = nondet();
-let before = vault.balance;
-let split = crate::vault_accounting::apply_withdrawal(&mut vault, amount, true).unwrap();
-clog!(before, amount, split.fee);
-cvlr_assert!(before - vault.balance == amount);
-```
-
-No `Context`, no accounts struct, no CPI in the way. This is what shipped verification projects do for
-exactly this reason.
-
-Three conditions on it, and they are what separate this from the failure it resembles:
-
-* **The function must be the program's.** Descending to `crate::<module>::<fn>` is narrowing scope;
-  writing your own version of that function in this module is not descending, it is reimplementing,
-  and it produces a verdict about your code. That is never acceptable, at any depth.
-* **Declare it.** The rule's declared subject is that function, not the handler, and the report says
-  so.
-* **Say what it costs, in the commentary.** Account validation, the CPI's effects and Anchor's
-  dispatch are outside a rule written this way. A bug in the handler's own glue is out of scope, and
-  a reader has to be told that rather than left to assume instruction-level coverage.
-
-The second is to keep the handler and take the CPI out from under it, by asking the editor for a
-`swap_import` on the name the call goes through. You write a stand-in with `invoke`'s signature and
-return `Ok(())` from it; the editor points the program's `use` at it behind your feature. The call is
-gone, and its instruction-building loop with it, so the handler's own bookkeeping is provable — with
-the real `Context`, and validation if the struct comes from `try_accounts`, which is what descending
-gives up.
-
-What neither move gives you is the transfer itself. Your stand-in does not move the lamports, and
+What neither move gives you is the transfer itself. A stand-in does not move the lamports, and
 neither does the prover's own model of the call. So a property about what the transfer *did* fails at
 handler level whichever way you reach it, and a property that needs the lamports *not* to have moved,
 or a total to stay constant across the call, passes having checked nothing. Split the batch on that
 line. "The vault's recorded balance rises by exactly `amount`" is the handler's own bookkeeping and
 belongs here; "the depositor's lamports fall by exactly `amount`" is the CPI's effect and belongs in
 neither — it is a skip, and saying so is the right outcome.
-
-### Writing the stand-in: two things that do not analyze
-
-Both were measured on this scenario, and each costs a prover round to rediscover.
-
-**Move nothing.** `AccountInfo::lamports` is an `Rc<RefCell<&mut u64>>`, and on an info the *handler*
-built with `to_account_info()` the pointer analysis cannot establish provenance through the `Rc`:
-reading or writing it is `[3308]`'s sibling, `[3003] dereference of a register with unknown
-provenance`, with `alloc/src/rc.rs` in the trace. A stand-in that performs the transfer does not
-analyze. Record what was asked for instead, and let the rule add the modelled effect in
-arithmetically:
-
-```rust
-/// How many lamports the modelled transfer would have moved into `credited`.
-fn modelled_credit(credited: &AccountInfo) -> u64 { .. }   // 0 unless the record names it
-```
-
-Being inert then buys a second property for free: any lamport change observed after the handler
-returns is a **raw** mutation by the handler, which is how "no raw lamport mutation" gets checked.
-
-**Decode nothing.** `system_instruction::transfer` builds its payload with
-`Instruction::new_with_bincode`, into a heap `Vec<u8>`. The Prover does not relate the bytes bincode
-wrote to the bytes you read back at a fixed offset, so every field you decode is *unconstrained* —
-and the symptom is not an error but a VIOLATED verdict with a counterexample no path in the program
-can produce (`amount = 0xfffffffffffff87e` against a decoded `0`), on every rule downstream of the
-decoded value. Ask for a second `swap_import` on `system_instruction` and record `(from, to,
-lamports)` as **values** where the handler passes them; have your `transfer` hand back an
-instruction of the same shape, built by hand.
-
-Between them these decide what the pair of stand-ins is for: the constructor's stand-in observes
-what the handler *asked for*, and `invoke`'s observes that the instruction really was handed over
-and whether the call succeeded — with success under the rule's control, so that "credit only after a
-successful transfer" has an antecedent to bind.
-
-If the handler has no such core to descend to — the accounting *is* the handler — then the property
-is not reachable today. Skip it and say so.
 
 **Build the accounts struct field by field, from nondet account infos.** `cvlr-solana` hands you an
 array of unconstrained `AccountInfo`s; each field of the handler's `#[derive(Accounts)]` struct is
@@ -435,20 +371,12 @@ program the prover currently refuses to analyze it (the error construction — s
 limitation with a real cause, and a reviewer can act on it; a satisfy rule in its place is a green
 verdict about nothing.
 
-A second cause stops acceptance through account validation even when the failure path is
-observable: **a `seeds` constraint's verdict is unconstrained.** Anchor checks it by deriving the
-address with `Pubkey::find_program_address` or `create_program_address`, and the starting
-configuration summarizes both, so each call returns an unconstrained address, independent of every
-other call. The address your rule derives and the one Anchor derives to check against are unrelated
-values, so the constraint may accept or refuse any account. Two kinds of property follow from that
-and cannot be stated: acceptance by validation that runs through a `seeds` constraint, which includes
-`init` on a PDA, and rejection *by the `seeds` constraint itself* ("a non-canonical vault is
-refused"). For either, `record_skip` naming the PDA summary as the reason, without spending a run to
-find it out. Rejection by the struct's other constraints — the signer, `mut`, `has_one` — is
-unaffected: an input one of those refuses is refused whatever the derivation returned.
+Acceptance through validation that runs through a `seeds` constraint, including `init` on a PDA,
+and rejection by the `seeds` constraint itself cannot be stated either, for a different reason:
+recipe K13. Skip them without spending a run.
 
-This is also why **panic-freedom is not a property you can state here** — see the arithmetic
-section below. Pruning is what makes `.unwrap()` work, and it is not switchable per rule.
+This is also why **panic-freedom is not a property you can state here** — see the context document's
+arithmetic section. Pruning is what makes `.unwrap()` work, and it is not switchable per rule.
 
 **Observe post-state through the handle the context borrowed — never by deserializing the account
 again.** This is the one that silently produces a wrong answer, so it is worth understanding rather
@@ -516,61 +444,19 @@ all come from the program you are given.
 `Context::new(program_id, &mut accounts, remaining_accounts, bumps)`. The context borrows the
 accounts struct, so the borrow ends with the call and the struct is yours to read afterwards.
 
-**A struct built by hand has skipped validation.** Every `#[account(...)]` constraint on it — the
-signer, `mut`, `has_one`, the owner — is checked in the struct's generated `try_accounts`, and the
-shape above never calls it. That is right for a property of the handler body. For a property the
-*constraints* enforce, validate first and state it as "success implies":
-
-```rust
-use anchor_lang::Accounts as _;          // the trait `try_accounts` is on
-use std::collections::BTreeSet;
-
-let accounts = Box::new(cvlr_deserialize_nondet_accounts());
-let mut rest: &[AccountInfo] = &accounts[..];
-let mut bumps = crate::{% if example %}{{ example.bumps_type }}{% else %}DepositBumps{% endif %}::default();
-let mut reallocs: BTreeSet<Pubkey> = BTreeSet::new();
-let mut ix = crate::{% if example %}{{ example.accounts_struct }}{% else %}Deposit{% endif %}::try_accounts(&crate::ID, &mut rest, &[], &mut bumps, &mut reallocs).unwrap();
-
-{% set signers = (example.accounts | selectattr("constructor", "equalto", "Signer") | map(attribute="name") | list) if example else [] %}let signed = ix.{% if signers %}{{ signers[0] }}{% elif example %}/* a Signer field */{% else %}depositor{% endif %}.is_signer;   // what the constraint promised, read through the validated struct
-clog!(signed as u64);
-cvlr_assert!(signed);
-core::mem::forget(accounts);
-```
-
-The assertion holds on every execution validation accepts, which is the rejection property read the
-other way round, and `.unwrap()` keeps the failure path pruned, so the `[3308]` above does not arise. Declare the rule's subject as `crate::<AccountsStruct>::try_accounts`, or as the handler if
-the rule goes on to call it with that `ix`. One constraint is out of reach this way: a `seeds`
-constraint's verdict is unconstrained under the PDA summary (see acceptance properties above).
-
-### The names Anchor generates, and the one that looks right and is not
-
-`#[derive(Accounts)]` and `#[program]` emit items no file contains, so searching the source for them
-finds nothing and it is easy to conclude they are spelled some other way. They are not guessable and
-they are not negotiable — each is a fixed rule over a name you already have{% if example %}, shown
-here for `{{ example.accounts_struct }}`{% endif %}:
-
-| generated | rule{% if example %} | here{% endif %} |
-|---|---|{% if example %}---|{% endif %}
-| the bumps type | `<AccountsStruct>Bumps`, in **the struct's own module** | {% if example %}`{{ example.bumps_type }}`{% endif %} |
-| client-side accounts | `__client_accounts_<snake>` and `__cpi_client_accounts_<snake>` | {% if example %}`{{ example.client_accounts_module }}`{% endif %} |
-| the instruction discriminant | `instruction::<Handler in PascalCase>::DISCRIMINATOR` | {% if example %}`{{ example.discriminant_path }}`{% endif %} |
-
-Two consequences worth having in front of you before you write a `Context::new`.
-
-**The bumps type sits beside the struct, so whatever path reaches the struct reaches it** — append
-`Bumps` to that path and nothing else changes. The `__client_accounts_*` modules are the trap: they
-hold a struct with the *same field names* and `Pubkey` types, for Rust clients, and reaching for a
-bumps type inside one is the specific mistake this section exists to prevent. Nothing a rule builds
-lives in there.
-
-**You never construct a bumps value.** Anchor writes a `Default` impl covering every field of it, so
-`Default::default()` is not a convenience that usually works — it is always valid, and the fields it
-fills are the cached PDA bumps, which a rule driving a handler directly has no way to know anyway.
-
 A zero-copy `AccountLoader` field behaves differently and more conveniently: `load()` reads the
 account's bytes directly, so a handler's writes through its own loader are visible through yours with
 no write-back involved. Retain the loader before the call — `let reserve = ix.reserve.clone();` — and
 `load()` it before and after.
+
+**A struct built by hand has skipped validation.** Every `#[account(...)]` constraint on it is
+checked in the struct's generated `try_accounts`, which the shape above never calls. That is right
+for a property of the handler body. For a property the *constraints* enforce, recipe K14 has the
+`try_accounts` shape and the names Anchor generates. The one a rule always needs is the bumps type,
+`<AccountsStruct>Bumps`, in the struct's own module{% if example %}: here `{{ example.bumps_type }}`.
+The instruction discriminant is `{{ example.discriminant_path }}`, and
+`{{ example.client_accounts_module }}` is a client-side copy of the struct that nothing a rule
+builds lives in{% endif %}.
 
 ## State invariants: a base case and one step per writer
 
@@ -591,49 +477,9 @@ an invariant can range over when state arrives as accounts, and four ways a cand
    the invariant on the post-state. The assumption is justified: the base case and the other steps
    are what discharge it.
 
-Write the invariant once, as a function that returns `bool`. Then generate the steps with a local
-`macro_rules!`, so that each step shows only the operation it runs:
-
-```rust
-use cvlr::nondet::havoc::alloc_mut_ref_havoced;
-
-/// Writers of `queued_shares` and `total_shares`: `queue_withdrawal`, `redeem_queued`, `deposit`,
-/// `withdraw`.
-fn queued_within_supply(r: &Pool) -> bool {
-    r.queued_shares <= r.total_shares
-}
-
-macro_rules! preserves_queued_within_supply {
-    ($rule:ident, |$pool:ident| $op:block) => {
-        #[rule]
-        pub fn $rule() {
-            let $pool: &mut Pool = alloc_mut_ref_havoced();
-            cvlr_assume!(queued_within_supply($pool));
-            $op
-            cvlr_assert!(queued_within_supply($pool));
-        }
-    };
-}
-
-preserves_queued_within_supply!(queued_within_supply_queue_withdrawal, |pool| {
-    let shares: u64 = nondet();
-    clog!(pool.queued_shares, pool.total_shares, shares);
-    pool.queue_withdrawal(shares).unwrap();
-});
-// ... one invocation per writer in the list above
-```
-
-Those names are illustrative. The state, its fields and the writers all come from the program you
-are given. Each step is a rule of its own with its own verdict, so a failure names the operation
-that breaks the invariant. `cvlr_invariant_rules!` in cvlr-spec builds the same set of rules from a
-predicate and a list of base functions. Ask `cvlr_research` about it if that shape suits better.
-
-**A step that fails is not yet a finding.** The pre-state ranges over every state that satisfies the
-invariant, and that includes states the program never produces. Read the counterexample. If no
-operation could have produced its pre-state, the invariant is too weak to be inductive. Strengthen
-it by adding the conjunct that rules that state out, and the new conjunct then needs its own steps.
-This is how an invariant becomes inductive, and it is usually how a reviewer learns what the program
-actually maintains.
+`invariant_guidance` also has the shape to write the steps in (one predicate, and a local
+`macro_rules!` so each step shows only its operation), what a failing step means, and the remedies
+for a counterexample that starts from a state the program cannot be in.
 
 **Once an invariant is proved, other rules may assume it.** Assume it on a rule's pre-state, and
 name in the rule's commentary the step rules that prove it. List the base case and the steps in
@@ -641,24 +487,6 @@ name in the rule's commentary the step rules that prove it. List the base case a
 rests on. Never mark one of them with `expect_rule_failure`. A rule that assumes an invariant whose
 step was marked expected-to-fail assumes exactly what failed to prove, and the run still comes back
 green.
-
-### When a counterexample starts from a state the program cannot be in
-
-Add whatever excludes that state, trying these remedies in order.
-
-1. **An invariant**, proved as above and assumed in the failing rule. This is the default move, not
-   the last one, because an invariant is proved against the code, while an assumption is only
-   assumed.
-2. **A justification rule**, when the relationship cannot be stated as an invariant. That happens
-   when no step can preserve it on its own, or when it relates accounts that no single writer is
-   given together. The justification rule is a rule of its own that proves the assumption is valid
-   where it arises: for example, that the only operation producing the value always produces it in
-   range. Then assume the relationship in the failing rule with `cvlr_assume!`, and name the
-   justification rule in a comment beside it.
-3. **A bare `cvlr_assume!`** with nothing behind it. This is the last resort, and it leaves the
-   property proved only under an assumption that nothing checks. If you use one, say three things
-   in a comment beside it and in the rule's commentary: what you assumed, why the program cannot
-   reach a state that violates it, and what the property therefore no longer covers.
 
 ## When a rule should fail
 
@@ -679,7 +507,7 @@ prompt has already shown you a correct program produces:
 
 * a value that comes from a `summarize_for_prover` stand-in, which returns anything at all, or
   from a `mock_fn` stand-in's `nondet()` that the real function would not return;
-* a field decoded back out of a byte buffer, which is unconstrained (**Decode nothing** above);
+* a field decoded back out of a byte buffer, which is unconstrained (recipe K6, **Decode nothing**);
 * a change a CPI was supposed to make, which the prover does not model;
 * an account built by hand that breaks an `#[account(...)]` constraint the real entry point would
   have enforced;
@@ -696,7 +524,7 @@ things.
   drives, if it drives one below the handler. `expect_rule_failure` asks for this argument as
   `pre_state`.
 * **Or name what excludes it.** The failure is then not a finding. Exclude the state using the
-  remedies in "When a counterexample starts from a state the program cannot be in", above.
+  remedies `invariant_guidance` gives for a state the program cannot be in.
 
 Both of the following looked like findings and were not:
 
