@@ -92,7 +92,8 @@ class PropertyGenerationContext[P: enum.Enum, H, U: FeatureUnit]:
     threat_model: Document | None
     extra_context: Sequence[Document]
     #: The project already carries specifications written by its authors (an evaluate run). The
-    #: generated properties must not be taken from them: the list is used to find what they miss.
+    #: generated properties must be the full set the contract should satisfy, not only the ones
+    #: those specifications already encode.
     existing_specs: bool
     #: Where the run's deliverables live. A generator writes what it delivers beyond the property
     #: set (its own reports, say) through ``write_deliverable``.

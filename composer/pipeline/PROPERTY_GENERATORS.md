@@ -71,7 +71,7 @@ raises, as for a plugin or a run mode.
 | `run` | The `PipelineRun`: the run's models (`env`), cache root (`ctx`), task runner, source (`source.content` is the design document) and `run_mode`. |
 | `ecosystem` | The run's `Ecosystem`. The set's `ecosystem` must be its `name`, and its `system_model` must validate as its `system_model` type. |
 | `threat_model`, `extra_context` | The run's guidance documents. |
-| `existing_specs` | The project carries specifications written by its authors (an evaluate run). The properties must not be taken from them: the list is used to find what they miss. |
+| `existing_specs` | The project carries specifications written by its authors (an evaluate run). The generated properties must be the full set the contract should satisfy, not only the ones those specifications already encode. |
 | `artifact_store` | Write anything delivered beyond the set (the generator's own reports) through `write_deliverable`. |
 | `phase` | The backend's phase for the generator's tasks. |
 

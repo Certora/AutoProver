@@ -564,14 +564,12 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     #    primitive; the ecosystem supplies the analyzed model type, prompts, validation, front-matter.
     #    The budget scope is entered inside the coroutine (not around create_task) so the
     #    cost-center binding lives in the spawned task's own context.
-    #    A property generator does the analysis and the extraction together, so it runs here and
-    #    its set is loaded at step 3 in place of the native extraction.
-    generated: PropertySet | None = None
-
-    async def _run_analysis():
-        nonlocal generated
+    #    A property generator does the analysis and the extraction together, so it runs here. The
+    #    analysis returns the property set it came from, if any, which step 3 loads in place of
+    #    the native extraction.
+    async def _run_analysis() -> tuple[App | None, PropertySet | None]:
         if predefined is not None:
-            return predefined.analyzed(ecosystem.system_model)
+            return predefined.analyzed(ecosystem.system_model), predefined
         if (gen := generator) is not None:
             gen_ctx = PropertyGenerationContext(
                 run=run, ecosystem=ecosystem, threat_model=threat_model,
@@ -585,9 +583,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                     lambda: gen.generate(gen_ctx),
                 )
             _check_property_set(generated, ecosystem.name, source.contract_name)
-            return generated.analyzed(ecosystem.system_model)
+            return generated.analyzed(ecosystem.system_model), generated
         with named_budget_or_nop("system_analysis"):
-            return await run.runner(
+            native = await run.runner(
                 TaskInfo(SYSTEM_ANALYSIS_TASK_ID, "System Analysis", phases["analysis"]),
                 lambda: run_component_analysis(
                     ty=ecosystem.system_model,
@@ -602,6 +600,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                     validate=ecosystem.validate_analysis,
                 ),
             )
+        return native, None
 
     try:
         async with asyncio.TaskGroup() as overlap:
@@ -614,7 +613,8 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         if len(eg.exceptions) == 1:
             raise eg.exceptions[0] from None
         raise
-    preflight, analyzed = preflight_task.result(), analysis_task.result()
+    preflight = preflight_task.result()
+    analyzed, property_set = analysis_task.result()
     if analyzed is None:
         raise ValueError("System analysis produced no result.")
 
@@ -633,16 +633,11 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         phases.get("extraction_plugin") or phases["extraction"],
     )
     loaded: list[_Batch[U]] | None = None
-    if predefined is not None:
-        loaded = await _load_batches(
-            backend.analysis_spec.properties_key, prepared.main, run, ecosystem,
-            extraction_plugins, predefined, post_process=False,
-        )
-    elif generated is not None:
+    if property_set is not None:
         with named_budget_or_nop("property_extraction"):
             loaded = await _load_batches(
                 backend.analysis_spec.properties_key, prepared.main, run, ecosystem,
-                extraction_plugins, generated, post_process=True,
+                extraction_plugins, property_set, post_process=property_set is not predefined,
             )
 
     async def _prepare_formalization() -> Formalizer[FormT, U] | StagedFormalizer[FormT, U]:
