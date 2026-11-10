@@ -438,10 +438,11 @@ class VerifyDeps:
 
 
 #: The share of a timed-out rule's branching or nonlinear operations, in percent, at which one
-#: function is taken to be where its time goes. Set from the klend benchmark's timeouts: the
-#: fixed-point division authors later replaced with a stand-in held 44–65 %, the handler logic the
-#: rules were about at most 28 %. Placed near the low edge of that gap because a recipe sent in vain
-#: costs a few KB of text and one missed costs prover rounds.
+#: function is taken to be where its time goes. Provisional: in the klend timeouts on record, the
+#: 256-bit division inside a `uint_types` stand-in held 44–65 % and the handler logic the rules
+#: were about at most 28 %, one program and a handful of correlated jobs. Placed near the low edge
+#: of that gap because a recipe sent in vain costs a few KB of text and one missed costs prover
+#: rounds. The timeout log line below is what to move it by.
 DOMINANT_SHARE = 40
 
 

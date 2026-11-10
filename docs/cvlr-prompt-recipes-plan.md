@@ -421,9 +421,9 @@ named there, "When a rule should fail", and the judge's checklist.
    `SANITY_FAILED`. Done. K8 is pushed on `timeout: static analysis` (`RuleStatistics.phase` is
    now `StaticAnalysis | Solving | OtherPhase`) and on `timeout: dominant function`, when one
    function holds at least `DOMINANT_SHARE` (40 %) of a timed-out rule's branching or nonlinear
-   operations. The 40 comes from the klend benchmark's timeouts (`composer/spec/cvlr/verify.py`
-   says how); `verify_rules` logs every timed-out rule's top share so the next benchmark can move
-   it. K12 is pushed on `status: SANITY_FAILED`. K9 is pushed on `job: halted`: from the
+   operations. The 40 is provisional: it separates a stand-in's 256-bit division (44–65 %) from
+   handler logic (at most 28 %) in a handful of klend jobs (`composer/spec/cvlr/verify.py`), and
+   `verify_rules` logs every timed-out rule's top share so the next benchmark can move it. K12 is pushed on `status: SANITY_FAILED`. K9 is pushed on `job: halted`: from the
    report's `halted` when the job still returned verdicts, and from the failure when it returned
    none. For the second, `run_prover` returns a `ProverFailure` (`JobFailed | ResultsUnavailable |
    RunFailed`) rather than a string; a `JobFailed` that is `HALTED`, or carries an "Out of
