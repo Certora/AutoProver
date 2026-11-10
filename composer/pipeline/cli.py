@@ -34,7 +34,8 @@ from composer.spec.types import SourceIdentifier
 from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
 from .property_set import PropertySet
-from .run_mode import EXTERNAL_MODES, RunMode
+from .property_generators import resolve_property_generator
+from .run_mode import NON_FORMALIZING_MODES, RunMode
 from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
@@ -299,11 +300,12 @@ def verification_target(
     analysis, CVL authoring, the conf's verify target) has to agree on one contract name,
     and AutoSetup keys its results by that name too.
 
-    An external mode measures the project's existing specs, which name the contract the
-    user asked for. It keeps the requested target: a harness would give the mode a
-    different main contract, and a failed harness build would stop a run that needs none.
+    A run that writes no specs keeps the requested target. An external mode measures the
+    project's existing specs, which name the contract the user asked for: a harness would
+    give the mode a different main contract, and a failed harness build would stop a run
+    that needs none. A property-generation run describes the contract the user named.
     """
-    if run_mode in EXTERNAL_MODES:
+    if run_mode in NON_FORMALIZING_MODES:
         return relative_path, contract_name
     return swap_library_main_contract_paths(project_root, relative_path, contract_name)
 
@@ -323,13 +325,14 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
-    # Resolve the budget and the property set up front so a malformed one fails before any
-    # services spin up.
+    # Resolve the budget, the property set and the property generator up front so a malformed
+    # or uninstalled one fails before any services spin up.
     budget = resolve_budget(args.budget, args.budget_total)
     predefined = (
         PropertySet.load(pathlib.Path(args.predefined_properties))
         if args.predefined_properties is not None else None
     )
+    property_generator = resolve_property_generator(args.property_generator)
 
     full_contract_path = pathlib.Path(main_contract_path).resolve()
     if not full_contract_path.is_relative_to(project_root):
@@ -482,6 +485,7 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                     interactive=args.interactive,
                     max_bug_rounds=args.max_bug_rounds,
                     run_mode=run_mode.value,
+                    property_generator=property_generator,
                 ).model_dump())
                 full_ctx = WorkflowContext.create(
                     services=conns.memory,
@@ -496,6 +500,7 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                     source=full_source,
                     env=env,
                     run_mode=run_mode,
+                    property_generator=property_generator,
                     _agent_semaphore=semaphore,
                     _cpu_semaphore=cpu_semaphore,
                     _handler_factory=task_handler

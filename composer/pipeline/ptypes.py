@@ -87,6 +87,9 @@ class PipelineRun[P: enum.Enum, H](TaskRunnerHost[P, H, SourceCode, None]):
     #: the backend seam — the driver, which prunes the batches, and the author, whose exits
     #: tighten — and this object already reaches both.
     run_mode: RunMode = RunMode.COMPREHENSIVE
+    #: The installed property generator that replaces the native analysis and extraction (see
+    #: :mod:`composer.pipeline.property_generators`), or ``None`` for the native ones.
+    property_generator: str | None = None
 
 
 class CorePhases[P: enum.Enum](TypedDict):

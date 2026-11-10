@@ -11,6 +11,8 @@ are backend-agnostic and live with the driver in ``pipeline.core``.
 
 DESIGN_DOC_DISCOVERY_TASK_ID = "doc-finder"
 SYSTEM_ANALYSIS_TASK_ID = "system-analysis"
+#: A property generator's run, in place of system analysis and the per-component extraction.
+PROPERTY_GENERATION_TASK_ID = "property-generation"
 HARNESS_TASK_ID = "harness"
 AUTOSETUP_TASK_ID = "autosetup"
 #: The project build an external run mode gets in place of AutoSetup.

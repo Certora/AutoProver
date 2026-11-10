@@ -327,6 +327,7 @@ class _Run:
     source = _Source()
     env = _Env()
     ctx = _Ctx()
+    property_generator = None
 
     def __init__(self, run_mode: RunMode) -> None:
         self.run_mode = run_mode

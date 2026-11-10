@@ -73,7 +73,7 @@ from composer.pipeline.core import (
     Curtailed
 )
 from composer.pipeline.ecosystem import main_instance
-from composer.pipeline.run_mode import EXTERNAL_MODES, RunMode
+from composer.pipeline.run_mode import NON_FORMALIZING_MODES, RunMode
 from composer.pipeline.modes import ModeSupport, ProjectBuild
 from composer.pipeline.keys import COMMON_SYSTEM_CACHE_KEY
 from composer.spec.source.keys import AP_PROPERTIES_KEY_NAME
@@ -242,7 +242,7 @@ class ExternalModePrepared(PreparedSystem[GeneratedCVL, ContractComponentInstanc
 
     @override
     async def prepare_formalization(self, run: PipelineRun) -> Formalizer[GeneratedCVL, ContractComponentInstance]:
-        raise RuntimeError("a run in an external mode does not formalize")
+        raise RuntimeError(f"a run in the {run.run_mode.value} mode does not formalize")
 
     @override
     async def prepare_external_mode(self, run: PipelineRun, *, build: bool) -> ModeSupport:
@@ -317,9 +317,10 @@ class ProverBackend:
         self, analyzed: SourceApplication, run: PipelineRun[AutoProvePhase, None],
         preflight: None,
     ) -> PreparedSystem[GeneratedCVL, ContractComponentInstance, ContractInstance]:
-        if run.run_mode in EXTERNAL_MODES:
-            # The harness agent costs LLM calls and writes harness files into the project; an
-            # external mode runs the project's own confs, which already name their contracts.
+        if run.run_mode in NON_FORMALIZING_MODES:
+            # The harness agent costs LLM calls and writes harness files into the project. An
+            # external mode runs the project's own confs, which already name their contracts,
+            # and a property-generation run writes no specs at all.
             return ExternalModePrepared(
                 main=main_instance(lift_unharnessed(analyzed), run.source),
                 _analyzed=analyzed, _prover_opts=self._prover_opts,

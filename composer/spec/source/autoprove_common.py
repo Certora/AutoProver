@@ -106,7 +106,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
              "spends the run on the highest-contribution property and the properties it rests "
              "on. 'evaluate' infers the properties, formalizes none, and hands them to an "
              "installed mode implementation that measures the project's own specs against them. "
-             "Also settable as AUTOPROVER_RUN_MODE; this flag wins.",
+             "'property_generation' infers the properties and stops once property_set.json is "
+             "written. Also settable as AUTOPROVER_RUN_MODE; this flag wins.",
     )
 
     args = cast(AutoProveArgs, parser.parse_args())
