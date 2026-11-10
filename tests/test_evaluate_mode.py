@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 import composer.pipeline.core as core
 from composer.pipeline import modes as modes_mod
@@ -242,7 +243,9 @@ async def test_load_rejects_an_implementation_for_another_ecosystem(monkeypatch)
 class _Store:
     def __init__(self) -> None:
         self.reports: list[AutoProverReport] = []
+        self.property_sets: list[Any] = []
 
+    def write_property_set(self, property_set): self.property_sets.append(property_set)
     def write_properties(self, *_a, **_kw): ...
     def write_artifact(self, *_a, **_kw): return "artifact"
     def write_report(self, report): self.reports.append(report)
@@ -332,12 +335,17 @@ class _Run:
         return await job()
 
 
+class _Analyzed(BaseModel):
+    """Stands in for the analyzed model; the driver only records its dump."""
+    application_type: str
+
+
 def _prop(title: str) -> PropertyFormulation:
     return PropertyFormulation(title=title, sort="invariant", description="d")
 
 
 def _patch_front_half(monkeypatch, units: dict[str, list[str]], *, fail: list[str] = ()) -> None:
-    async def fake_analysis(*_a, **_kw): return "analyzed"
+    async def fake_analysis(*_a, **_kw): return _Analyzed(application_type="vault")
 
     async def fake_extract_all(*_a, **_kw):
         named = list(units.items())
@@ -395,6 +403,9 @@ async def test_evaluate_hands_the_batches_to_the_mode_and_writes_its_report(monk
     [written] = backend.artifact_store.reports
     assert written.run_mode == "evaluate"
     assert written.contract_name == "Vault"
+    # The properties the mode measured against are recorded, as for any other run.
+    [property_set] = backend.artifact_store.property_sets
+    assert [c.name for c in property_set.property_components] == ["deposits", "admin"]
 
     assert result.run_mode is RunMode.EVALUATE
     assert result.n_components == 3 and result.n_properties == 3

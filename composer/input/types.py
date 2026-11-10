@@ -145,6 +145,20 @@ class ExtendedModelOptions(_ModelOptionsCommon, Protocol):
         help="Model to use for simpler tasks(default: {default})", default="claude-sonnet-5-5"
     )]
 
+class PropertySetOptions(Protocol):
+    """``--predefined-properties`` and ``--stop-after-properties`` (see
+    ``composer.pipeline.property_set``)."""
+    predefined_properties: Annotated[Optional[str], OptionalArg(
+        help="Path to a property set (the property_set.json a previous run wrote to its report "
+             "directory). Skips component analysis and property extraction and formalizes "
+             "exactly the file's components and properties."
+    )]
+    stop_after_properties: Annotated[bool, Arg(
+        help="End the run once the components and properties are final and property_set.json "
+             "is written, without formalizing or reporting.",
+        default=False,
+    )]
+
 class UploadPaths(Protocol):
     spec_file: str
     interface_file: str
