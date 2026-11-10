@@ -49,6 +49,7 @@ from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import CloudJobError, CloudResultsUnavailable, cloud_results
+from prover_output_utility.models import JobStatus
 from composer.prover.ptypes import (
     IncompleteCheck,
     PropertyViolation,
@@ -806,23 +807,65 @@ def _failure_advice(alerts: tuple[ErrorAlert, ...]) -> str:
     )
 
 
-def cloud_job_failure_message(exc: CloudJobError) -> str:
-    """The text ``run_prover`` returns when a cloud job ends without verdicts.
+@dataclass(frozen=True)
+class JobFailed:
+    """A cloud job ended without verdicts (:class:`~composer.prover.cloud.CloudJobError`)."""
 
-    The link is always included. ``exc.alerts`` are the alert report's ``ERROR``
-    entries, present when a ``FAILED`` or ``HALTED`` job wrote them.
-    """
-    lines = [
-        f"Prover cloud job did not produce results (status {exc.status.value}). "
-        f"The job and its failure output are at {exc.link}"
-    ]
-    if exc.alerts:
-        lines.append(
-            _failure_advice(exc.alerts)
-            + "\n"
-            + "\n".join(alert.text for alert in exc.alerts)
+    status: JobStatus
+    link: str
+    #: The alert report's ``ERROR`` entries, present when a ``FAILED`` or ``HALTED`` job wrote them.
+    alerts: tuple[ErrorAlert, ...] = ()
+
+    def render(self) -> str:
+        """The text the author reads. The link is always included."""
+        lines = [
+            f"Prover cloud job did not produce results (status {self.status.value}). "
+            f"The job and its failure output are at {self.link}"
+        ]
+        if self.alerts:
+            lines.append(
+                _failure_advice(self.alerts)
+                + "\n"
+                + "\n".join(alert.text for alert in self.alerts)
+            )
+        return "\n\n".join(lines)
+
+
+@dataclass(frozen=True)
+class ResultsUnavailable:
+    """A cloud job succeeded, but its results could not be downloaded."""
+
+    link: str
+    cause: str
+
+    def render(self) -> str:
+        return (
+            f"The prover job finished, but its results could not be downloaded ({self.cause}). "
+            f"This is an infrastructure failure, not a problem with the specification; the "
+            f"verdicts are at {self.link}. Retrying may succeed."
         )
-    return "\n\n".join(lines)
+
+
+@dataclass(frozen=True)
+class RunFailed:
+    """Any other run that produced no report: certoraRun raised or timed out, or its results
+    were missing or unparseable. ``message`` is the whole text the author reads."""
+
+    message: str
+
+    def render(self) -> str:
+        return self.message
+
+
+#: Why a prover run produced no :class:`ProverReport`.
+type ProverFailure = JobFailed | ResultsUnavailable | RunFailed
+
+
+def report_or_text(result: ProverReport | ProverFailure) -> ProverReport | str:
+    """``result``, with a failure rendered as the text its reader gets, for a caller whose own
+    contract reports every failure as a string."""
+    return result if isinstance(result, ProverReport) else result.render()
+
 def _incomplete(results: dict[str, RuleResult]) -> dict[RulePath, IncompleteCheck]:
     found: dict[RulePath, IncompleteCheck] = {}
     for result in results.values():
@@ -843,18 +886,14 @@ async def run_prover(
     prover_opts: ProverOptions,
     callbacks: ProverCallbacks,
     cex: CexHandler | None,
-) -> ProverReport | str:
+) -> ProverReport | ProverFailure:
     """Execute the Certora prover and return structured results.
 
     ``cex`` analyzes a violated rule. None reports the status and the
     counterexample dump, with no analysis.
-
-    Returns:
-        ProverReport — rule outcomes and the rendered report text
-        str — error message
     """
     job = await submit_prover_job(folder, args, prover_opts, callbacks)
-    if isinstance(job, str):
+    if not isinstance(job, SubmittedJob):
         return job
     return await collect_prover_results(job, tool_call_id, prover_opts, callbacks, cex)
 
@@ -876,8 +915,8 @@ async def submit_prover_job(
     args: list[str],
     prover_opts: ProverOptions,
     callbacks: ProverCallbacks,
-) -> SubmittedJob | str:
-    """Run certoraRun up to the job link. Returns an error message as a string."""
+) -> SubmittedJob | RunFailed:
+    """Run certoraRun up to the job link."""
 
     # 1. Build effective args.
     effective_args = args + prover_opts.cli_args()
@@ -911,7 +950,7 @@ async def submit_prover_job(
         # Returned rather than raised: the agent reads this as a tool result and
         # can retry or change approach, which beats stalling the run.
         _logger.error("Prover subprocess timed out: %s", e)
-        return (
+        return RunFailed(
             f"The prover did not finish within {subprocess_timeout:.0f}s and was "
             f"terminated. This is an infrastructure failure, not a problem with "
             f"the specification: the local build or type-check phase stopped "
@@ -919,15 +958,15 @@ async def submit_prover_job(
         )
     local_runtime_ms = int((time.perf_counter() - _t0) * 1000)
     if isinstance(run_result, str):
-        return run_result
+        return RunFailed(run_result)
 
     if run_result is None or (run_result["sort"] == "success" and run_result["link"] is None):
         _logger.warning("Prover failed: %s", run_result)
-        return f"Prover did not produce results.\nstdout:\n{stdout}"
+        return RunFailed(f"Prover did not produce results.\nstdout:\n{stdout}")
 
     if run_result["sort"] == "failure":
         _logger.info("Prover run failed: %s", run_result['exc_str'])
-        return f"Certora prover raised exception: {run_result['exc_str']}\nstdout:\n{stdout}"
+        return RunFailed(f"Certora prover raised exception: {run_result['exc_str']}\nstdout:\n{stdout}")
 
     assert run_result is not None and run_result["sort"] == "success" and run_result["link"] is not None
 
@@ -946,9 +985,8 @@ async def collect_prover_results(
     prover_opts: ProverOptions,
     callbacks: ProverCallbacks,
     cex: CexHandler | None,
-) -> ProverReport | str:
-    """Wait for a submitted job's verdicts, then parse and report them. Returns an error message
-    as a string, like :func:`run_prover`."""
+) -> ProverReport | ProverFailure:
+    """Wait for a submitted job's verdicts, then parse and report them."""
     stdout = job.stdout
     # 7. Result retrieval: cloud vs local
     if prover_opts.cloud:
@@ -959,7 +997,7 @@ async def collect_prover_results(
         )
     else:
         if not job.is_local_link:
-            return f"Prover did not produce local results.\nstdout:\n{stdout}"
+            return RunFailed(f"Prover did not produce local results.\nstdout:\n{stdout}")
         results_cm = _local_results(Path(job.link), job.local_runtime_ms)
 
     # 8. Parse results + run analysis. Both happen inside ``results_cm`` so
@@ -978,7 +1016,7 @@ async def collect_prover_results(
             parsed = read_and_format_run_result(emv_path, prover_opts.app)
 
             if isinstance(parsed, str):
-                return f"Failed to parse prover results: {parsed}"
+                return RunFailed(f"Failed to parse prover results: {parsed}")
             alerts = fetched.alerts
             incomplete = _incomplete(parsed)
 
@@ -1013,16 +1051,12 @@ async def collect_prover_results(
             if fetched.halted:
                 result_str = f"{_HALTED_NOTE}\n\n{result_str}"
     except CloudJobError as exc:
-        return cloud_job_failure_message(exc)
+        return JobFailed(exc.status, exc.link, exc.alerts)
     except CloudResultsUnavailable as exc:
         # Returned rather than raised, like the subprocess timeout: raising ends the whole
         # formalization over a read the next submission will very likely complete.
         _logger.error("Cloud job results unavailable: %s", exc)
-        return (
-            f"The prover job finished, but its results could not be downloaded ({exc.cause}). "
-            f"This is an infrastructure failure, not a problem with the specification; the "
-            f"verdicts are at {exc.link}. Retrying may succeed."
-        )
+        return ResultsUnavailable(exc.link, str(exc.cause))
 
     prover_report: dict[str, bool] = {}
     for i in parsed.values():

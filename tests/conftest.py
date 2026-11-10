@@ -36,7 +36,7 @@ from psycopg.sql import SQL, Identifier, Literal
 from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
 
 import composer.diagnostics.timing as timing_mod
-from composer.prover.core import ProverOptions, ProverReport
+from composer.prover.core import ProverFailure, ProverOptions, ProverReport, RunFailed
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.policy import ensure_available
 from composer.spec.cvlr.entry import announce_confinement, build_confinement
@@ -439,7 +439,12 @@ def certora_prover(
 
     async def mock_prover(
         folder: Path, args: list[str], *rest, **kwargs
-    ) -> ProverToolResponse:
+    ) -> ProverReport | ProverFailure:
+        resp = _scripted(folder, args)
+        # A script names a failure by its text; ``run_prover`` returns it typed.
+        return RunFailed(resp) if isinstance(resp, str) else resp
+
+    def _scripted(folder: Path, args: list[str]) -> ProverToolResponse:
         conf = conf_of_prover_call(folder, args)
         calls.append(ProverCall(folder=folder, args=list(args), conf=conf))
         if buffer_responses:

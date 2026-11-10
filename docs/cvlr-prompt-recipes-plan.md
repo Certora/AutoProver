@@ -420,12 +420,12 @@ named there, "When a rule should fail", and the judge's checklist.
 5. **K8, K9, K12**, pushed on the statistics phase, the failed job's alert type and
    `SANITY_FAILED`. Done, except one push. K8 is pushed on `timeout: static analysis`
    (`RuleStatistics.phase` is now `StaticAnalysis | Solving | OtherPhase`), not yet on a hotspot
-   share. K12 is pushed on `status: SANITY_FAILED`. K9 is pushed on `job: halted`, from the
-   report's `halted`, which covers a job that hit its limit and still returned verdicts. A job that
-   returned none reaches `verify_rules` as `run_prover`'s string, with the alert types already
-   rendered into it, so K9 is not pushed there; Step 3 tells the author to fetch it. Pushing it
-   there needs `run_prover`'s failure typed, which every caller of `run_prover`, CVL's included,
-   would have to take.
+   share. K12 is pushed on `status: SANITY_FAILED`. K9 is pushed on `job: halted`: from the
+   report's `halted` when the job still returned verdicts, and from the failure when it returned
+   none. For the second, `run_prover` returns a `ProverFailure` (`JobFailed | ResultsUnavailable |
+   RunFailed`) rather than a string; a `JobFailed` that is `HALTED`, or carries an "Out of
+   Resources" alert, pushes K9. The CVL callers render the failure where it leaves `run_prover`, so
+   their contract, including the plugin protocol's, still reports a failure as a string.
 
 Steps 1–3 take roughly 25 KB off the author's standing text, and steps 4–5 another 10 KB.
 

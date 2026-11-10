@@ -21,7 +21,14 @@ warnings.filterwarnings("ignore", message=r".*`ReadOnly` qualifier", category=Us
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, SbfVerdict
 from composer.cargo.session import Compiled, CompileFailed
 from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
-from composer.prover.core import ProverOptions, ProverReport, make_prover_options
+from composer.prover.core import (
+    JobFailed,
+    ProverOptions,
+    ProverReport,
+    ResultsUnavailable,
+    RunFailed,
+    make_prover_options,
+)
 from composer.prover.results import AlertReport, UnreadableAlertReport
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
@@ -296,8 +303,8 @@ async def _prove(args: argparse.Namespace) -> int:
         case BuildRejected(build=build):
             print(f"build failed, nothing submitted:\n{_diagnostics(build.verdict)}")
             return 1
-        case SubmissionFailed(reason=reason):
-            print(f"submission failed:\n{reason}")
+        case SubmissionFailed(failure=failure):
+            print(f"submission failed:\n{failure.render()}")
             return 1
 
 
@@ -331,8 +338,8 @@ async def _wait(args: argparse.Namespace) -> int:
                     if (note := externals_note(external_warnings(alerts).messages)) is not None:
                         print(f"\n{note}")
             return 0
-        case str():
-            print(f"FAILED\n{outcome}")
+        case JobFailed() | ResultsUnavailable() | RunFailed():
+            print(f"FAILED\n{outcome.render()}")
             return 1
 
 

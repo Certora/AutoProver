@@ -22,6 +22,7 @@ from typing import AsyncIterator, Mapping, TypedDict, override
 from elftools.common.exceptions import ELFError
 from langchain_core.tools import BaseTool
 from prover_output_utility import ProverOutputAPI
+from prover_output_utility.models import JobStatus
 from pydantic import Field
 
 from graphcore.graph import LLM, tool_return, tool_state_update
@@ -49,6 +50,8 @@ from composer.kb.kb_context import (
 from composer.prover.cloud import results_api
 from composer.prover.core import (
     CexHandler,
+    JobFailed,
+    ProverFailure,
     ProverOptions,
     ProverReport,
     TrivialFanoutCexHandler,
@@ -63,7 +66,12 @@ from composer.prover.ptypes import (
     classify_violation,
 )
 from composer.prover.accounting import RunAccounting
-from composer.prover.results import AlertReport, StaticAnalysis, UnreadableAlertReport
+from composer.prover.results import (
+    OUT_OF_RESOURCES,
+    AlertReport,
+    StaticAnalysis,
+    UnreadableAlertReport,
+)
 from composer.prover.conf import SelectRules
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
@@ -451,6 +459,17 @@ def symptoms(report: ProverReport) -> set[Symptom]:
     return found
 
 
+def failure_symptoms(failure: ProverFailure) -> set[Symptom]:
+    """What in a run with no report a recipe can be pushed on."""
+    match failure:
+        case JobFailed(status=status, alerts=alerts) if status is JobStatus.HALTED or any(
+            alert.type == OUT_OF_RESOURCES for alert in alerts
+        ):
+            return {JobSymptom(job="halted")}
+        case _:
+            return set()
+
+
 def _verdicts_note(
     status: Mapping[str, StatusCodes],
     incomplete: Mapping[str, IncompleteCheck],
@@ -823,10 +842,11 @@ class VerifyRules(
                     self.tool_call_id,
                     f"The chain build failed, so nothing was submitted:\n{said}",
                 )
-            case SubmissionFailed(build=build, reason=reason):
-                said = [f"The prover run did not produce results: {reason}"]
+            case SubmissionFailed(build=build, failure=failure):
+                said = [f"The prover run did not produce results: {failure.render()}"]
                 if (inert := await self._inert_summaries(build)) is not None:
                     said.append(inert)
+                said.extend(pushed_recipes(failure_symptoms(failure)))
                 return tool_return(self.tool_call_id, "\n\n".join(said))
             case Checked(build=build, report=report):
                 status = report.rule_outcomes()
@@ -968,8 +988,8 @@ class ExplainVacuity(
                         "The chain build failed, so nothing was submitted. Run verify_rules to see "
                         "the compiler's diagnostics."
                     )
-                case SubmissionFailed(reason=reason):
-                    return f"The diagnostic run did not produce results: {reason}"
+                case SubmissionFailed(failure=failure):
+                    return f"The diagnostic run did not produce results: {failure.render()}"
                 case Checked(report=report):
                     pass
             unproved = sorted(

@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from langchain_core.messages import ToolMessage
+from prover_output_utility.models import JobStatus
 
 from composer.authoring.state import (
     SkippedProperty,
@@ -25,7 +26,8 @@ from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CompileFailed
 from composer.diagnostics.timing import RunSummary, install_run_summary
 from composer.prover.conf import SelectRules
-from composer.prover.core import ProverReport
+from composer.prover.core import JobFailed, ProverFailure, ProverReport, RunFailed
+from composer.prover.results import OUT_OF_RESOURCES, ErrorAlert
 from composer.prover.ptypes import (
     Counterexample,
     GeneratedKind,
@@ -350,13 +352,39 @@ async def test_a_marked_rule_that_verified_does_not_stamp(gate: _Gate):
 
 
 async def test_a_submission_without_results_does_not_stamp(gate: _Gate):
-    gate.outcome = SubmissionFailed(build=_BUILT, reason="the cloud job failed")
+    gate.outcome = SubmissionFailed(build=_BUILT, failure=RunFailed("the cloud job failed"))
 
     out = await gate.verify()
 
     assert "cloud job failed" in _text(out)
     assert "validations" not in out.update
     assert not gate.sem.locked()
+
+
+_HALTED = JobFailed(JobStatus.HALTED, "L")
+_TIMED_OUT = JobFailed(JobStatus.FAILED, "L", (ErrorAlert(OUT_OF_RESOURCES, "global timeout"),))
+_CRASHED = JobFailed(JobStatus.FAILED, "L", (ErrorAlert("General", "NullPointerException"),))
+
+
+@pytest.mark.parametrize(
+    ("failure", "pushed"),
+    [
+        pytest.param(_HALTED, True, id="halted"),
+        pytest.param(_TIMED_OUT, True, id="out-of-resources"),
+        pytest.param(_CRASHED, False, id="crashed"),
+        pytest.param(RunFailed("certoraRun raised"), False, id="run-failed"),
+    ],
+)
+async def test_a_job_that_hit_its_limit_with_no_verdicts_gets_the_halted_job_recipe(
+    gate: _Gate, failure: ProverFailure, pushed: bool
+):
+    """The common way a job halts is with no verdicts at all, so this is where K9 is needed most."""
+    gate.outcome = SubmissionFailed(build=_BUILT, failure=failure)
+
+    out = await gate.verify()
+
+    assert failure.render() in _text(out)
+    assert ("### K9." in _text(out)) is pushed
 
 
 @pytest.mark.parametrize(

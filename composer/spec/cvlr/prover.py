@@ -32,6 +32,7 @@ from composer.cargo.session import CargoSession
 from composer.prover.core import (
     CexHandler,
     ProverCallbacks,
+    ProverFailure,
     ProverOptions,
     ProverReport,
     SubmittedJob,
@@ -60,15 +61,10 @@ class BuildRejected:
 
 @dataclass(frozen=True)
 class SubmissionFailed:
-    """The build succeeded but the prover run did not produce results.
-
-    ``reason`` is the message from :func:`~composer.prover.core.run_prover`: a
-    certoraRun exception, a cloud job that did not succeed, or an unparseable
-    treeView. The runner reports all of those as one string.
-    """
+    """The build succeeded but the prover run did not produce results."""
 
     build: SbfRun
-    reason: str
+    failure: ProverFailure
 
 
 @dataclass(frozen=True)
@@ -207,7 +203,7 @@ async def run_submission(
         callbacks if callbacks is not None else ProverCallbacks(),
         cex,
     )
-    if isinstance(result, str):
+    if not isinstance(result, ProverReport):
         return SubmissionFailed(prepared.build, result)
     return Checked(prepared.build, result)
 
@@ -253,6 +249,6 @@ async def start_submission(
         prover_opts,
         callbacks if callbacks is not None else ProverCallbacks(),
     )
-    if isinstance(job, str):
+    if not isinstance(job, SubmittedJob):
         return SubmissionFailed(prepared.build, job)
     return job

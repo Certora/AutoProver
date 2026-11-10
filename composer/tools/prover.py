@@ -16,7 +16,7 @@ from langgraph.types import Command
 from composer.core.state import AIComposerState
 from composer.core.context import AIComposerContext, stamp
 from composer.core.validation import ProverValidation
-from composer.prover.core import ProverReport, CexHandler, ProverOptions, run_prover
+from composer.prover.core import ProverReport, CexHandler, ProverOptions, report_or_text, run_prover
 from composer.prover.callbacks import ProverEventCallbacks
 from composer.ui.tool_display import tool_display
 
@@ -202,14 +202,14 @@ async def _run_certora_prover(
             if tool.rule is not None:
                 args.extend(["--rule", tool.rule])
 
-            return await run_prover(
+            return report_or_text(await run_prover(
                 Path(temp_dir),
                 args,
                 tool.tool_call_id,
                 deps.prover_opts,
                 ProverEventCallbacks(writer, tool.tool_call_id),
                 deps.cex_handler,
-            )
+            ))
         except Exception as e:
             print(e)
             import traceback

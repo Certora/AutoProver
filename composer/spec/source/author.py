@@ -25,7 +25,7 @@ from composer.spec.cvl_generation import (
     CVL_JUDGE_KEY, run_cvl_generator,
     GeneratedCVL, PropertyRuleMapping, FeedbackToolBase,
 )
-from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport
+from composer.prover.core import run_prover, CexHandler, ProverCallbacks, ProverReport, report_or_text
 from composer.spec.source.live_explorer import VersionedHistory, LiveEditTools
 from composer.spec.source.prover import (
     buffer_conf, component_slug, materialize_buffers, rule_selection, setup_prover_config_in,
@@ -739,13 +739,13 @@ class WrappedProverRunner:
                 rules=selection,
                 **config
             ) as (conf_path, _):
-                return await run_prover(
+                return report_or_text(await run_prover(
                     pathlib.Path(working_dir),
                     [conf_path],
                     tool_call_id,
                     self.prover_options,
                     callbacks, cex_handler
-                )
+                ))
         if buffer not in self.buffers:
             raise ValueError(f"no buffer named {buffer!r}; the author has {sorted(self.buffers)}")
         if not self.slug:
@@ -764,13 +764,13 @@ class WrappedProverRunner:
                 **config,
             ) as (conf_path, _),
         ):
-            return await run_prover(
+            return report_or_text(await run_prover(
                 pathlib.Path(working_dir),
                 [conf_path],
                 tool_call_id,
                 self.prover_options,
                 callbacks, cex_handler
-            )
+            ))
 
 
 _BUDGET_WRAPUP_MESSAGE = """

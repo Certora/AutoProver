@@ -41,6 +41,7 @@ from composer.prover.cloud import parse_cloud_link, poll_job, results_api
 from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
 from composer.prover.core import (
     ProverCallbacks,
+    ProverFailure,
     ProverOptions,
     ProverReport,
     SubmittedJob,
@@ -460,12 +461,12 @@ class Running:
     status: str
 
 
-type WaitOutcome = Running | ProverReport | str
+type WaitOutcome = Running | ProverReport | ProverFailure
 
 
 async def wait(link: str, *, seconds: float, prover_opts: ProverOptions) -> WaitOutcome:
     """Wait up to ``seconds`` for the job at ``link``, then return its verdicts, or that it is still
-    running. An error comes back as a string, as from :func:`~composer.prover.core.run_prover`."""
+    running."""
     last = "UNKNOWN"
 
     async def on_status(status: str) -> None:

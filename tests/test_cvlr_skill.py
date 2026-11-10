@@ -13,7 +13,7 @@ import pytest
 
 from composer.cli import certora_cvlr
 from composer.cli.certora_cvlr import build_parser, main
-from composer.prover.core import ProverReport
+from composer.prover.core import ProverReport, RunFailed
 from composer.spec.cvlr import skill_interface as interface
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.harness import SHARED_INVARIANTS, HarnessModule, declare_modules
@@ -93,7 +93,7 @@ def test_the_harness_layout_is_where_the_skill_says():
     [
         (Running("RUNNING"), "RUNNING"),
         (ProverReport(raw_rule_status={}, result_str="", link="L", certora_run_stdout=""), "FINISHED"),
-        ("the job failed", "FAILED"),
+        (RunFailed("the job failed"), "FAILED"),
     ],
 )
 def test_wait_prints_one_of_the_states_the_skill_loops_on(monkeypatch, capsys, outcome, state):

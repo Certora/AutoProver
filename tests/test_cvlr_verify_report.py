@@ -12,7 +12,7 @@ import pytest
 from composer.authoring.state import checked_digest
 from composer.cargo.sbf import Built, SbfRun
 from composer.cargo.session import CompileFailed
-from composer.prover.core import ProverReport, _report_without_analysis
+from composer.prover.core import ProverReport, RunFailed, _report_without_analysis
 from composer.prover.ptypes import (
     Counterexample,
     GeneratedKind,
@@ -150,7 +150,7 @@ async def test_a_rule_stopped_by_the_provers_own_assertion_is_reported_apart():
 @pytest.mark.asyncio
 async def test_a_submission_without_results_does_not_stamp():
     out = await _tool()._report(
-        SubmissionFailed(build=None, reason="the cloud job failed"),  # type: ignore[arg-type]
+        SubmissionFailed(build=None, failure=RunFailed("the cloud job failed")),  # type: ignore[arg-type]
         _deps(),  # type: ignore[arg-type]
         declared=("rule_a",),
     )

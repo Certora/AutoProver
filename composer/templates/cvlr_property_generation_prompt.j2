@@ -115,9 +115,8 @@ Read the outcome:
   draft with those rules removed verified the rest in minutes. One extra rule in a draft that
   otherwise verified did the same. Resubmitting the halted set unchanged will halt again.
 
-  Recipe K9 has what to do when the rule alone still halts, and the measured cases of a rule that
-  came back with a verdict but stopped short. `verify_rules` attaches it when the job halted with
-  some verdicts; when it returned none, fetch it.
+  `verify_rules` attaches recipe K9 to a halted job: what to do when the rule alone still halts, and
+  the measured cases of a rule that came back with a verdict but stopped short.
 * **A rule the prover could not analyze** → an *error* rather than a verdict, so it comes back as
   neither VERIFIED nor VIOLATED. On this backend it is usually the pointer analysis refusing
   something on a path your rule reaches: `[3308]` illegal dereference of an absolute address (a

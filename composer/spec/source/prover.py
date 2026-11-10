@@ -37,7 +37,7 @@ from graphcore.tools.schemas import WithInjectedId, WithInjectedState
 
 from composer.prover.core import (
     ProverOptions, SpecCompilationError, declared_rules_list, run_prover,
-    DefaultCexHandler, ProverReport
+    DefaultCexHandler, ProverReport, report_or_text
 )
 from composer.prover.accounting import RunAccounting
 from composer.prover.callbacks import ProverEventCallbacks
@@ -882,14 +882,14 @@ def get_prover_tool(
                             spec_path=spec_path, buffer_name=name, conf_dir=conf_dir, msg=label,
                             rules=selection,
                         ) as (cpath, cfg):
-                            res = await run_prover(
+                            res = report_or_text(await run_prover(
                                 Path(run_root), [cpath], tool_call_id, prover_opts,
                                 _SpecCallbacks(writer, tool_call_id, cfg, analysis_store=analysis_store),
                                 DefaultCexHandler(
                                     llm, cex_state, summarization_threshold=10,
                                     cache_marker=cex_cache_marker,
                                 ),
-                            )
+                            ))
                 await done_queue.put(_BufDone(name, digest, res, all_rules, selection))
             except asyncio.CancelledError:
                 raise
