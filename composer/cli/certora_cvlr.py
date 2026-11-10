@@ -4,11 +4,19 @@ Output is plain text for the agent running the skill. Exit status is 0 on succes
 project is refused, with the reason on stderr, and 2 on a usage error.
 """
 
+# ruff: noqa: E402
+
 import argparse
 import asyncio
 import logging
 import sys
+import warnings
 from pathlib import Path
+
+# The agent reading this command's output takes every line of stderr as something to act on.
+# Pydantic warns, at import, about each ``ReadOnly`` TypedDict item, and the warning is not
+# about the project.
+warnings.filterwarnings("ignore", message=r".*`ReadOnly` qualifier", category=UserWarning)
 
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, SbfVerdict
 from composer.cargo.session import Compiled, CompileFailed
