@@ -32,6 +32,13 @@ class _Store:
     def write_artifact(self, *_a, **_kw): return "artifact"
     def write_report(self, *_a, **_kw): ...
     def write_ranking(self, *_a, **_kw): return "property_ranking.json"
+    def write_property_set(self, *_a, **_kw): return "property_set.json"
+
+
+class _Analyzed:
+    """The analyzed model, as far as the driver reads it: serialized into the property set."""
+
+    def model_dump(self, **_kw): return {}
 
 
 class _Unit:
@@ -175,7 +182,7 @@ async def _drive[F: (_Staged, _Formalizer)](
     run_mode: RunMode = RunMode.COMPREHENSIVE,
     ranking=None,
 ) -> F:
-    async def fake_analysis(*_a, **_kw): return "analyzed"
+    async def fake_analysis(*_a, **_kw): return _Analyzed()
 
     async def fake_extract_all(*_a, **_kw):
         return core.ExtractionResult(
@@ -345,7 +352,7 @@ async def test_ranking_does_not_wait_for_pre_formalization(monkeypatch):
             order.append("prep:done")
             return await super().prepare_formalization(run)
 
-    async def fake_analysis(*_a, **_kw): return "analyzed"
+    async def fake_analysis(*_a, **_kw): return _Analyzed()
 
     async def fake_extract_all(*_a, **_kw):
         await started.wait()  # the setup is in flight, exactly as in a real run

@@ -19,6 +19,7 @@ from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.tools import BaseTool
 from langgraph.store.memory import InMemoryStore
+from pydantic import BaseModel
 
 import composer.spec.prop_inference as pi
 from composer.pipeline.keys import FINAL_PROPERTIES_KEY
@@ -443,6 +444,10 @@ async def test_driver_passes_the_round_limit_and_flags_evaluate_runs(monkeypatch
     assert seen["existing_specs"] is expected
 
 
+class _Analyzed(BaseModel):
+    """Stands in for the analyzed model; the driver only records its dump."""
+
+
 async def test_driver_records_final_properties_under_the_round_limit(monkeypatch) -> None:
     from tests import test_pipeline_staged_formalizer as sf
     import composer.pipeline.core as core
@@ -460,7 +465,7 @@ async def test_driver_records_final_properties_under_the_round_limit(monkeypatch
             [],
         )
 
-    async def fake_analysis(*_a, **_kw): return "analyzed"
+    async def fake_analysis(*_a, **_kw): return _Analyzed()
     async def fake_report(*_a, **_kw): return object()
 
     monkeypatch.setattr(core, "run_component_analysis", fake_analysis)
