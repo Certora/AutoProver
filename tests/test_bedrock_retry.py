@@ -21,6 +21,7 @@ from langchain_anthropic import ChatAnthropic
 
 from anthropic.lib.aws import _auth
 from anthropic.lib.bedrock import _mantle
+from composer.llm import bedrock_chat
 from composer.llm.anthropic import AnthropicModelProvider, AnthropicService
 from composer.llm.bedrock import (
     BACKEND_ENV_VAR, DEFAULT_MAX_TOKENS, MAX_TOKENS_ENV_VAR, BedrockCredentialRefreshError,
@@ -45,7 +46,7 @@ def _svc() -> AnthropicService:
 def no_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the SDK's retry loop, without its backoff delays."""
     monkeypatch.setattr(
-        anthropic.AsyncAnthropicBedrockMantle, "_calculate_retry_timeout",
+        bedrock_chat._AsyncMantleClient, "_calculate_retry_timeout",
         lambda self, *args, **kwargs: 0.0,
     )
 
@@ -279,14 +280,41 @@ def test_header_error_type_on_a_body_without_one(header: str, transient: bool) -
     assert _svc().should_retry(exc) is transient
 
 
-def test_payload_error_type_wins_over_the_header() -> None:
+def test_transient_header_counts_next_to_a_payload_error_type() -> None:
+    # A front end can pair a generic payload type with the specific exception in the header.
     request = httpx.Request("POST", f"https://bedrock-mantle.{_REGION}.api.aws/anthropic/v1/messages")
     exc = anthropic.APIStatusError(
-        "Error code: 400",
+        "Error code: 403",
         response=httpx.Response(
-            400, request=request, headers={"x-amzn-errortype": "ThrottlingException"},
+            403, request=request, headers={"x-amzn-errortype": "ExpiredTokenException"},
         ),
-        body={"type": "error", "error": {"type": "invalid_request_error", "message": "..."}},
+        body={"type": "error", "error": {"type": "permission_error", "message": "..."}},
+    )
+    assert _svc().should_retry(exc) is True
+
+
+@pytest.mark.asyncio
+async def test_expired_token_in_header_with_anthropic_body_is_retried_by_the_run(
+    bedrock_env, monkeypatch, no_retry_sleep
+) -> None:
+    response = _header_error(
+        403, "ExpiredTokenException",
+        {"type": "error", "error": {"type": "permission_error", "message": "expired"}},
+    )
+    exc, attempts = await _invoke_failing(monkeypatch, response)
+    assert isinstance(exc, anthropic.PermissionDeniedError)
+    assert attempts == 1
+    assert _svc().should_retry(exc) is True
+
+
+def test_deterministic_payload_and_header_are_not_retried() -> None:
+    request = httpx.Request("POST", f"https://bedrock-mantle.{_REGION}.api.aws/anthropic/v1/messages")
+    exc = anthropic.APIStatusError(
+        "Error code: 403",
+        response=httpx.Response(
+            403, request=request, headers={"x-amzn-errortype": "AccessDeniedException"},
+        ),
+        body={"type": "error", "error": {"type": "permission_error", "message": "..."}},
     )
     assert _svc().should_retry(exc) is False
 
@@ -405,13 +433,13 @@ def test_no_credentials_are_not_retried_by_the_sync_client(
     empty_credential_chain, monkeypatch
 ) -> None:
     requests: list[httpx.Request] = []
-    real = anthropic.AnthropicBedrockMantle
+    real = bedrock_chat._MantleClient
 
     def factory(**kwargs: Any) -> anthropic.AnthropicBedrockMantle:
         transport = httpx.MockTransport(lambda r: requests.append(r) or httpx.Response(500))
         return real(**{**kwargs, "http_client": httpx.Client(transport=transport)})
 
-    monkeypatch.setattr(anthropic, "AnthropicBedrockMantle", factory)
+    monkeypatch.setattr(bedrock_chat, "_MantleClient", factory)
     calls = _count_signing(monkeypatch)
     with pytest.raises(BedrockCredentialsError, match="has no credentials"):
         _build().invoke("hi")
@@ -456,7 +484,7 @@ def test_credential_refresh_blip_is_retried_by_the_sync_client(
     bedrock_env, monkeypatch
 ) -> None:
     monkeypatch.setattr(
-        anthropic.AnthropicBedrockMantle, "_calculate_retry_timeout",
+        bedrock_chat._MantleClient, "_calculate_retry_timeout",
         lambda self, *args, **kwargs: 0.0,
     )
     requests: list[httpx.Request] = []
@@ -468,15 +496,101 @@ def test_credential_refresh_blip_is_retried_by_the_sync_client(
             content=_stream_body("anthropic.claude-opus-5-5"),
         )
 
-    real = anthropic.AnthropicBedrockMantle
+    real = bedrock_chat._MantleClient
 
     def factory(**kwargs: Any) -> anthropic.AnthropicBedrockMantle:
         return real(**{**kwargs, "http_client": httpx.Client(transport=httpx.MockTransport(respond))})
 
-    monkeypatch.setattr(anthropic, "AnthropicBedrockMantle", factory)
+    monkeypatch.setattr(bedrock_chat, "_MantleClient", factory)
     calls = _signing_fails(monkeypatch, _retrieval_error())
     msg = _build().invoke("hi")
     assert msg.content == "hello"
     assert len(calls) == 2
     assert len(requests) == 1
     assert json.loads(requests[0].content)["model"] == "anthropic.claude-opus-5-5"
+
+
+# --- SDK backoff ------------------------------------------------------------------------
+
+
+def test_bedrock_backoff_doubles_up_to_a_minute() -> None:
+    from composer.llm.bedrock import retry_delay_seconds
+    assert [retry_delay_seconds(n) for n in range(8)] == [1, 2, 4, 8, 16, 32, 60, 60]
+
+
+def _retry_waits(client: Any, response_headers: httpx.Headers | None = None) -> list[float]:
+    from anthropic._models import FinalRequestOptions
+    options = FinalRequestOptions(method="post", url="/v1/messages")
+    retries = client.max_retries
+    return [
+        client._calculate_retry_timeout(remaining, options, response_headers)
+        for remaining in range(retries, 0, -1)
+    ]
+
+
+def test_bedrock_clients_back_off_for_minutes_without_retry_after(bedrock_env) -> None:
+    llm = _build()
+    for client in (llm._client, llm._async_client):
+        waits = _retry_waits(client)
+        assert len(waits) == 8
+        # Jitter takes off up to a quarter of each wait.
+        assert 0.75 * 183 <= sum(waits) <= 183
+        assert max(waits) <= 60
+
+
+def test_bedrock_clients_honour_retry_after(bedrock_env) -> None:
+    llm = _build()
+    assert set(_retry_waits(llm._async_client, httpx.Headers({"retry-after": "7"}))) == {7.0}
+
+
+def test_anthropic_client_keeps_the_sdk_backoff(monkeypatch) -> None:
+    monkeypatch.delenv(BACKEND_ENV_VAR, raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-used")
+    llm = _build()
+    assert type(llm) is ChatAnthropic
+    assert sum(_retry_waits(llm._async_client)) <= 0.5 + 1 + 2 + 4 + 8 * 4
+
+
+# --- AWS API errors while credentials are fetched ---------------------------------------
+
+
+def _sts_error(code: str, status: int) -> botocore.exceptions.ClientError:
+    return botocore.exceptions.ClientError(
+        {"Error": {"Code": code, "Message": "..."}, "ResponseMetadata": {"HTTPStatusCode": status}},
+        "AssumeRole",
+    )
+
+
+@pytest.mark.parametrize("code, status", [
+    ("Throttling", 400),
+    ("RequestLimitExceeded", 400),
+    ("SomethingNew", 503),
+    ("SomethingNew", 429),
+])
+@pytest.mark.asyncio
+async def test_transient_sts_error_while_signing_is_retried_by_the_sdk(
+    bedrock_env, monkeypatch, no_retry_sleep, code: str, status: int
+) -> None:
+    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(
+        200, headers={"content-type": "text/event-stream"},
+        content=_stream_body("anthropic.claude-opus-5-5"),
+    ))
+    calls = _signing_fails(monkeypatch, _sts_error(code, status))
+    msg = await _build().ainvoke("hi")
+    assert msg.content == "hello"
+    assert len(calls) == 2
+    assert len(rec.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_deterministic_sts_error_while_signing_is_not_retried(
+    bedrock_env, monkeypatch, no_retry_sleep
+) -> None:
+    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(500))
+    calls = _signing_fails(monkeypatch, _sts_error("AccessDenied", 403))
+    with pytest.raises(BedrockCredentialsError) as info:
+        await _build().ainvoke("hi")
+    assert isinstance(info.value.__cause__, botocore.exceptions.ClientError)
+    assert _svc().should_retry(info.value) is False
+    assert len(calls) == 1
+    assert rec.requests == []

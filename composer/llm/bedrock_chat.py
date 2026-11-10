@@ -1,7 +1,7 @@
 """``ChatAnthropic`` pointed at Claude on Amazon Bedrock through the Mantle endpoint.
 
 Mantle serves the Anthropic Messages API itself, so everything ``ChatAnthropic`` does to
-build requests and parse responses applies unchanged. This subclass changes five things:
+build requests and parse responses applies unchanged. This subclass changes six things:
 
 - the SDK clients are the Bedrock Mantle ones, which sign requests with SigV4 from the
   default AWS credential chain and need no Anthropic API key;
@@ -12,10 +12,14 @@ build requests and parse responses applies unchanged. This subclass changes five
 - the model name a response reports is replaced by the chat model's own logical id, so usage
   records, pricing and logs see the same name the run was configured with;
 - a failure to fetch the AWS credentials that sign a request is raised as an error that says
-  whether retrying can help (see :class:`CredentialErrorMiddleware`).
+  whether retrying can help (see :class:`CredentialErrorMiddleware`);
+- the SDK's retries back off for longer (see :func:`composer.llm.bedrock.retry_delay_seconds`),
+  and a request Bedrock rejects as too large is sent again with fewer inline documents.
 """
 
 import asyncio
+import logging
+import random
 from functools import cached_property
 from typing import Any, override
 
@@ -32,10 +36,12 @@ from langchain_core.outputs import ChatResult
 from pydantic import Field, PrivateAttr
 
 from composer.llm.bedrock import (
-    BedrockCredentialRefreshError, BedrockCredentialsError, max_request_bytes,
-    to_bedrock_model_id,
+    TRANSIENT_CREDENTIAL_ERROR_CODES, BedrockCredentialRefreshError, BedrockCredentialsError,
+    max_request_bytes, retry_delay_seconds, to_bedrock_model_id,
 )
-from composer.llm.bedrock_inline import DocumentKey, fit_request_to_budget
+from composer.llm.bedrock_inline import (
+    DocumentKey, fit_request_to_budget, serialized_request_size,
+)
 
 # Response fields that name the model: ``model`` as Anthropic returns it, and
 # ``model_name``, which langchain copies it into.
@@ -75,6 +81,23 @@ def _credential_error(exc: botocore.exceptions.BotoCoreError) -> anthropic.Anthr
     )
 
 
+def _client_error(exc: botocore.exceptions.ClientError) -> anthropic.AnthropicError:
+    """The error to raise for ``exc``, an AWS API call that failed while credentials were
+    fetched: retryable when its error code or status says the failure can pass."""
+    error = exc.response.get("Error", {})
+    status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    transient = error.get("Code") in TRANSIENT_CREDENTIAL_ERROR_CODES or (
+        isinstance(status, int) and (status == 429 or status >= 500)
+    )
+    if transient:
+        return BedrockCredentialRefreshError(
+            f"Could not fetch AWS credentials to sign the Bedrock request: {exc}"
+        )
+    return BedrockCredentialsError(
+        f"Could not get AWS credentials to sign the Bedrock request: {exc}"
+    )
+
+
 def _no_credentials_error(exc: RuntimeError, aws_region: str) -> anthropic.AnthropicError | None:
     """The error to raise for ``exc``, a ``RuntimeError`` from a request attempt, when the
     default AWS credential chain has no credentials; ``None`` when it has some, so ``exc``
@@ -99,8 +122,9 @@ def _no_credentials_error(exc: RuntimeError, aws_region: str) -> anthropic.Anthr
 class CredentialErrorMiddleware(anthropic.Middleware):
     """Turns a failure of SigV4 signing into a :class:`BedrockCredentialRefreshError` or a
     :class:`BedrockCredentialsError`, chained to the original: a botocore error while
-    credentials are fetched, or the ``RuntimeError`` the SDK raises when the default
-    credential chain has none.
+    credentials are fetched, a failed AWS API call made for them (such as a throttled STS
+    role assumption), or the ``RuntimeError`` the SDK raises when the default credential
+    chain has none.
 
     The Mantle clients sign each attempt before sending it, and the SDK leaves an error from
     signing as it is, so a passing failure to fetch credentials would otherwise end the
@@ -116,6 +140,8 @@ class CredentialErrorMiddleware(anthropic.Middleware):
             return call_next(request)
         except botocore.exceptions.BotoCoreError as exc:
             raise _credential_error(exc) from exc
+        except botocore.exceptions.ClientError as exc:
+            raise _client_error(exc) from exc
         except RuntimeError as exc:
             if (error := _no_credentials_error(exc, self._aws_region)) is None:
                 raise
@@ -129,6 +155,8 @@ class CredentialErrorMiddleware(anthropic.Middleware):
             return await call_next(request)
         except botocore.exceptions.BotoCoreError as exc:
             raise _credential_error(exc) from exc
+        except botocore.exceptions.ClientError as exc:
+            raise _client_error(exc) from exc
         except RuntimeError as exc:
             # Resolving credentials can block on a metadata endpoint, as the SDK's own
             # signing does, so it runs off the event loop like that.
@@ -136,6 +164,46 @@ class CredentialErrorMiddleware(anthropic.Middleware):
             if error is None:
                 raise
             raise error from exc
+
+
+def _bedrock_retry_timeout(
+    client: anthropic.AnthropicBedrockMantle | anthropic.AsyncAnthropicBedrockMantle,
+    remaining_retries: int,
+    options: Any,
+    response_headers: Any,
+) -> float:
+    """The SDK's retry wait with the Bedrock backoff of
+    :func:`composer.llm.bedrock.retry_delay_seconds`: a ``retry-after`` of up to a minute is
+    honoured as the SDK does, otherwise the wait doubles up to a minute, less up to a quarter
+    of jitter so that parallel requests do not retry in step."""
+    retry_after = client._parse_retry_after_header(response_headers)
+    if retry_after is not None and 0 < retry_after <= 60:
+        return retry_after
+    retries_done = options.get_max_retries(client.max_retries) - remaining_retries
+    return retry_delay_seconds(retries_done) * (1 - 0.25 * random.random())
+
+
+class _MantleClient(anthropic.AnthropicBedrockMantle):
+    @override
+    def _calculate_retry_timeout(
+        self, remaining_retries: int, options: Any, response_headers: Any = None
+    ) -> float:
+        return _bedrock_retry_timeout(self, remaining_retries, options, response_headers)
+
+
+class _AsyncMantleClient(anthropic.AsyncAnthropicBedrockMantle):
+    @override
+    def _calculate_retry_timeout(
+        self, remaining_retries: int, options: Any, response_headers: Any = None
+    ) -> float:
+        return _bedrock_retry_timeout(self, remaining_retries, options, response_headers)
+
+
+_logger = logging.getLogger(__name__)
+
+# How many times a request Bedrock rejects as too large is sent again with a lower request
+# budget. Each try leaves out more inline documents; a request that holds none is not retried.
+_TOO_LARGE_RETRIES = 3
 
 
 class ChatAnthropicBedrock(ChatAnthropic):
@@ -150,6 +218,8 @@ class ChatAnthropicBedrock(ChatAnthropic):
     # The inline documents this model has warned about leaving out, so a document dropped
     # from every request of a conversation is warned about once.
     _omitted_documents: set[DocumentKey] = PrivateAttr(default_factory=set)
+    # The request budget after Bedrock rejected a request as too large; ``None`` until then.
+    _lowered_request_bytes: int | None = PrivateAttr(default=None)
 
     def _mantle_params(self) -> dict[str, Any]:
         """The parent's client settings (timeout, retries, default headers) minus the
@@ -184,7 +254,7 @@ class ChatAnthropicBedrock(ChatAnthropic):
     @cached_property
     @override
     def _client(self) -> anthropic.AnthropicBedrockMantle:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return anthropic.AnthropicBedrockMantle(
+        return _MantleClient(
             **self._mantle_params(),
             http_client=_get_default_httpx_client(**self._http_client_params()),
         )
@@ -192,7 +262,7 @@ class ChatAnthropicBedrock(ChatAnthropic):
     @cached_property
     @override
     def _async_client(self) -> anthropic.AsyncAnthropicBedrockMantle:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return anthropic.AsyncAnthropicBedrockMantle(
+        return _AsyncMantleClient(
             **self._mantle_params(),
             http_client=_get_default_async_httpx_client(**self._http_client_params()),
         )
@@ -207,7 +277,51 @@ class ChatAnthropicBedrock(ChatAnthropic):
     ) -> dict:
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         payload["model"] = to_bedrock_model_id(payload["model"])
-        return fit_request_to_budget(payload, self.max_request_bytes, self._omitted_documents)
+        return fit_request_to_budget(payload, self._request_budget(), self._omitted_documents)
+
+    def _request_budget(self) -> int:
+        return self._lowered_request_bytes or self.max_request_bytes
+
+    def _refit_after_too_large(
+        self, payload: dict, exc: anthropic.RequestTooLargeError
+    ) -> dict | None:
+        """``payload`` refitted to a lower request budget after Bedrock rejected it as too
+        large, or ``None`` when it holds no inline document left to drop. The budget becomes
+        three quarters of the smaller of the current budget and the rejected request's size,
+        so at least one more document is left out. It stays lowered for the later requests
+        of this model, which carry the same history."""
+        budget = min(self._request_budget(), serialized_request_size(payload)) * 3 // 4
+        refitted = fit_request_to_budget(payload, budget, self._omitted_documents)
+        if refitted is payload:
+            return None
+        _logger.warning(
+            "Bedrock rejected a request as too large (%s); lowering the request budget for "
+            "inline documents to %d bytes and sending it again", exc, budget,
+        )
+        self._lowered_request_bytes = budget
+        return refitted
+
+    @override
+    def _create(self, payload: dict) -> Any:
+        for _ in range(_TOO_LARGE_RETRIES):
+            try:
+                return super()._create(payload)
+            except anthropic.RequestTooLargeError as exc:
+                if (refitted := self._refit_after_too_large(payload, exc)) is None:
+                    raise
+                payload = refitted
+        return super()._create(payload)
+
+    @override
+    async def _acreate(self, payload: dict) -> Any:
+        for _ in range(_TOO_LARGE_RETRIES):
+            try:
+                return await super()._acreate(payload)
+            except anthropic.RequestTooLargeError as exc:
+                if (refitted := self._refit_after_too_large(payload, exc)) is None:
+                    raise
+                payload = refitted
+        return await super()._acreate(payload)
 
     @override
     def _make_message_chunk_from_anthropic_event(

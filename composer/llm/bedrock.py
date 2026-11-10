@@ -156,8 +156,38 @@ TRANSIENT_ERROR_TYPES = frozenset({
 already says so; the names matter for an error reported inside an open stream, whose status
 is the stream's 200, and for ``ExpiredTokenException``, a 403 that the next request, signed
 with refreshed credentials, does not repeat. The name is read from the payload's
-``error.type``, or, for a payload without one, from the ``x-amzn-errortype`` response header
-(see :func:`aws_error_type`); a payload with an Anthropic error type is classified by that."""
+``error.type`` and from the ``x-amzn-errortype`` response header (see :func:`aws_error_type`);
+a transient name in either one makes the error transient, because a front end can pair a
+generic payload type such as ``permission_error`` with a specific header."""
+
+RETRY_INITIAL_DELAY_SECONDS = 1.0
+RETRY_MAX_DELAY_SECONDS = 60.0
+"""The backoff of the SDK's own retries on Bedrock, when the response names no
+``retry-after``: the wait doubles from :data:`RETRY_INITIAL_DELAY_SECONDS` up to this value,
+so the 8 retries span about three minutes. The SDK's defaults (0.5 s doubling to 8 s, about
+35 s in all) suit an API that sends ``retry-after`` on every 429. Bedrock throttles against a
+per-account tokens-per-minute quota that parallel requests share, and a minute-long quota
+window needs waits of the same order."""
+
+
+def retry_delay_seconds(retries_done: int) -> float:
+    """The wait before the next SDK retry of a Bedrock request after ``retries_done`` retries,
+    without jitter."""
+    return min(RETRY_INITIAL_DELAY_SECONDS * 2.0 ** min(retries_done, 32), RETRY_MAX_DELAY_SECONDS)
+
+
+TRANSIENT_CREDENTIAL_ERROR_CODES = frozenset({
+    "Throttling",
+    "ThrottlingException",
+    "RequestLimitExceeded",
+    "ServiceUnavailable",
+    "InternalFailure",
+    "InternalError",
+    "IDPCommunicationError",
+})
+"""Error codes of an AWS API call made while credentials are fetched (an STS role
+assumption, for example) that can pass. botocore raises such a failure as a ``ClientError``,
+which is not a ``BotoCoreError``; a 429 or 5xx status counts as transient too."""
 
 AWS_ERROR_TYPE_HEADER = "x-amzn-errortype"
 """The response header in which AWS front ends name the exception behind an error response,

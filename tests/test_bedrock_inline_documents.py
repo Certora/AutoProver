@@ -13,6 +13,7 @@ import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
+from composer.llm import bedrock_chat
 from composer.input.files import InMemoryBytesFile
 from composer.llm.anthropic import (
     AnthropicModelProvider, BedrockFileUploader, BedrockRenderer,
@@ -353,7 +354,7 @@ def _sse_body() -> bytes:
 
 def _mock_mantle(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
     requests: list[httpx.Request] = []
-    real = anthropic.AsyncAnthropicBedrockMantle
+    real = bedrock_chat._AsyncMantleClient
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
@@ -366,7 +367,7 @@ def _mock_mantle(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
             **kwargs, "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         })
 
-    monkeypatch.setattr(anthropic, "AsyncAnthropicBedrockMantle", factory)
+    monkeypatch.setattr(bedrock_chat, "_AsyncMantleClient", factory)
     return requests
 
 
@@ -485,3 +486,72 @@ async def test_resumed_checkpoint_with_file_id_fails_before_sending(
             {"type": "text", "text": "Design document:"}, _FILE_BLOCK,
         ])])
     assert requests == []
+
+
+def _mock_mantle_with_cap(monkeypatch: pytest.MonkeyPatch, cap: int) -> list[httpx.Request]:
+    """Like :func:`_mock_mantle`, but answers 413 to a request whose body exceeds ``cap``."""
+    requests: list[httpx.Request] = []
+    real = bedrock_chat._AsyncMantleClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if len(request.content) > cap:
+            return httpx.Response(413, json={
+                "type": "error",
+                "error": {"type": "request_too_large", "message": "Request exceeds the maximum size"},
+            })
+        return httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, content=_sse_body()
+        )
+
+    def factory(**kwargs: Any) -> anthropic.AsyncAnthropicBedrockMantle:
+        return real(**{
+            **kwargs, "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        })
+
+    monkeypatch.setattr(bedrock_chat, "_AsyncMantleClient", factory)
+    return requests
+
+
+@pytest.mark.asyncio
+async def test_request_rejected_as_too_large_is_sent_again_with_fewer_documents(
+    bedrock_env, monkeypatch, tmp_path, caplog
+) -> None:
+    # The size estimate says the request fits, but Bedrock's real limit is lower.
+    requests = _mock_mantle_with_cap(monkeypatch, cap=20_000)
+    (tmp_path / "design.pdf").write_bytes(_pdf(2000))
+    (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
+    design = await BedrockFileUploader().get_document(tmp_path / "design.pdf")
+    assert design is not None
+    tool_msg = await _read_document_message(tmp_path, "spec.pdf")
+    llm = ChatAnthropicBedrock(
+        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        max_request_bytes=1_000_000, streaming=True,
+    )
+    conversation = _conversation(design.to_dict(CacheLevel.LONG), tool_msg)
+
+    with caplog.at_level(logging.WARNING):
+        msg = await llm.ainvoke(conversation)
+    assert msg.content == "ok"
+    assert [len(r.content) > 20_000 for r in requests] == [True, False]
+    body = json.loads(requests[1].content)
+    assert body["system"][1]["type"] == "document"
+    (tool_result,) = body["messages"][-1]["content"]
+    assert "'spec.pdf'" in tool_result["content"][-1]["text"]
+    assert any("too large" in r.getMessage() for r in caplog.records)
+
+    # The lowered budget stays, so the next request of the conversation fits at once.
+    await llm.ainvoke(conversation)
+    assert len(requests) == 3
+    assert len(requests[2].content) <= 20_000
+
+
+@pytest.mark.asyncio
+async def test_request_too_large_without_documents_is_raised(bedrock_env, monkeypatch) -> None:
+    requests = _mock_mantle_with_cap(monkeypatch, cap=10)
+    llm = ChatAnthropicBedrock(
+        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024, streaming=True,
+    )
+    with pytest.raises(anthropic.RequestTooLargeError):
+        await llm.ainvoke("hi")
+    assert len(requests) == 1

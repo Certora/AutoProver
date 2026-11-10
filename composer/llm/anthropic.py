@@ -392,12 +392,13 @@ class AnthropicService(ProviderServiceBase):
             # 200 response, and the SDK builds the exception from that response — so the
             # status code carries none of the meaning and the class stays the base
             # APIStatusError. The transient/deterministic split lives in the payload.
-            error_type = payload_error_type(exc.body)
-            if error_type is None:
-                # AWS front ends may answer with a body that has no ``error.type`` and name
-                # the exception in a response header instead.
-                error_type = aws_error_type(exc.response.headers)
-            return error_type in RETRYABLE_ERROR_TYPES or is_transient_error_type(error_type)
+            # AWS front ends may name the exception in a response header, either instead of
+            # an ``error.type`` in the body or next to a generic one (``permission_error``
+            # for an expired token), so a transient name in either place counts.
+            error_types = (payload_error_type(exc.body), aws_error_type(exc.response.headers))
+            return any(
+                t in RETRYABLE_ERROR_TYPES or is_transient_error_type(t) for t in error_types
+            )
         return False
 
 @dataclass

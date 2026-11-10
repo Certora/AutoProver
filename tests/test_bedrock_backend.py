@@ -16,7 +16,7 @@ from langchain_core.messages import AIMessage
 from graphcore.utils import get_normalized_token_usage
 
 from composer.input.files import InMemoryBytesFile, InMemoryTextFile
-from composer.llm import openrouter
+from composer.llm import bedrock_chat, openrouter
 from composer.llm.anthropic import (
     AnthropicFileUploader, AnthropicModelProvider, AnthropicService, BedrockFileUploader,
     uploader_for_backend,
@@ -143,7 +143,7 @@ def test_bedrock_builder_wires_mantle_clients(bedrock_env) -> None:
         (llm._client, anthropic.AnthropicBedrockMantle),
         (llm._async_client, anthropic.AsyncAnthropicBedrockMantle),
     ):
-        assert type(client) is cls
+        assert isinstance(client, cls)
         assert client.timeout == 300.0
         assert client.max_retries == 8
         assert str(client.base_url) == f"https://bedrock-mantle.{_REGION}.api.aws/anthropic/"
@@ -159,7 +159,6 @@ def test_bedrock_models_share_one_connection_pool(bedrock_env) -> None:
 
 
 def test_bedrock_client_honours_anthropic_proxy(bedrock_env, monkeypatch) -> None:
-    from composer.llm import bedrock_chat
     seen: list[dict[str, Any]] = []
     real = bedrock_chat._get_default_async_httpx_client
 
@@ -236,7 +235,7 @@ def _mock_mantle(
     """Route the async Mantle client through a MockTransport, recording each request and
     the constructor arguments the chat model passed."""
     rec = _Recorder([], [])
-    real = anthropic.AsyncAnthropicBedrockMantle
+    real = bedrock_chat._AsyncMantleClient
 
     def handler(request: httpx.Request) -> httpx.Response:
         rec.requests.append(request)
@@ -247,7 +246,7 @@ def _mock_mantle(
         mocked = {**kwargs, "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler))}
         return real(**mocked)
 
-    monkeypatch.setattr(anthropic, "AsyncAnthropicBedrockMantle", factory)
+    monkeypatch.setattr(bedrock_chat, "_AsyncMantleClient", factory)
     return rec
 
 

@@ -69,6 +69,11 @@ def _serialized_size(value: Any) -> int:
     ).encode("utf-8"))
 
 
+def serialized_request_size(payload: dict[str, Any]) -> int:
+    """The estimated size in bytes of ``payload`` as the SDK sends it."""
+    return _serialized_size(payload)
+
+
 def _map_content_blocks(
     payload: dict[str, Any], fn: Callable[[dict[str, Any]], dict[str, Any]]
 ) -> dict[str, Any]:
