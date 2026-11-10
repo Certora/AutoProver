@@ -176,7 +176,9 @@ know *which* function was refused to be useful.
 
   `UnknownCode(code: int)` is a code this build does not list, `Uncoded` a message with no `[NNNN]`
   prefix. `RuleResult.error_messages` becomes `errors: list[AnalysisError]`, and the report keeps
-  printing each `message` whole. One test per listed code, against a message in the Prover's format.
+  printing each `message` whole. Since EVMVerifier#8815 an encoding failure's message starts with
+  the code; a Prover from before it prefixes `In <rule>: `, so the parser accepts that prefix too.
+  One test per listed code, against a message in the Prover's format, and one with the old prefix.
 * **Timeouts.** `RuleStatistics.phase` becomes a type (`StaticAnalysis | Solving(...) |
   OtherPhase(str)`), so "the rule never reached the solver" can be matched rather than compared to a
   string.
@@ -194,12 +196,13 @@ in `alertReport.json`, which exists when the tree view may not and which AutoPro
 a failed job.
 
 **Ask 1: a typed error kind and source frames. Drafted, set aside.** EVMVerifier#8815 first added
-them, then was trimmed to two fixes that improve the existing text: `Symbol.toRange` no longer
-discards a source location whose column is 0, so more errors get a `source:` line, and an encoding
-failure is reported as the original exception rather than through a wrapper that logged it as
-"Unknown error ... Error code N". (The message loses its `In <rule>: ` prefix; the `[NNNN]` prefix is
-unchanged.) The draft, for reference: each entry in a rule node's `errors` gained two fields beside
-`severity` and `message`, and job-level alerts carried the same fields:
+them, then was trimmed to two fixes to the existing text, and merged in that form on 2026-11-10
+(7c1068d8). `Symbol.toRange` no longer discards a source location whose column is 0, so more errors
+get a `source:` line. An encoding failure is now reported as the original exception, not through a
+wrapper that logged it as "Unknown error ... Error code N". As a result the message loses its
+`In <rule>: ` prefix; the `[NNNN]` prefix is unchanged. The draft, for reference: each entry in a
+rule node's `errors` gained two fields beside `severity` and `message`, and job-level alerts carried
+the same fields:
 
 ```json
 { "severity": "error", "message": "[3308] illegal dereference ...",
