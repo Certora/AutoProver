@@ -3,7 +3,8 @@
 ### K8. A bounded stand-in for a computation that will not finish `[MOCK]` `[EDIT]`
 
 **Trigger:** a TIMEOUT that survives a small job; a rule whose statistics line says `static
-analysis`; one function holding most of a timed-out rule's branching or nonlinear share.
+analysis`; one function holding most of a timed-out rule's branching or nonlinear share, including
+a function in a stand-in that is already in place.
 
 **Read where a rule stood before you guess.** The prover report ends with a line for each rule that
 timed out: the phase it reached, its path count, and the functions with the largest share of its
@@ -58,3 +59,16 @@ Three things follow from a stand-in:
   guarantee that excludes it, under the previous paragraph's rule.
 * **Say what ran against it.** Name the stand-in in `rule_subjects` for every rule whose path
   crosses it, and list its constraints in the commentary, each with where it comes from.
+
+**When the function holding the time is a stand-in.** A stand-in can be the hot function itself. A
+`redirect_module` of a wide-integer module whose stand-in still computes a 256-bit division exactly
+costs what the real one did; the statistics name it like any other function, at its path in the
+stand-in file. Sort the properties as above. One that only consumes the division's result can take
+a cheaper stand-in: ask the editor to revise it so the operation returns `nondet()` values
+constrained only by what the operation guarantees and the properties need, such as a quotient no
+larger than the dividend and a remainder below the divisor. The exact identity, quotient times
+divisor plus remainder equals the dividend, brings back the nonlinear term the revision was meant
+to remove, so add it only for a property that needs it. A property about the exact result needs the
+exact operation: skip it, citing the timeout under the stand-in. Measured on one program: two of
+three rewrites of such a stand-in left its timeouts in place, and three units that never revised
+theirs spent about 21 submissions on the same timeouts before skipping.

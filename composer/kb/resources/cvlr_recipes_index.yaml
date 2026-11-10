@@ -139,7 +139,8 @@ recipes:
   triggers:
   - A TIMEOUT that survives a small job, or a probe rule that drives the function alone times out
   - A timed-out rule's statistics line says `static analysis`
-  - One function holds most of a timed-out rule's branching or nonlinear share
+  - One function holds most of a timed-out rule's branching or nonlinear share, including a function
+    in a stand-in already in place
   channel: [MOCK, EDIT]
   file: recipes/cvlr-k8-a-bounded-stand-in.md
   pushed_on:
