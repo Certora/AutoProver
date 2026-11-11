@@ -1,10 +1,25 @@
 > Where this recipe and the Solana/CVLR manual or other Certora materials diverge, this recipe governs.
 
-### K8. A bounded stand-in for a computation that will not finish `[MOCK]` `[EDIT]`
+### K8. A rule that times out: its shape first, then a bounded stand-in `[RULE]` `[MOCK]` `[EDIT]`
 
-**Trigger:** a TIMEOUT that survives a small job; a rule whose statistics line says `static
-analysis`; one function holding most of a timed-out rule's branching or nonlinear share, including
-a function in a stand-in that is already in place.
+**Trigger:** a rule that came back TIMEOUT in a job that returned verdicts; a rule whose statistics
+line says `static analysis`; one function holding most of a timed-out rule's branching or nonlinear
+share, including a function in a stand-in that is already in place.
+
+**Before a stand-in, the rule's own shape.** Three shapes time out on their own, and each has a fix
+that keeps the program as it is. Measured on one program, where each timed out and its fix verified:
+- **One rule over several cases.** A rule ranging over several account-list lengths, or over both
+  pre-state variants, timed out; one rule per length or variant verified. Split it that way.
+- **An unbounded wide product.** A product of two `u64`s into a `u128` timed out twice with the
+  factors unbounded, and verified with both below `2^32`. Bound both factors, and say in the
+  commentary that the bound is the domain of the proof, not a fact about the program. A property
+  about behaviour at the top of the `u64` range cannot take that bound.
+- **A walk nothing bounds.** A loop of one iteration per epoch, with nothing in the program bounding
+  how far activation is from now, did not finish at a higher `loop_iter`. Assume a small distance
+  and record it as the domain.
+
+Re-running an unchanged timing-out rule will time out again. If the rule's shape is none of these,
+or fixing it did not help, read on.
 
 **Read where a rule stood before you guess.** The prover report ends with a line for each rule that
 timed out: the phase it reached, its path count, and the functions with the largest share of its

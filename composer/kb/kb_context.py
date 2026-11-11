@@ -233,9 +233,13 @@ class ErrorSymptom:
 
 @pydantic_dataclass(frozen=True, config=_SYMPTOM)
 class StatusSymptom:
-    """A rule came back with this status."""
+    """A rule came back with this status.
 
-    status: Literal["SANITY_FAILED"]
+    ``TIMEOUT`` is a rule that ran out of its own time, in a job that did not halt. A halted job
+    cuts its unfinished rules off as ``TIMEOUT`` too, and those are :class:`JobSymptom`'s.
+    """
+
+    status: Literal["SANITY_FAILED", "TIMEOUT"]
 
 
 @pydantic_dataclass(frozen=True, config=_SYMPTOM)

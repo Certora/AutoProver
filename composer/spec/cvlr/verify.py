@@ -463,6 +463,8 @@ def symptoms(report: ProverReport) -> set[Symptom]:
     }
     if "SANITY_FAILED" in report.raw_rule_status.values():
         found.add(StatusSymptom(status="SANITY_FAILED"))
+    if not report.halted and "TIMEOUT" in report.raw_rule_status.values():
+        found.add(StatusSymptom(status="TIMEOUT"))
     if any(isinstance(stats.phase, StaticAnalysis) for stats in report.statistics.values()):
         found.add(TimeoutSymptom(timeout="static analysis"))
     for path, stats in report.statistics.items():

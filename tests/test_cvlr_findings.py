@@ -318,10 +318,21 @@ def test_the_gate_pushes_the_vacuity_recipe_on_a_sanity_failure():
     assert "### K12." in _report_note(_report({"r": "SANITY_FAILED", "s": "VERIFIED"}))
 
 
+def test_the_gate_pushes_the_timeout_recipe_on_a_rule_that_ran_out_of_its_own_time():
+    assert "### K8." in _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}))
+    assert "### K8." not in _report_note(_report({"r": "VERIFIED"}))
+
+
+def test_a_halted_jobs_cut_off_rules_push_only_the_halted_job_recipe():
+    note = _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}, halted=True))
+    assert "### K9." in note and "### K8." not in note
+
+
 def test_the_gate_pushes_the_stand_in_recipe_on_a_rule_that_never_reached_the_solver():
+    """Even in a halted job, where a TIMEOUT alone says only that the job ran out."""
     def stopped(phase: VerificationPhase) -> ProverReport:
         stats = RuleStatistics(phase=phase, path_count=None, branching=(), nonlinear=())
-        return _report({"r": "TIMEOUT"}, statistics={RulePath(rule="r"): stats})
+        return _report({"r": "TIMEOUT"}, statistics={RulePath(rule="r"): stats}, halted=True)
 
     assert "### K8." in _report_note(stopped(StaticAnalysis()))
     assert "### K8." not in _report_note(stopped(Solving(4, 50, 2, 10)))
@@ -335,7 +346,7 @@ def test_the_gate_pushes_the_stand_in_recipe_when_one_function_holds_the_time():
             branching=() if branching is None else (Hotspot("f", branching),),
             nonlinear=() if nonlinear is None else (Hotspot("g", nonlinear),),
         )
-        return _report({"r": "TIMEOUT"}, statistics={RulePath(rule="r"): stats})
+        return _report({"r": "TIMEOUT"}, statistics={RulePath(rule="r"): stats}, halted=True)
 
     assert "### K8." in _report_note(stopped(DOMINANT_SHARE, None))
     assert "### K8." in _report_note(stopped(10, DOMINANT_SHARE + 30))

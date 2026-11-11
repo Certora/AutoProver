@@ -137,15 +137,19 @@ recipes:
   pushed_on:
   - error: 3005
 - id: K8
-  name: A bounded stand-in for a computation that will not finish
+  name: 'A rule that times out: its shape first, then a bounded stand-in'
   triggers:
-  - A TIMEOUT that survives a small job, or a probe rule that drives the function alone times out
+  - A rule comes back TIMEOUT in a job that returned verdicts, or a probe rule that drives a function
+    alone times out
+  - A rule ranges over several account-list lengths or pre-state variants, multiplies two unbounded
+    `u64`s, or walks a distance nothing bounds
   - A timed-out rule's statistics line says `static analysis`
   - One function holds most of a timed-out rule's branching or nonlinear share, including a function
     in a stand-in already in place
-  channel: [MOCK, EDIT]
+  channel: [RULE, MOCK, EDIT]
   file: recipes/cvlr-k8-a-bounded-stand-in.md
   pushed_on:
+  - status: TIMEOUT
   - timeout: static analysis
   - timeout: dominant function
   search_terms:
@@ -154,7 +158,9 @@ recipes:
   name: A halted job, and which rule halted it
   triggers:
   - A job that reaches its time limit, with no verdicts or with rules cut off as TIMEOUT
-  - A rule that still times out when submitted alone
+  - A rule that still halts the job when submitted alone
+  - A handler that runs a `HashSet` insert, serializes a fixed-size array, or reads a buffer an
+    external allocator filled
   channel: [RULE, EDIT, SKIP]
   file: recipes/cvlr-k9-a-halted-job.md
   pushed_on:

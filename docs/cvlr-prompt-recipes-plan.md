@@ -438,6 +438,15 @@ named there, "When a rule should fail", and the judge's checklist.
    Resources" alert, pushes K9. The CVL callers render the failure where it leaves `run_prover`, so
    their contract, including the plugin protocol's, still reports a failure as a string.
 
+   Follow-up: the measured timeout cases were in three places (Step 1 of the initial prompt, its
+   Step 3, and K9), and K9 held single-rule timeouts it was never pushed for. K9 now holds only the
+   halted job: isolating the rule, and the handlers that halt alone (a loop whose trip count comes
+   from data). The single-rule shapes (split by case, bound a wide product, bound an unbounded walk)
+   open K8, which is also pushed on `status: TIMEOUT` in a job that did not halt; before, a rule
+   that timed out while solving, with no dominant function, got no recipe. The signer walk that
+   needs `loop_iter` at the account-list length moved to K4. Step 1 states the three shapes as
+   principles and Step 3 says which recipe answers which timeout.
+
 Steps 1–3 take roughly 25 KB off the author's standing text, and steps 4–5 another 10 KB.
 
 ## 8. Checking it

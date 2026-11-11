@@ -131,9 +131,9 @@ rarely clears it.
 
 The prover report ends with a line for each rule that timed out: the phase it reached, its path
 count, and the functions with the largest share of its branching and of its nonlinear operations.
-`verify_rules` attaches recipe K8 when a rule never reached the solver, or when one function holds
-most of a timed-out rule's share. It covers sorting the properties whose path crosses the function,
-and the stand-in for the ones that only consume its result.
+`verify_rules` attaches recipe K8 to a timed-out rule. It covers the rule shapes that time out on
+their own, sorting the properties whose path crosses the function, and the stand-in for the ones
+that only consume its result.
 
 ## When the program itself is in the way, ask the editor
 
