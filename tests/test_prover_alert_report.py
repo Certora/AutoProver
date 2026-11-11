@@ -53,7 +53,7 @@ class _AlertAPI:
 
 
 def _fetch_alerts(outcome: str | Exception, monkeypatch) -> AlertReport | UnreadableAlertReport:
-    monkeypatch.setattr(cloud, "_results_api", lambda: _AlertAPI(outcome))
+    monkeypatch.setattr(cloud, "results_api", lambda: _AlertAPI(outcome))
     return asyncio.run(cloud._fetch_alert_report("deadbeefcafebabe"))
 
 

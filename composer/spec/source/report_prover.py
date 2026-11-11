@@ -82,6 +82,26 @@ def fetch_covering_verdicts(
     return verdicts
 
 
+def fetch_unsat_cores(api: ProverOutputAPI, link: str, rule: str) -> tuple[str, ...]:
+    """The text of every unsat core the run at ``link`` wrote for ``rule``'s checks.
+
+    Only a run with ``coverage_info`` on writes any. The job's ``unsat_core_map.json`` keys a core by
+    the result-tree node it was checked under, a path joined with ``-``: the rule itself, or a
+    sub-check such as ``<rule>-Assertions`` or ``<rule>-#assert_1``. So a rule's cores are those under
+    its own name or a name it prefixes with ``-``, which no rule name can contain.
+
+    Blocking: call it off the event loop (``asyncio.to_thread``).
+    """
+    job = _output_link(link) or link
+    names = [
+        name
+        for check, files in api.unsat_core_map(job).items()
+        if check == rule or check.startswith(f"{rule}-")
+        for name in files
+    ]
+    return tuple(api.fetch_output_file(job, name) for name in names)
+
+
 def make_prover_fetcher(api: ProverOutputAPI | None = None) -> VerdictFetcher[GeneratedCVL]:
     """A `VerdictFetcher` that pulls per-rule verdicts from ProverOutputUtility, reading every
     prover run that composes the component's buffers (``GeneratedCVL.run_link_specs``). With buffers +

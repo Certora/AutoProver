@@ -1,0 +1,402 @@
+"""`explain_vacuity`: a SANITY_FAILED rule rerun for its unsat core, and the core read.
+
+The CVLR counterpart of the CVL sanity analyzer (`sanity_analyzer`). No LLM, no network, no cargo:
+the submission, the results API and the analyst are all stubbed at the seams the tool calls.
+"""
+
+import contextlib
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from composer.cargo.sbf import Built, SbfRun
+from composer.cargo.session import CompileFailed
+from composer.prover.conf import SelectRules
+from composer.prover.core import ProverReport
+from composer.prover.ptypes import RulePath
+from composer.spec.cvlr import verify as verify_mod
+from composer.spec.cvlr.conf import (
+    CheckVerdicts,
+    CollectUnsatCore,
+    TunableConf,
+    RunOverlay,
+    solana_conf,
+)
+from composer.spec.cvlr.prover import Checked
+from composer.spec.cvlr.prover import Submission as CvlrSubmission
+from tests.test_cvlr_manifest import elf_with_cvlr_rules, record
+from composer.spec.cvlr.vacuity import (
+    AssertionInCore,
+    AssertionNotInCore,
+    VacuityAnalysis,
+    core_finding,
+    rule_core,
+)
+from composer.spec.source.report_prover import fetch_unsat_cores
+from composer.templates.loader import load_jinja_template
+
+#: Captured from a Prover older than 8.20.0, which added the meta that marks the rule's assertion
+#: (EVMVerifier #8656); it is inserted where 8.20.0's printer writes it.
+_CORE = (
+    (Path(__file__).parent / "data" / "cvlr_unsat_core" / "assertion_in_core.txt")
+    .read_text()
+    .replace(
+        "  [cmd] tac.assert.id: 100001",
+        "  [cmd] cvl.user.defined.assert: NoValue\n  [cmd] tac.assert.id: 100001",
+    )
+)
+
+_DRAFT = """
+use cvlr::prelude::*;
+
+#[rule]
+fn rule_backed() { cvlr_assert!(true); }
+
+#[rule]
+fn rule_other() { cvlr_assert!(true); }
+"""
+
+
+# ---------------------------------------------------------------------------------------------
+# the conf
+
+
+def test_an_unsat_core_run_turns_the_vacuity_check_off_and_cores_on():
+    conf = solana_conf(
+        TunableConf(), RunOverlay(build_script=Path("/w/b.py"), purpose=CollectUnsatCore())
+    )
+    assert conf["rule_sanity"] == "none"
+    assert conf["coverage_info"] == "basic"
+
+
+def test_an_ordinary_run_is_unchanged():
+    conf = solana_conf(TunableConf(), RunOverlay(build_script=Path("/w/b.py")))
+    assert conf["rule_sanity"] == "basic"
+    assert "coverage_info" not in conf
+    assert RunOverlay(build_script=Path("/w/b.py")).purpose == CheckVerdicts()
+
+
+# ---------------------------------------------------------------------------------------------
+# the one fact about a core that needs no agent
+
+
+def test_a_core_that_needs_the_assertion_is_recognized():
+    """Measured on certora-vault-tutorial: a rule SANITY_FAILED whose core, with the check off,
+    contains its own assertion. The vacuity was in its vacuity check's program, not its proof: the
+    nondet account array's drop loop sat between the assertion and the check's satisfy."""
+    finding = core_finding(_CORE)
+    assert isinstance(finding, AssertionInCore)
+    assert "ASSERT B548:bool" in finding.line
+    assert "standard_deposits.rs:149:1" in finding.line
+
+
+def test_a_core_without_the_assertion_is_recognized():
+    """The assertion as a `[context]` line is not in the core — only `[in UC]` lines are."""
+    without = _CORE.replace("[in UC] 66: ASSERT", "[context] 66: ASSERT")
+    assert isinstance(core_finding(without), AssertionNotInCore)
+
+
+def test_an_assertion_without_the_user_meta_is_not_the_rule_s():
+    """A Prover-inserted assert (an unresolved CPI) has the rule's `snippet.cmd := Assert` annotation
+    too. Only the meta tells them apart."""
+    unmarked = _CORE.replace("  [cmd] cvl.user.defined.assert: NoValue\n", "")
+    assert "Assert(displayMessage=assert" in unmarked and "[in UC] 66: ASSERT" in unmarked
+    assert isinstance(core_finding(unmarked), AssertionNotInCore)
+
+
+#: A check the Prover added itself, in the core with the rule's own assertion out of it.
+_GENERATED_ASSERT = (
+    "[in UC] 67: ASSERT B549:bool [Cannot overflow: inferred pointer] (standard_deposits.rs:140:5)"
+)
+
+
+def test_a_generated_assertion_in_the_core_is_not_the_rule_s():
+    """`-unsatCoresForAllAsserts` keeps the Prover's own checks in the core."""
+    generated = _CORE.replace("[in UC] 66: ASSERT", "[context] 66: ASSERT") + _GENERATED_ASSERT
+    assert isinstance(core_finding(generated), AssertionNotInCore)
+
+
+def test_a_core_without_the_assertion_settles_it_over_one_with_it():
+    """Two cores of the same proof (`-numOfUnsatCores 2`): one that does without the assertion shows
+    the rest of the core is unsatisfiable on its own, which one that includes it cannot rule out."""
+    without = _CORE.replace("[in UC] 66: ASSERT", "[context] 66: ASSERT")
+    chosen = rule_core((_CORE, without))
+    assert chosen is not None
+    assert chosen.core == without and isinstance(chosen.finding, AssertionNotInCore)
+    assert chosen.unread == 1
+
+
+def test_with_the_assertion_in_every_core_it_is_in_the_core():
+    chosen = rule_core((_CORE, _CORE))
+    assert chosen is not None and isinstance(chosen.finding, AssertionInCore)
+
+
+def test_no_cores_is_none():
+    assert rule_core(()) is None
+
+
+# ---------------------------------------------------------------------------------------------
+# fetching a rule's cores
+
+
+class _FakeResults:
+    def __init__(self, core_map: dict[str, list[str]], files: dict[str, str]) -> None:
+        self.core_map = core_map
+        self.files = files
+        self.jobs: list[str] = []
+
+    def unsat_core_map(self, job: str) -> dict[str, list[str]]:
+        self.jobs.append(job)
+        return self.core_map
+
+    def fetch_output_file(self, job: str, name: str) -> str:
+        return self.files[name]
+
+
+def test_a_rule_s_cores_are_the_ones_its_checks_are_keyed_by():
+    """A core is keyed by check — the rule, or a sub-check `<rule>-Assertions` — and a rule whose
+    name merely starts with another's is not one of its checks."""
+    api = _FakeResults(
+        {
+            "rule_backed-Assertions": ["UnsatCoreTAC-rule_backed-0.txt"],
+            "rule_backed_extra-Assertions": ["UnsatCoreTAC-rule_backed_extra-0.txt"],
+            "rule_other-Assertions": ["UnsatCoreTAC-rule_other-0.txt"],
+        },
+        {
+            "UnsatCoreTAC-rule_backed-0.txt": "mine",
+            "UnsatCoreTAC-rule_backed_extra-0.txt": "not mine",
+            "UnsatCoreTAC-rule_other-0.txt": "not mine either",
+        },
+    )
+    assert fetch_unsat_cores(api, "https://x/output/1/abc", "rule_backed") == ("mine",)  # type: ignore[arg-type]
+
+
+def test_a_job_status_link_is_handed_over_as_its_output_view():
+    """The Solana report link is `/jobStatus/…`, which POU cannot parse; its `/output/` view it can."""
+    api = _FakeResults({}, {})
+    fetch_unsat_cores(api, "https://prover.certora.com/jobStatus/37632/c1734c04?anonymousKey=k", "r")  # type: ignore[arg-type]
+    assert api.jobs == ["https://prover.certora.com/output/37632/c1734c04?anonymousKey=k"]
+
+
+# ---------------------------------------------------------------------------------------------
+# the tool
+
+
+def _state(draft: str = _DRAFT) -> dict:
+    return {
+        "messages": [],
+        "curr_spec": draft,
+        "expected_failures": {},
+        "skipped": [],
+        "summaries": [],
+        "vfs": {},
+        "version_history": [],
+        "property_rules": [],
+        "rule_subjects": [],
+        "prover_settings": TunableConf(loop_iter=3),
+        "required_validations": [],
+        "validations": {},
+        "failed": None,
+        "budget_curtailed": False,
+    }
+
+
+async def _stubbed_stage(draft, summaries=(), overlay={}) -> verify_mod.StagedUnit:
+    # Builds go through the module's build and write functions, which each test replaces.
+    return verify_mod.StagedUnit(
+        SimpleNamespace(require_held=lambda: None),  # type: ignore[arg-type]
+        SimpleNamespace(session=None),  # type: ignore[arg-type]
+    )
+
+
+#: What a unit's target builds with: the shared feature and the unit's own.
+_FEATURES = ("certora", "certora_unit_vault")
+
+
+def _stubbed_slot() -> contextlib.nullcontext[SimpleNamespace]:
+    return contextlib.nullcontext(SimpleNamespace(stage=_stubbed_stage))
+
+
+def _patch_listed(monkeypatch, tmp_path: Path, names: set[str]) -> list[CvlrSubmission]:
+    """A chain build whose ``.cvlr_rules`` section lists ``names``. Returns what was written."""
+    payload = record(0, b"CV1") + b"".join(record(1, name.encode()) for name in sorted(names))
+    so = tmp_path / "prog.so"
+    so.write_bytes(elf_with_cvlr_rules(payload))
+    written: list[CvlrSubmission] = []
+
+    async def build(_session, _submission):
+        return SbfRun(
+            duration_ms=1,
+            verdict=Built(manifest=SimpleNamespace(artifact=so)),  # type: ignore[arg-type]
+            confined=True,
+        )
+
+    async def write(_session, submission, *, into):
+        written.append(submission)
+        return Path("/w/c.conf")
+
+    monkeypatch.setattr(verify_mod, "build_for_submission", build)
+    monkeypatch.setattr(verify_mod, "write_submission", write)
+    return written
+
+
+class _FakeAnalyzer:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def explain(self, **kwargs) -> VacuityAnalysis:
+        self.calls.append(kwargs)
+        return VacuityAnalysis(
+            issue_type="Not a Contradiction",
+            mitigation_options=[],
+            short_summary="the sum",
+            root_cause="widening",
+            detailed_analysis="…",
+            solution="## Solution: restate over u64",
+        )
+
+
+def _deps(analyzer: _FakeAnalyzer, results: _FakeResults) -> verify_mod.VacuityDeps:
+    verify = verify_mod.VerifyDeps(
+        target=SimpleNamespace(session=None, build_slot=_stubbed_slot, features=_FEATURES),  # type: ignore[arg-type]
+        submission=CvlrSubmission(manifest_path=Path("/w/Cargo.toml"), stem="unit_x", msg="m"),
+        submission_dir=Path("/w/submissions"),
+        prover_opts=None,  # type: ignore[arg-type]
+    )
+    return verify_mod.VacuityDeps(verify, analyzer, lambda: results)  # type: ignore[arg-type]
+
+
+async def _run(deps: verify_mod.VacuityDeps, state: dict, rule: str) -> str:
+    token = verify_mod.ExplainVacuity._dep_ctx.set(deps)
+    try:
+        return await verify_mod.ExplainVacuity(state=state, tool_call_id="tc", rule=rule).run()
+    finally:
+        verify_mod.ExplainVacuity._dep_ctx.reset(token)
+
+
+def _checked(statuses: dict[str, str]) -> Checked:
+    report = ProverReport(
+        raw_rule_status={RulePath(rule=r): s for r, s in statuses.items()},  # type: ignore[misc]
+        result_str="",
+        link="https://prover.certora.com/jobStatus/37632/probe1?anonymousKey=k",
+        certora_run_stdout="",
+    )
+    return Checked(build=None, report=report)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_a_rule_the_build_did_not_list_is_refused_before_a_conf_is_written(tmp_path, monkeypatch):
+    """The draft names `rule_missing`. The `.so` does not, so nothing is written."""
+    written = _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
+
+    async def run(*_args, **_kwargs):
+        pytest.fail("a rule the build did not list must not be submitted")
+
+    monkeypatch.setattr(verify_mod, "run_submission", run)
+    state = _state("#[rule]\nfn rule_missing() {}\n")
+    answer = await _run(_deps(_FakeAnalyzer(), _FakeResults({}, {})), state, "rule_missing")
+    assert "`rule_missing`" in answer and "rule_backed" in answer
+    assert written == []
+
+
+@pytest.mark.asyncio
+async def test_the_probe_checks_one_rule_in_a_conf_of_its_own(tmp_path, monkeypatch):
+    """One rule, not the draft's: the others are not what is being explained. Its own conf stem: the
+    unit's conf ships with the deliverable, and a diagnostic run must not overwrite it."""
+    written = _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
+
+    async def fake_run(prepared, **kwargs):
+        return _checked({"rule_backed": "VERIFIED"})
+
+    monkeypatch.setattr(verify_mod, "run_submission", fake_run)
+    results = _FakeResults({"rule_backed-Assertions": ["c.txt"]}, {"c.txt": _CORE})
+    # The source names a different rule. The conf follows the section.
+    await _run(_deps(_FakeAnalyzer(), results), _state("#[rule]\nfn rule_decoy() {}\n"), "rule_backed")
+
+    (sub,) = written
+    assert sub.purpose == CollectUnsatCore()
+    assert sub.stem == "unit_x_unsat_core"
+    assert sub.rules == SelectRules(("rule_backed",))
+    assert sub.settings == TunableConf(loop_iter=3)
+
+
+@pytest.mark.asyncio
+async def test_the_answer_leads_with_whether_the_assertion_is_in_the_core(tmp_path, monkeypatch):
+    _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
+
+    async def fake_run(prepared, **kwargs):
+        return _checked({"rule_backed": "VERIFIED"})
+
+    monkeypatch.setattr(verify_mod, "run_submission", fake_run)
+    analyzer = _FakeAnalyzer()
+    results = _FakeResults({"rule_backed-Assertions": ["c.txt"]}, {"c.txt": _CORE})
+    answer = await _run(_deps(analyzer, results), _state(), "rule_backed")
+
+    assert answer.startswith("The rule's assertion is in the unsat core")
+    assert "# Vacuity Analysis" in answer and "restate over u64" in answer
+    assert "jobStatus/37632/probe1" in answer
+    (call,) = analyzer.calls
+    assert isinstance(call["finding"], AssertionInCore)
+    assert call["core"] == _CORE and call["harness"] == _DRAFT
+    # The conf the rule was vacuous under, with the author's settings, not the probe's.
+    assert call["conf"]["rule_sanity"] == "basic" and call["conf"]["loop_iter"] == "3"
+
+
+@pytest.mark.asyncio
+async def test_a_rule_that_does_not_verify_without_the_check_has_no_core_to_read(tmp_path, monkeypatch):
+    """No proof, no core — and no analyst call spent on nothing."""
+
+    _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
+
+    async def fake_run(prepared, **kwargs):
+        return _checked({"rule_backed": "VIOLATED"})
+
+    monkeypatch.setattr(verify_mod, "run_submission", fake_run)
+    analyzer = _FakeAnalyzer()
+    answer = await _run(_deps(analyzer, _FakeResults({}, {})), _state(), "rule_backed")
+    assert "did not verify" in answer and "VIOLATED" in answer
+    assert analyzer.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_failed_build_reports_its_diagnostics(monkeypatch):
+    async def build(_session, _submission):
+        return SbfRun(
+            duration_ms=1,
+            verdict=CompileFailed(diagnostics="error[E0425]: cannot find", exit_code=1),
+            confined=True,
+        )
+
+    monkeypatch.setattr(verify_mod, "build_for_submission", build)
+    answer = await _run(_deps(_FakeAnalyzer(), _FakeResults({}, {})), _state(), "rule_backed")
+    assert "nothing was submitted" in answer and "E0425" in answer
+    assert "verify_rules" not in answer
+
+
+@pytest.mark.asyncio
+async def test_a_report_that_does_not_name_the_rule_is_not_a_proof(tmp_path, monkeypatch):
+    _patch_listed(monkeypatch, tmp_path, {"rule_backed"})
+
+    async def fake_run(prepared, **kwargs):
+        return _checked({"rule_other": "VERIFIED"})
+
+    monkeypatch.setattr(verify_mod, "run_submission", fake_run)
+    analyzer = _FakeAnalyzer()
+    results = _FakeResults({"rule_backed-Assertions": ["c.txt"]}, {"c.txt": _CORE})
+    answer = await _run(_deps(analyzer, results), _state(), "rule_backed")
+    assert "does not name `rule_backed`" in answer
+    assert results.jobs == [] and analyzer.calls == []
+
+
+# ---------------------------------------------------------------------------------------------
+# the prompts
+
+
+def test_the_cvlr_prompts_render():
+    system = load_jinja_template("cvlr_vacuity_system_prompt.j2")
+    initial = load_jinja_template("cvlr_vacuity_prompt.j2")
+    assert "Whether the rule's own `ASSERT` is among them" in system
+    # The Solana core's own shape, not the EVM one CVL's prompt describes.
+    assert "CFG Edges (compacted to UC blocks):" in initial and "CFG INFO" not in initial
+    assert "(call:main)" in initial and ".sol" not in initial
