@@ -87,14 +87,11 @@ be stale; the tool is authoritative.
    call below it, not the one the request was about. A rule that never mentions the mocked operation
    can still be proved under it.
 
-   For a CPI — the common case — the trade is specific and worth knowing rather than re-deriving.
-   The Prover's own model of a cross-program call already moves nothing: every value the call would
-   change keeps its value from before it. So a stand-in returning `Ok(())` costs no fidelity against
-   that model, and it removes what the call drags in, such as the instruction-building loop no bound
-   discharges. Under either, a property about the program's recorded state is sound. A property about
-   the lamports or tokens the CPI actually moved is **false**, and one that needs them *not* to have
-   moved, or a total to stay constant across the call, passes having checked nothing. Those last two
-   kinds are the ones to hunt for and name.
+   For a CPI — the common case — what a stand-in costs against the Prover's own model of the call
+   is recipe K6; fetch it with `get_cvlr_recipe`. In short, neither moves anything, so a rule over
+   the program's recorded state is sound, and one that needs the moved value *not* to have moved, or
+   a total to stay constant across the call, passes having checked nothing. That kind is the one to
+   hunt for and name.
 
    **That holds with no munge at all, and it is the case nothing will list for you.** A rule that
    drives a handler through its real `invoke` or `invoke_signed` reasons under that same model. So

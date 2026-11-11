@@ -251,7 +251,8 @@ handler level whichever way you reach it, and a property that needs the lamports
 or a total to stay constant across the call, passes having checked nothing. Split the batch on that
 line. "The vault's recorded balance rises by exactly `amount`" is the handler's own bookkeeping and
 belongs here; "the depositor's lamports fall by exactly `amount`" is the CPI's effect and belongs in
-neither — it is a skip, and saying so is the right outcome.
+neither — it is a skip, and saying so is the right outcome. Token movements are the exception:
+recipe K6 names the models that apply them.
 
 **Build the accounts struct field by field, from nondet account infos.** `cvlr-solana` hands you an
 array of unconstrained `AccountInfo`s; each field of the handler's `#[derive(Accounts)]` struct is

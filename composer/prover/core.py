@@ -395,14 +395,15 @@ class TrivialFanoutCexHandler(CexHandler):
     Owns its own report-volume summarization: when failed-rule count
     exceeds ``summarization_threshold`` the rendered report is
     post-processed into a TODO-list summary. Local to this strategy —
-    aggregating handlers don't run into runaway-output problems.
+    aggregating handlers don't run into runaway-output problems. With no
+    threshold the report is never summarized.
     """
 
     def __init__(
         self,
         llm: LLM,
         state: MessagesState,
-        summarization_threshold: int = 10,
+        summarization_threshold: int | None = 10,
         cache_marker: CacheManager | None = None,
     ) -> None:
         super().__init__()
@@ -490,7 +491,7 @@ class TrivialFanoutCexHandler(CexHandler):
             1 for instance in violated
             if instance.status != "VERIFIED"
         )
-        if failed_count > self.summarization_threshold:
+        if self.summarization_threshold is not None and failed_count > self.summarization_threshold:
             return await _report_to_todo_list(self.llm, report)
         return report
 

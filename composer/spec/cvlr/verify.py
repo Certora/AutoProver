@@ -386,14 +386,16 @@ class CexAnalysis:
     """Explains a violated rule and stores that explanation.
 
     Built per unit. The handler is built per call: it reads the author's
-    current conversation, and it uses the author's model.
+    current conversation, and it uses the author's model. It never summarizes
+    the report: the author reads each error's ``[NNNN]`` text whole, and a
+    violation may be a finding rather than something to fix.
     """
 
     store: CexAnalysisStore
     model: AuthorModel = field(default_factory=AuthorModel)
 
     def handler(self, state: CvlrGenerationState) -> CexHandler:
-        return TrivialFanoutCexHandler(self.model.llm, state)
+        return TrivialFanoutCexHandler(self.model.llm, state, summarization_threshold=None)
 
     def callbacks(self, permit: BuildPermit) -> "_CaptureCallbacks":
         return _CaptureCallbacks(self.store, permit)

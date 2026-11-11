@@ -108,9 +108,11 @@ Prover's own explanation and advice. The `help:` text is written for a person wi
 configuration in reach ("add the function to an inlining file", "unroll the loop by hand"), and part
 of it is outside the author's action space. Correcting that is what a pushed recipe is for.
 
-One case where the text does not arrive: above the cex handler's summarization threshold,
-`_report_to_todo_list` has an LLM rewrite the report, which can drop it. Check whether CVLR runs can
-reach that threshold before relying on the text.
+One case where the text did not arrive: above the cex handler's summarization threshold (10
+VIOLATED instances, which one `cvlr_rules!` across a dozen handlers reaches), `_report_to_todo_list`
+had an LLM rewrite the report as a list of fixes, dropping the messages and reading every violation
+as something to fix. CVLR's handler now runs with no threshold (`CexAnalysis.handler`), so the
+report always arrives whole.
 
 The codes the prompts teach:
 
@@ -184,8 +186,11 @@ know *which* function was refused to be useful.
   string.
 * **Failed jobs.** `ErrorAlert.type` already distinguishes the cases `_failure_advice` needs. It
   becomes a type the same way when a recipe is pushed on it.
-* **Vacuity.** K12 is pushed on `SANITY_FAILED`. Where the `ProverInternalChecks` subrule reports
-  `loopUnwinding`, the note says the drop loop is the likely cause.
+* **Vacuity.** K12 is pushed on `SANITY_FAILED`. It names the drop loop as the commonest cause
+  without evidence from the run: the `ProverInternalChecks` subrule of §3.5 exists only in
+  multi-assert mode, which CVLR's conf does not turn on. The direct signal is EVMVerifier#8803
+  (draft), a warning on a vacuity check that failed without reaching the solver, listing the loop
+  unwinding conditions in the checked program. Read it into the K12 note when that merges.
 
 ### 3.5 Prover asks, if they become needed (November 2026)
 
@@ -272,9 +277,12 @@ and `statsdata.json` carry none, and `alertReport.json` drops the exception's ty
 * Shape to propose: `blockingAssertOrigins: [{assertOrigin, jumpToDefinition}]` on the
   `SANITY_FAILED` node, reusing the `assertOrigin` names. It says what lies on every path, not proven
   cause; cause would need a re-solve without those assumptions.
-* Available now, with no Prover change: in multi-assert mode, the sibling `ProverInternalChecks`
-  subrule is usually VIOLATED with `assertOrigin: loopUnwinding` when a drop loop after the rule's
-  assertion always exceeds the bound. That can stand in for ask 4 in the drop-loop case.
+* Available now, with no Prover change, but only in multi-assert mode, which CVLR's conf does not
+  turn on: the sibling `ProverInternalChecks` subrule is usually VIOLATED with
+  `assertOrigin: loopUnwinding` when a drop loop after the rule's assertion always exceeds the bound.
+* In progress: EVMVerifier#8803 (draft) warns on a vacuity check the presolver decided, with the
+  loop unwinding conditions of the checked program, and covers the drop-loop case without a new
+  field.
 
 **Soroban/WASM.** No asks yet; what the Prover side would need first:
 
@@ -342,7 +350,7 @@ These need no recipe and no Prover change. Do them first.
 | "Cannot overflow" and `-solanaTACSoundSignedMath` | system prompt conf section; `verdicts.j2` `cannotOverflow` | one recipe, pushed on `cannotOverflow` (K5). The conf section keeps one sentence on why the flag is there |
 | "What a CPI does is not modelled" | system prompt, twice: in "Reaching a handler" and again after the Anchor names table | the first; the CPI recipe (K6) carries the detail |
 | `core::mem::forget(accounts)` and the drop loop | system prompt "Reaching a handler"; initial prompt Step 3 vacuity bullet | the system prompt's, which is preventive. Step 3 keeps one line pointing at it |
-| The CPI model, for the judge | judge §1, twice: under "Judge authorship, not depth" and in the paragraph beginning "For a CPI — the common case"; both restate the system prompt's | the judge keeps what to check (rules asserting over a value a CPI moves, with nothing modelling the move); the mechanism moves to K6 |
+| The CPI model, for the judge | judge §1, twice: under "Judge authorship, not depth" and in the paragraph beginning "For a CPI — the common case"; both restate the system prompt's | the judge keeps what to check (rules asserting over a value a CPI moves, with nothing modelling the move); the mechanism moves to K6. Done with step 3's follow-up: K6 also names the token models (`spl_token_transfer`, `spl_mint_to`, `spl_burn`) the judge requires, which the author was never told of |
 
 Also fix the cross-reference in the system prompt's editor section: "`swap_derive` ... has its own
 section below" points at text that is in the baseline facts, not below. It goes away when that text

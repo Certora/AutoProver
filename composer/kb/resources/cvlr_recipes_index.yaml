@@ -76,6 +76,7 @@ recipes:
   name: Taking a CPI out from under a handler
   triggers:
   - A handler performs a CPI and the property is about the handler's own bookkeeping
+  - A property about a token balance or a mint's supply across a CPI
   - A rule stops on `[3003]` with `alloc/src/rc.rs` in the trace
   - A VIOLATED rule over a value decoded back out of an instruction's bytes
   channel: EDIT
@@ -83,6 +84,7 @@ recipes:
   search_terms:
   - swap_import
   - invoke_signed
+  - spl_token_transfer
 - id: K7
   name: Descending to the program's state-transition core
   triggers:

@@ -21,7 +21,7 @@ from types import SimpleNamespace
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-from composer.prover.core import ProverReport, _incomplete
+from composer.prover.core import ProverReport, TrivialFanoutCexHandler, _incomplete
 from composer.prover.ptypes import GeneratedKind, IncompleteCheck, RulePath, RuleResult, StatusCodes
 from composer.prover.results import (
     SOLANA_TRACE,
@@ -37,7 +37,9 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.pipeline import CvlrFormalizer
 from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
 from composer.spec.cvlr.verify import (
+    AuthorModel,
     BuildPermit,
+    CexAnalysis,
     _CaptureCallbacks,
     DOMINANT_SHARE,
     _verdicts_note,
@@ -344,3 +346,13 @@ def test_the_gate_pushes_the_stand_in_recipe_when_one_function_holds_the_time():
 def test_the_gate_pushes_the_halted_job_recipe_when_the_job_hit_its_limit():
     assert "### K9." in _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}, halted=True))
     assert "### K9." not in _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}))
+
+
+def test_the_cvlr_author_reads_the_prover_report_whole() -> None:
+    """An error's ``[NNNN]`` text and its ``source:`` chain reach the author only through the
+    report, and a summarized report rewrites every violation as something to fix."""
+    model = AuthorModel()
+    model.bind(SimpleNamespace())  # type: ignore[arg-type]
+    handler = CexAnalysis(store=_store(), model=model).handler({"messages": []})  # type: ignore[arg-type]
+    assert isinstance(handler, TrivialFanoutCexHandler)
+    assert handler.summarization_threshold is None

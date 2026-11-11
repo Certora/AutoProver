@@ -13,6 +13,19 @@ gone, and its instruction-building loop with it, so the handler's own bookkeepin
 the real `Context`, and validation if the struct comes from `try_accounts`, which is what descending
 gives up.
 
+**What the stand-in costs.** The Prover's own model of a cross-program call already moves nothing:
+every value the call would change keeps its value from before it. So a stand-in returning `Ok(())`
+costs no fidelity against that model, and it removes what the call drags in. Under either, a
+property about the program's recorded state is sound. A property about the lamports or tokens the
+CPI actually moved fails, and one that needs them *not* to have moved, or a total to stay constant
+across the call, passes having checked nothing. The same holds for a rule that drives the handler
+through its real `invoke` or `invoke_signed`, with no stand-in at all.
+
+For token movements there is a model that does move them: a stand-in whose body calls
+`cvlr_solana::token::spl_token_transfer`, `spl_mint_to` or `spl_burn` applies the effect to the
+token accounts it is given. A rule asserting over a token account's balance or a mint's supply
+across a CPI needs one. For lamports there is none (see below), so such a property is a skip.
+
 **Writing the stand-in: two things that do not analyze.**
 
 Both were measured on a handler that moves lamports with a System Program transfer, and each costs
