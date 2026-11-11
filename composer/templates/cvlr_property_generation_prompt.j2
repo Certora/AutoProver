@@ -50,10 +50,12 @@ Write the complete module and put it on the buffer with `put_harness`. For each 
   cheaper to write and gives you a separate verdict per handler.
 * Some shapes time out whatever the prover settings, and they are visible in the code before any
   submission:
-  - a rule ranging over several cases, such as account-list lengths or pre-state variants: write
-    one rule per case;
+  - a rule ranging over several cases, such as account-list lengths, pre-state variants, or the
+    variants of a function's result each with its own assertion: write one rule per case;
   - a product of two unbounded wide integers: bound both factors, and say in a comment that the
     bound is the domain of the proof, not a fact about the program;
+  - a wide division whose divisor's scale the property does not depend on, such as a ratio's
+    denominator: fix the divisor at one, and say in a comment that this is a choice of unit;
   - a loop whose trip count comes from data rather than from `loop_iter`, such as hashing,
     (de)serializing a fixed-size array, or a buffer an external allocator filled: raising the
     bound never finishes it. Call the program's own function below it, or ask the editor for a

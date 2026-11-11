@@ -6,6 +6,7 @@ The fixture is shaped like a halted job's tree view: each rule's ``Assertions`` 
 up.
 """
 
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from composer.prover.results import (
     AlertReport,
     FetchedResults,
     Hotspot,
+    MemoryUpdates,
+    Nonlinearity,
     get_final_treeview,
     parse_rule_statistics,
     read_and_format_run_result,
@@ -54,9 +57,62 @@ def test_a_rule_stopped_while_solving_names_its_hotspots_largest_first() -> None
     )
     assert stats.render() == (
         "solving (splits attempted 8, 0 % proved, splitting depth 7 of 10); path count approx. 2^19; "
+        "23 nonlinear ops of degree up to 12; "
         "branching: amm::math::mul_div_wide 86 %, amm::pool::swap_output 10 %; "
         "nonlinear ops: amm::math::mul_div_wide 96 %"
     )
+
+
+_LOW, _MEDIUM, _HIGH = 1, 2, 3
+
+
+def _no_hotspots(nonlinearity: tuple[str, int], memory: tuple[str, int]) -> str:
+    """A rule the Prover could not attribute to functions, as it reports one: rated totals only."""
+    def total(label: str, rated: tuple[str, int]) -> dict:
+        value, severity = rated
+        return {"label": label, "value": value, "children": [], "severity": severity}
+
+    return json.dumps([
+        {"label": _SOLVING, "value": None, "children": []},
+        {"label": "path count", "value": "approx. 2^55", "children": []},
+        total("nonlinearity", nonlinearity),
+        total("memory complexity", memory),
+        {"label": "path count hotspots", "value": None, "children": []},
+        {"label": "per call stats", "value": None,
+         "children": [{"label": "failed to compute per-call stats", "value": None}]},
+    ])
+
+
+_SOLVING = (
+    "verification phase: \n splits attempted (solved or split again): 1 \n total weight of splits "
+    "proved: 0 % \n splitting depth reached: 0 \n configured max. splitting depth: 10"
+)
+_NO_NONLINEARITY = ("nonlinear ops: 0\nmax polyn. degree: 1", _LOW)
+_FEW_WRITES = ("memory updates: 3\nlongest update sequence: 0", _LOW)
+
+
+def test_with_no_hotspots_the_totals_say_what_kind_of_cost_it_is() -> None:
+    memory = parse_rule_statistics(_no_hotspots(
+        _NO_NONLINEARITY, ("memory updates: 205\nlongest update sequence: 202", _MEDIUM)
+    ))
+    arithmetic = parse_rule_statistics(_no_hotspots(
+        ("nonlinear ops: 719\nmax polyn. degree: 336", _HIGH), _FEW_WRITES
+    ))
+    assert memory is not None and arithmetic is not None
+    assert memory.top_share is None and arithmetic.top_share is None
+    assert (memory.nonlinearity, memory.memory) == (None, MemoryUpdates(205, 202))
+    assert (arithmetic.nonlinearity, arithmetic.memory) == (Nonlinearity(719, 336), None)
+    assert memory.render().endswith(
+        "path count approx. 2^55; 205 memory updates, the longest sequence 202"
+    )
+    assert arithmetic.render().endswith("path count approx. 2^55; 719 nonlinear ops of degree up to 336")
+
+
+def test_a_total_the_prover_rates_low_is_left_out() -> None:
+    stats = parse_rule_statistics(_no_hotspots(_NO_NONLINEARITY, _FEW_WRITES))
+    assert stats is not None
+    assert (stats.nonlinearity, stats.memory) == (None, None)
+    assert stats.render().endswith("path count approx. 2^55")
 
 
 @pytest.mark.parametrize("text", ["not json", "{}", "[]", '[{"label": "path count", "value": "3"}]'])

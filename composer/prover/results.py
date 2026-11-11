@@ -506,13 +506,43 @@ type VerificationPhase = StaticAnalysis | Solving | OtherPhase
 
 
 @dataclass(frozen=True)
+class Nonlinearity:
+    """The rule's nonlinear operations, over the whole program it drives."""
+
+    ops: int
+    max_degree: int
+
+    def render(self) -> str:
+        return f"{self.ops} nonlinear ops of degree up to {self.max_degree}"
+
+
+@dataclass(frozen=True)
+class MemoryUpdates:
+    """The rule's writes to memory, over the whole program it drives."""
+
+    updates: int
+    longest_sequence: int
+
+    def render(self) -> str:
+        return f"{self.updates} memory updates, the longest sequence {self.longest_sequence}"
+
+
+@dataclass(frozen=True)
 class RuleStatistics:
-    """Where an unfinished rule stood, from the Prover's ``rule_live_statistics_*.json``."""
+    """Where an unfinished rule stood, from the Prover's ``rule_live_statistics_*.json``.
+
+    The totals are there whenever the rule reached the solver. The hotspots are not: the Prover
+    attributes cost to functions only when it has the rule's call structure, which on Solana it
+    often does not, and then the totals are all that says what kind of cost it is.
+    """
 
     phase: VerificationPhase
     path_count: str | None
     branching: tuple[Hotspot, ...]
     nonlinear: tuple[Hotspot, ...]
+    #: Present only when the Prover rates the total above low.
+    nonlinearity: Nonlinearity | None = None
+    memory: MemoryUpdates | None = None
 
     @property
     def top_share(self) -> int | None:
@@ -524,6 +554,10 @@ class RuleStatistics:
         parts = [self.phase.render()]
         if self.path_count is not None:
             parts.append(f"path count {self.path_count}")
+        if self.nonlinearity is not None:
+            parts.append(self.nonlinearity.render())
+        if self.memory is not None:
+            parts.append(self.memory.render())
         for what, spots in (("branching", self.branching), ("nonlinear ops", self.nonlinear)):
             if spots:
                 listed = ", ".join(f"{h.function} {h.share} %" for h in spots[:top])
@@ -559,6 +593,38 @@ _SPLITS = re.compile(
 )
 
 
+_NONLINEARITY = re.compile(r"nonlinear ops: (\d+)\s+max polyn\. degree: (\d+)")
+_MEMORY = re.compile(r"memory updates: (\d+)\s+longest update sequence: (\d+)")
+
+
+#: The Prover's ``Severity.LOW`` as it writes it into a section's ``severity``.
+_LOW_SEVERITY = 1
+
+
+def _section_value(section: dict | None) -> str | None:
+    value = section.get("value") if section is not None else None
+    return value if isinstance(value, str) else None
+
+
+def _rated_value(section: dict | None) -> str | None:
+    """The section's value when the Prover rates it above low; a low total is not a cost."""
+    if section is None or not isinstance(severity := section.get("severity"), int):
+        return None
+    return _section_value(section) if severity > _LOW_SEVERITY else None
+
+
+def _nonlinearity(section: dict | None) -> Nonlinearity | None:
+    if (value := _rated_value(section)) is None or (m := _NONLINEARITY.search(value)) is None:
+        return None
+    return Nonlinearity(int(m.group(1)), int(m.group(2)))
+
+
+def _memory(section: dict | None) -> MemoryUpdates | None:
+    if (value := _rated_value(section)) is None or (m := _MEMORY.search(value)) is None:
+        return None
+    return MemoryUpdates(int(m.group(1)), int(m.group(2)))
+
+
 def _phase(label: str) -> VerificationPhase:
     detail = " ".join(label.removeprefix(_PHASE_PREFIX).split())
     if detail == "static analysis":
@@ -588,12 +654,13 @@ def parse_rule_statistics(text: str) -> RuleStatistics | None:
             by_label[label] = section
     if phase is None:
         return None
-    path_count = by_label.get("path count", {}).get("value")
     return RuleStatistics(
         phase=phase,
-        path_count=path_count if isinstance(path_count, str) else None,
+        path_count=_section_value(by_label.get("path count")),
         branching=_hotspots(by_label.get("path count hotspots")),
         nonlinear=_hotspots(by_label.get("nonlinearity hotspots")),
+        nonlinearity=_nonlinearity(by_label.get("nonlinearity")),
+        memory=_memory(by_label.get("memory complexity")),
     )
 
 

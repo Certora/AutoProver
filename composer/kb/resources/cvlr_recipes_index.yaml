@@ -141,8 +141,9 @@ recipes:
   triggers:
   - A rule comes back TIMEOUT in a job that returned verdicts, or a probe rule that drives a function
     alone times out
-  - A rule ranges over several account-list lengths or pre-state variants, multiplies two unbounded
-    `u64`s, or walks a distance nothing bounds
+  - A rule ranges over several account-list lengths, pre-state variants or variants of a function's
+    result, multiplies two unbounded `u64`s, divides by a value whose scale it does not depend on,
+    or walks a distance nothing bounds
   - A timed-out rule's statistics line says `static analysis`
   - One function holds most of a timed-out rule's branching or nonlinear share, including a function
     in a stand-in already in place

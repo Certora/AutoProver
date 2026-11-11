@@ -6,10 +6,22 @@
 line says `static analysis`; one function holding most of a timed-out rule's branching or nonlinear
 share, including a function in a stand-in that is already in place.
 
-**Before a stand-in, the rule's own shape.** Three shapes time out on their own, and each has a fix
-that keeps the program as it is. Measured on one program, where each timed out and its fix verified:
+**Before a stand-in, the rule's own shape.** Four shapes time out on their own, and each has a fix
+that keeps the program as it is. Each timed out and its fix verified, on one of two programs:
 - **One rule over several cases.** A rule ranging over several account-list lengths, or over both
-  pre-state variants, timed out; one rule per length or variant verified. Split it that way.
+  pre-state variants, timed out; one rule per length or variant verified. The same holds for a rule
+  that matches on what a function returned and asserts something different for each variant. One
+  rule over every reason a liquidation-eligibility function can return never reached the solver.
+  One rule per reason, each opening with `cvlr_assume!` on its reason, reached it with a fraction of
+  the paths. Split it that way.
+- **A divisor the property does not depend on.** When the time goes to a wide division (the
+  statistics name a 256-bit `div_rem`, or report hundreds of nonlinear operations of high degree)
+  and the property is about a ratio rather than its scale, fix the divisor at one in the program's
+  own representation. The six per-reason eligibility rules above all timed out with the 256-bit
+  division at 92 to 96 % of their branching. With the obligation's deposited value assumed to be
+  one (`deposited_value_sf == Fraction::ONE.to_bits()`), so that its loan-to-value is its borrowed
+  value, all six verified. Say in the commentary that this is a choice of unit and the domain of
+  the proof.
 - **An unbounded wide product.** A product of two `u64`s into a `u128` timed out twice with the
   factors unbounded, and verified with both below `2^32`. Bound both factors, and say in the
   commentary that the bound is the domain of the proof, not a fact about the program. A property
@@ -27,6 +39,12 @@ branching and of its nonlinear operations. `static analysis` means the rule neve
 solver, because the program it drives is too large; running it alone in a smaller job does not
 change that. A function that holds most of the share is where the time goes. It is often a callee
 of the function the rule drives, and it is the one to consider replacing below.
+
+Often the line names no function: the Prover attributes cost to functions only when it has the
+rule's call structure, and on Solana it usually does not. The totals then say what kind of cost it
+is. Hundreds of nonlinear operations of high degree are wide arithmetic: look for the division or
+product, and for the divisor or factors the shapes above let you fix. A long sequence of memory
+updates is many writes to memory in one chain. Find what writes them before deciding what to cut.
 
 Before you skip every property whose path crosses the function, sort them:
 
