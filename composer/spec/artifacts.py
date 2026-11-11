@@ -160,9 +160,7 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         )
 
     def write_report(self, report: AutoProverReport):
-        report_dir = self._report_dir()
-        out = report_dir / "report.json"
-        out.write_text(report.model_dump_json(indent=2) + "\n")
+        write_report_file(self._report_dir(), report)
 
     def write_ranking(self, ranking: BaseModel) -> Path:
         """A prioritized run's full property ranking → ``{report}/property_ranking.json``.
@@ -225,6 +223,16 @@ def job_info_payload(summary: RunSummary, *, user_id: str, run_mode: str) -> dic
         "run_mode": run_mode,
         "token_usage": summary.token_usage_summary(),
     }
+
+
+REPORT_FILE = "report.json"
+
+
+def write_report_file(report_dir: Path, report: AutoProverReport) -> Path:
+    """Write ``report`` to ``{report_dir}/report.json`` and return the path."""
+    out = ensure_dir(report_dir) / REPORT_FILE
+    out.write_text(report.model_dump_json(indent=2) + "\n")
+    return out
 
 
 def write_job_info_file(report_dir: Path, payload: Mapping[str, object]) -> Path:
