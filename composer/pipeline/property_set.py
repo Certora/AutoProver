@@ -18,14 +18,23 @@ from pydantic import BaseModel, ValidationError
 from composer.pipeline.ecosystem import ChainTag
 from composer.pipeline.run_mode import RunMode
 from composer.spec.system_model import BaseApplication, FeatureUnit
-from composer.spec.types import ComponentName, PropertyFormulation, SourceIdentifier
+from composer.spec.types import (
+    ComponentName, PropertyFormulation, PropertyKey, SourceIdentifier,
+)
+
+
+class PropertySetProperty(PropertyFormulation):
+    """A property as the set records it."""
+    #: The property's 1-based importance rank across the whole set (1 = most important), from a
+    #: property generator that ranks; ``None`` when the property was not ranked.
+    rank: int | None = None
 
 
 class PropertySetComponent(BaseModel):
     """One unit's identity among the rebuilt units, and its final properties."""
     name: ComponentName
     unit_index: int
-    properties: list[PropertyFormulation]
+    properties: list[PropertySetProperty]
 
 
 class PropertySet(BaseModel):
@@ -59,10 +68,20 @@ class PropertySet(BaseModel):
     def analyzed[App: BaseApplication](self, ty: type[App]) -> App:
         return ty.model_validate(self.system_model)
 
+    def ranks(self) -> dict[PropertyKey, int]:
+        """The rank of each ranked property, by ``(component, title)``."""
+        return {
+            (c.name, p.title): p.rank
+            for c in self.property_components
+            for p in c.properties
+            if p.rank is not None
+        }
+
     def match_units[U: FeatureUnit](
         self, units: list[U]
     ) -> list[tuple[U, list[PropertyFormulation]]]:
-        """Pair each recorded component with the rebuilt unit of the same name and index.
+        """Pair each recorded component with the rebuilt unit of the same name and index, and its
+        properties without their ranks (see ``ranks``).
 
         Any disagreement is fatal: a component formalized against the wrong unit, or silently
         dropped, would make the run's CVL incomparable with the run that wrote the file."""
@@ -87,5 +106,8 @@ class PropertySet(BaseModel):
                     f"property set component {c.name!r} has unit index {c.unit_index}, "
                     f"but the rebuilt unit has {unit.unit_index}"
                 )
-            paired.append((unit, c.properties))
+            paired.append((unit, [
+                PropertyFormulation(title=p.title, sort=p.sort, description=p.description)
+                for p in c.properties
+            ]))
         return paired
