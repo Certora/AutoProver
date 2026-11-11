@@ -1,0 +1,47 @@
+channels:
+  RULE: The fix is in the rule, in the harness module, which the author writes with `put_harness`.
+  MOCK: The fix is a `summarize_for_prover` stand-in. Unsound by construction, so it is for code the
+    properties do not depend on, and it invalidates the prover stamp.
+  EDIT: The fix is in the program's own source. The author describes the problem to `code_editor`
+    and does not edit the program itself.
+  CONF: 'The fix is a prover setting. The author controls only two: the loop bound and
+    `optimistic_loop`, and the second changes what a verdict means. Any other setting is a
+    `record_skip` naming the setting and the evidence for it.'
+  SKIP: There is no fix within the author's tools. `record_skip` with a reason a reviewer can act on
+    is worth more than a rule that looks like the property and is not.
+recipes:
+- id: K1
+  name: Satisfy rules, and the one they must not replace
+  triggers:
+  - A harness whose setup you are not yet sure the prover can execute at all
+  - A branch or post-state you want shown to be reachable at least once
+  - An acceptance property ("the handler accepts X") you are tempted to state as a satisfy rule
+  channel: RULE
+  file: recipes/cvlr-k1-satisfy-for-reachability.md
+  search_terms:
+  - cvlr_satisfy
+  - cvlr_sanity_checked
+- id: K2
+  name: Log the value an assertion reads when it is an enum or a bitfield
+  triggers:
+  - Asserting over a status field, enum discriminant, or a chain of `is_x!(..) || is_y!(..)` tests
+  - A rule over such a value fails with a counterexample that looks arbitrary rather than wrong
+  channel: RULE
+  file: recipes/cvlr-k2-clog-before-enum-assert.md
+  search_terms:
+  - clog
+  - cvlr_assert
+- id: K3
+  name: Sysvars, read directly and tied to the syscall
+  triggers:
+  - A handler reads `Clock` or `Rent`, by syscall or from a sysvar account
+  - You are about to split a handler, mock a read, or skip a property because a sysvar read is
+    external
+  - A property about the rent-exempt reserve or `minimum_balance`
+  channel: RULE
+  file: recipes/cvlr-k3-sysvars-read-directly.md
+  search_terms:
+  - from_account_info
+  - Clock::get
+  - Rent::get
+  - minimum_balance
