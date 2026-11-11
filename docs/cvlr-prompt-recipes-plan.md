@@ -284,6 +284,18 @@ and `statsdata.json` carry none, and `alertReport.json` drops the exception's ty
   loop unwinding conditions of the checked program, and covers the drop-loop case without a new
   field.
 
+**Ask 5: per-function cost on Solana rules.** Measured, not yet investigated in the Prover. The
+hotspot lists in `rule_live_statistics_*.json` (which function holds the branching, and which the
+nonlinear operations) came back for 6 of the 37 timed-out instances in the November benchmark (§8).
+The other 31 say `failed to compute per-call stats`, have an empty `path count hotspots` and no
+`nonlinearity hotspots`. Both lists come from the rule's call structure
+(`statistics/data/SingleDifficultyStats.kt`, `DifficultyStats.kt`): the per-call section fails when
+the root call has no callees, and a procedure's share is how much the path count drops when its call
+sites are jumped. So for most Solana rules the Prover is missing the program's procedures, not
+finding that no function dominates. The same rule can get the list on one node and not on its
+sibling (the `Assertions` node versus the vacuity check). Until that is found, AutoProver renders the
+totals that are always there (§8).
+
 **Soroban/WASM.** No asks yet; what the Prover side would need first:
 
 * No WASM front-end exception is a `CertoraException`, and part of each rule's encoding (inlining,
@@ -431,7 +443,7 @@ named there, "When a rule should fail", and the judge's checklist.
    function holds at least `DOMINANT_SHARE` (40 %) of a timed-out rule's branching or nonlinear
    operations. The 40 is provisional: it separates a stand-in's 256-bit division (44–65 %) from
    handler logic (at most 28 %) in a handful of klend jobs (`composer/spec/cvlr/verify.py`), and
-   `verify_rules` logs every timed-out rule's top share so the next benchmark can move it. K12 is pushed on `status: SANITY_FAILED`. K9 is pushed on `job: halted`: from the
+   `verify_rules` logs every timed-out rule's top share so a benchmark can move it; the first one could not (§8.1). K12 is pushed on `status: SANITY_FAILED`. K9 is pushed on `job: halted`: from the
    report's `halted` when the job still returned verdicts, and from the failure when it returned
    none. For the second, `run_prover` returns a `ProverFailure` (`JobFailed | ResultsUnavailable |
    RunFailed`) rather than a string; a `JobFailed` that is `HALTED`, or carries an "Out of
@@ -464,14 +476,71 @@ Steps 1–3 take roughly 25 KB off the author's standing text, and steps 4–5 a
   recipe would have prevented. A recipe that is never fetched in a run where its trigger occurred
   is the failure this change risks. It means that text belonged in the standing prompt.
 
+### 8.1 The November benchmark (2026-11-11)
+
+One pair of runs on the klend liquidation unit (33 properties), from the same pinned analysis and
+properties, on fresh copies of the input, $150 each, run side by side. "Before" is the code before
+step 1 of §7; "after" is the code with steps 1–5 and their follow-ups.
+
+| | Before | After |
+|---|---|---|
+| Rules delivered | 25 (24 good, 1 marked) | 42 (41 good, 1 marked) |
+| Properties covered / skipped | 21 / 12 | 24 / 9 |
+| Wall clock, spend (log estimate) | 3h 47m, about $23 | 5h 05m, about $27 |
+| Prover jobs | 8 | 10 |
+| Author's system prompt | 55.1K characters | 39.2K characters |
+| Author's first-call input | 63.1K tokens | 55.4K tokens |
+| Recipes pushed | none (no mechanism) | K4 once, K8 five times, K9 once |
+| Recipes fetched: author / judges | none / none | K14, K7, K1, K3 / K8 twice, K14, K13, K9 |
+
+Three earlier runs on the same unit delivered 34 to 42 rules with 9 to 12 skips. So "before" is the
+weakest of the five and "after" ties the best; one pair cannot separate the change from run to run
+variation.
+
+Against the criteria above:
+
+* **Recipes left unfetched where their trigger occurred.** None found. The author fetched the four
+  recipes that hold text the standing prompt used to carry (descent, `try_accounts`, satisfy,
+  sysvars). `[3003]` occurred in both runs; in "after" it came from a `try_accounts` rule over 20
+  accounts, not the CPI case K6 covers. No `[3308]`, `[3006]` or `[3005]` occurred. `[3001]` in
+  the `uint` crate occurred in both runs, and no recipe covers it.
+* **New reimplementation.** None. Each run made one source edit, both extracting the same decision
+  statement in the liquidation handler.
+* **New skips.** "After" skipped two properties "before" covered. One is individual deleveraging's
+  eligibility, and it is the case K8 should have prevented. "Before" wrote one rule per liquidation
+  reason. All six timed out, with the 256-bit division at 92 to 96 % of their branching. It then
+  fixed the obligation's deposited value at one, and all six verified. "After" wrote one rule
+  matching on every reason, which never reached the solver. It got no function share to act on,
+  and skipped the family; K8 was pushed but described neither move in terms that fit. K8 now has
+  both, and Step 1 of the initial prompt names them. The other, that a liquidation cannot be
+  blocked by the withdraw queue or caps, was skipped on `[3001]` and a `[3308]` error path.
+
+What it says about the provisional parts:
+
+* **K8 pushed after the split.** After a pushed K8 the author split a combined rule into one rule
+  per reason, which is K8's first move. It did not do the same for the eligibility rule above.
+* **`DOMINANT_SHARE`.** Not movable from this run. Only 6 of 37 timed-out instances carried a
+  function share (76 to 96 %, all above 40); the rest had none (§3.5, Ask 5). Their statistics
+  still carry totals: the eligibility and order rules 600 to 720 nonlinear operations of degree 336,
+  the socialize-loss and permission rules no nonlinear operations but 202 to 1,296 memory updates in
+  one sequence. The stuck-rule line now shows the totals the Prover rates above low
+  (`RuleStatistics.nonlinearity`, `.memory`), and K8 says how to read them.
+* **K7** was fetched while planning, before the first draft, so there is no evidence yet that it
+  belongs back in the standing prompt (§9).
+
+Both authors' threads were summarized during the run, so a thread's latest checkpoint holds only the
+history since its last summary. The counts above merge every checkpoint.
+
 ## 9. Open questions
 
 * **Repeated pushes.** If a unit hits `loopUnwinding` on every submission, the body is repeated
-  every time. Once per thread is cheaper, but a summarization can drop the first copy. Decide after
-  measuring.
+  every time. Once per thread is cheaper, but a summarization can drop the first copy. Measured in
+  §8.1: K8 (6.7 KB) was pushed on five submissions, about 8K tokens of repeated text in one thread
+  of 27M input tokens. Small next to the thread, so not yet worth the summarization risk.
 * **Recipes for the editor.** The munge editor (`cvlr_munge_editor_system.j2`) has its own copy of
   some of this (what each kind is for). It does not hold `get_cvlr_recipe`. Whether it should is a
   separate question.
 * **Whether K7 is a recipe at all.** Descending below the handler is the commonest successful move
   in shipped verification projects. If the benchmark shows authors not fetching it until after a
-  blocked handler-level rule, it goes back into the standing prompt.
+  blocked handler-level rule, it goes back into the standing prompt. In §8.1 the author fetched it
+  while planning, with K14, K1 and K3, before its first draft; one run, so not settled.
