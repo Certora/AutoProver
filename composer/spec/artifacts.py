@@ -165,12 +165,13 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         out.write_text(report.model_dump_json(indent=2) + "\n")
 
     def write_ranking(self, ranking: BaseModel) -> Path:
-        """A prioritized run's full property ranking → ``{report}/property_ranking.json``.
+        """A prioritized run's full property ranking → ``{internal}/property_ranking.json``.
 
-        Written whether or not the report phase later succeeds: it is the record of a decision
-        the run has already acted on, and the only place the scores and rationales behind the
-        deprioritized properties survive."""
-        out = self._report_dir() / "property_ranking.json"
+        The report carries what a reader needs of it (``prioritization`` and ``deprioritized``),
+        so this is a diagnostic, not a deliverable. It is written as soon as the ranking exists,
+        so a run whose report phase fails still records the decision it acted on, and it is the
+        only record of the claims the run did not choose."""
+        out = ensure_dir(self._internal_dir()) / "property_ranking.json"
         out.write_text(ranking.model_dump_json(indent=2) + "\n")
         _log.info("prioritization: wrote %s", out)
         return out

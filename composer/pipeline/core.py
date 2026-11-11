@@ -70,8 +70,8 @@ from composer.input.files import Document
 from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import ReportComponentInput, Verdict, EvidenceFetcher, Formalized
 from composer.spec.source.report.schema import (
-    AutoProverReport, DeprioritizedProperty, RuleName, ReportBackend, SourceEditRecord,
-    VerificationArtifactRecord,
+    AutoProverReport, DeprioritizedProperty, Prioritization, PursuedProperty, RuleName,
+    ReportBackend, SourceEditRecord, VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
 from composer.spec.source.task_ids import (
@@ -336,6 +336,14 @@ class ExtractionResult[U: FeatureUnit](NamedTuple):
     lost. A component appears in at most one of the two."""
     batches: list[_Batch[U]]
     failed: list[ExtractionFailure[U]]
+
+
+class _Prioritized[U: FeatureUnit](NamedTuple):
+    """A prioritized run's focus: the one batch it formalizes, and what the report says about the
+    choice."""
+    batches: list[_Batch[U]]
+    prioritization: Prioritization
+    deprioritized: list[DeprioritizedProperty]
 
 
 def extract_task_id(idx: int) -> str:
@@ -744,10 +752,11 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     #     A predefined set is already the batches a run handed to formalization — focus included —
     #     so it is never re-ranked. A generated set is every component's candidates, like the
     #     native extraction's, so it is ranked.
+    prioritization: Prioritization | None = None
     deprioritized: list[DeprioritizedProperty] = []
     if batches and run.run_mode is RunMode.PRIORITIZED and predefined is None:
         with named_budget_or_nop("property_extraction"):
-            batches, deprioritized = await _prioritize(
+            batches, prioritization, deprioritized = await _prioritize(
                 backend.analysis_spec.properties_key, backend.artifact_store,
                 batches, run, phases["extraction"], threat_model, extra_context,
             )
@@ -950,6 +959,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 findings_llm=run.env.llm_heavy() if findings_evidence else None,
                 fetch_evidence=findings_evidence,
                 run_mode=run.run_mode.value,
+                prioritization=prioritization,
                 deprioritized=deprioritized,
                 active_plugins=plugin_manager.plugin_manifest,
             )
@@ -1026,12 +1036,13 @@ async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
     phase: P,
     threat_model: Document | None,
     extra_context: Sequence[Document],
-) -> tuple[list[_Batch[U]], list[DeprioritizedProperty]]:
+) -> _Prioritized[U]:
     """Rank every extracted property and cut the run down to one claim's worth of them.
 
     Returns the surviving batch list — always exactly one entry, so the driver's
-    "no properties extracted" guard cannot fire on our account — alongside every candidate it
-    set aside, which the report carries so a reader can see what this run did not look at.
+    "no properties extracted" guard cannot fire on our account — alongside the ranking of what it
+    pursued and every candidate it set aside, which the report carries so a reader can see why
+    the run looked at what it did and what it did not look at.
 
     The winning batch keeps its own ``feat`` and ``feat_ctx``: unit identity, task ids and
     the artifact-store stem are all unchanged, so only ``FORMALIZATION_KEY`` — which is
@@ -1084,6 +1095,7 @@ async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
             sort=detail[rp.key].sort,
             description=detail[rp.key].description,
             score=rp.score,
+            critical_match=rp.critical_match,
             rationale=rp.rationale,
         )
         for rp in ranking.ranked
@@ -1096,7 +1108,21 @@ async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
         chosen.feat.display_name, selection.claim, len(props),
         len(deprioritized), len(batches) - 1,
     )
-    return [_Batch(chosen.feat, props, chosen.feat_ctx)], deprioritized
+    prioritization = Prioritization(
+        claim=selection.claim,
+        justification=ranking.justification,
+        pursued=[
+            PursuedProperty(
+                component=rp.key[0], title=rp.key[1], score=rp.score,
+                critical_match=rp.critical_match, rationale=rp.rationale,
+            )
+            for rp in ranking.ranked
+            if rp.key in pursued
+        ],
+    )
+    return _Prioritized(
+        [_Batch(chosen.feat, props, chosen.feat_ctx)], prioritization, deprioritized
+    )
 
 
 async def _extract_all[P: enum.Enum, H, Main, U: FeatureUnit](

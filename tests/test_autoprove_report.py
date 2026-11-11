@@ -22,7 +22,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 
-from composer.spec.types import PropertyFormulation, PropertyType
+from composer.spec.types import ComponentName, PropertyFormulation, PropertyTitle, PropertyType
 from composer.authoring.state import SkippedProperty
 from composer.spec.cvl_generation import GeneratedCVL, PropertyRuleMapping
 
@@ -42,7 +42,7 @@ from composer.spec.source.report.schema import (
     AutoProverReport, ConfCoverage, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
     PropertyCoverage, PropertyGroup, RuleFeedback, RuleVerdict, SeverityTier, SkippedClaim,
-    SpecCoverageScore,
+    SpecCoverageScore, DeprioritizedProperty, Prioritization, PursuedProperty,
 )
 from composer.spec.source.report_prover import make_prover_fetcher
 from composer.spec.source.report.collect import RuleEvidence
@@ -1344,9 +1344,9 @@ def _evaluate_report() -> AutoProverReport:
     })
 
 
-def test_schema_3_2_round_trips():
+def test_schema_3_3_round_trips():
     report = _evaluate_report()
-    assert report.schema_version == "3.2"
+    assert report.schema_version == "3.3"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
@@ -1354,6 +1354,38 @@ def test_schema_3_2_round_trips():
     assert [r.name for r in reloaded.rules if r.ref not in referenced] == ["users_own_rule"]
     assert reloaded.properties[1].coverage is not None
     assert reloaded.properties[1].coverage.added_by_evaluator
+
+
+def test_schema_3_3_prioritization_round_trips():
+    report = _mini_report().model_copy(update={
+        "run_mode": "prioritized",
+        "prioritization": Prioritization(
+            claim="Payments are accepted.",
+            justification="Paying is the only way funds enter.",
+            pursued=[PursuedProperty(
+                component=ComponentName("C"), title=PropertyTitle("p_pay"), score=90,
+                critical_match=True, rationale="Funds are stuck otherwise.",
+            )],
+        ),
+        "deprioritized": [DeprioritizedProperty(
+            component=ComponentName("D"), title=PropertyTitle("p_other"), sort="safety_property",
+            description="d", score=20, critical_match=False, rationale="Lower stakes.",
+        )],
+    })
+    assert AutoProverReport.model_validate_json(report.model_dump_json()) == report
+
+
+def test_pre_3_3_deprioritized_loads_without_critical_match():
+    data = _mini_report().model_dump(mode="json")
+    data["schema_version"] = "3.2"
+    del data["prioritization"]
+    data["deprioritized"] = [{
+        "component": "D", "title": "p_other", "sort": "safety_property", "description": "d",
+        "score": 20, "rationale": "Lower stakes.",
+    }]
+    old = AutoProverReport.model_validate(data)
+    assert old.prioritization is None
+    assert old.deprioritized[0].critical_match is None
 
 
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
