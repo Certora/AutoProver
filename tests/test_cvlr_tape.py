@@ -50,7 +50,7 @@ from composer.pipeline.core import PRIORITIZE_TASK_ID
 from composer.pipeline.run_mode import RUN_MODE_ENV, RunMode
 from composer.rustapp.frontend import GenericRustConsoleHandler
 from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION
-from composer.spec.gen_types import CVLR_DELIVERABLE_DIR
+from composer.spec.gen_types import CVLR_DELIVERABLE_DIR, CVLR_INTERNAL_DIR
 from composer.spec.prioritize import PropertyGroup, PropertyRanking, RankedProperty
 from composer.spec.source.report.grouping import GroupingResult, PropertyGroupDraft
 from composer.spec.types import ComponentName, PropertyTitle
@@ -280,7 +280,11 @@ async def test_a_prioritized_replay_formalizes_only_the_ranked_claim(
     assert fake.lane_cursors.get("hoist", 0) == 0
 
     reports = project / CVLR_DELIVERABLE_DIR / "reports"
-    assert (reports / "property_ranking.json").is_file()
+    assert not (reports / "property_ranking.json").exists()
+    assert (project / CVLR_INTERNAL_DIR / "property_ranking.json").is_file()
     report = json.loads((reports / "report.json").read_text())
     n_candidates = sum(len(ts) for ts in _CANDIDATES.values())
     assert len(report["deprioritized"]) == n_candidates - len(_FOCUS)
+    pursued = report["prioritization"]["pursued"]
+    assert sorted(p["title"] for p in pursued) == sorted(_FOCUS)
+    assert all(p["score"] == 90 for p in pursued)

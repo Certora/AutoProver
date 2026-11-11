@@ -106,7 +106,7 @@ def test_the_failure_survives_a_round_trip_and_renders(tmp_path):
             raise RunRefusal("Supported: solana-program 2.x <and> 1.18.")
 
     raw = json.loads((tmp_path / REPORT_FILE).read_text())
-    assert raw["schema_version"] == "3.9"
+    assert raw["schema_version"] == "3.10"
     assert raw["run_failure"] == {
         "kind": "refused", "message": "Supported: solana-program 2.x <and> 1.18.",
     }

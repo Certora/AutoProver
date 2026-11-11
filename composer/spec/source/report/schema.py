@@ -583,7 +583,27 @@ class DeprioritizedProperty(PropertyFormulation):
     that says what was set aside, and why."""
     component: ComponentName
     score: int
+    #: Whether the property matches a concern the design document, threat model or supplied
+    #: notes raised. ``None`` on reports written before schema 3.10.
+    critical_match: bool | None = None
     rationale: str
+
+
+class PursuedProperty(BaseModel):
+    """A property a prioritized run pursued, with the ranker's score and reason."""
+    component: ComponentName
+    title: PropertyTitle
+    score: int
+    critical_match: bool
+    rationale: str
+
+
+class Prioritization(BaseModel):
+    """Why a prioritized run pursued the claim it did. What it set aside is the report's
+    ``deprioritized``."""
+    claim: str
+    justification: str
+    pursued: list[PursuedProperty]
 
 
 class ComponentProperty(PropertyFormulation):
@@ -657,13 +677,16 @@ it stands in for the report the run did not get to write."""
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
     schema_version: Literal[
-        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9"
-    ] = "3.9"
+        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9", "3.10"
+    ] = "3.10"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written
     #: before the mode existed, which are all comprehensive.
     run_mode: str | None = None
+    #: The claim a prioritized run pursued, and the ranking of its properties. ``None`` for any
+    #: other run mode, and on reports written before schema 3.10.
+    prioritization: Prioritization | None = None
     #: What a prioritized run set aside. Empty for a comprehensive run.
     deprioritized: list[DeprioritizedProperty] = Field(default_factory=list)
     #: Protocol-wide claims moved into a shared unit, with what each stands for. Empty for a

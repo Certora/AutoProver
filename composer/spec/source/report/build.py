@@ -23,7 +23,7 @@ from composer.spec.source.report.grouping import (
 )
 from composer.spec.source.report.schema import (
     AutoProverReport, BuildEnvironment, DeprioritizedProperty, HoistedClaim, Outcome,
-    PropertyKey,
+    Prioritization, PropertyKey,
     ReportBackend, RuleRef, RunScopedProperty, SourceEditRecord,
     VerificationArtifactRecord,
 )
@@ -53,6 +53,7 @@ async def build_report[R: ReportableResult](
     findings_llm: BaseChatModel | None = None,
     fetch_evidence: EvidenceFetcher | None = None,
     run_mode: str | None = None,
+    prioritization: Prioritization | None = None,
     deprioritized: list[DeprioritizedProperty] | None = None,
     hoisted: list[HoistedClaim] | None = None,
     run_scoped: list[RunScopedProperty] | None = None,
@@ -151,6 +152,7 @@ async def build_report[R: ReportableResult](
     report = AutoProverReport(
         backend=backend,
         run_mode=run_mode,
+        prioritization=prioritization,
         deprioritized=deprioritized or [],
         hoisted=hoisted or [],
         run_scoped=run_scoped or [],

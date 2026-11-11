@@ -77,8 +77,8 @@ from composer.spec.source.report.build import build_report
 from composer.spec.source.report.collect import Abandoned, ReportComponentInput, Verdict, EvidenceFetcher, Formalized
 from composer.spec.source.report.schema import (
     AutoProverReport, BuildEnvironment, ChosenShared, ComponentProperty, DeprioritizedProperty,
-    HoistedClaim, RuleName, ReportBackend, RunScopedProperty, SourceEditRecord, SynthesizedShared,
-    VerificationArtifactRecord,
+    HoistedClaim, Prioritization, PursuedProperty, RuleName, ReportBackend, RunScopedProperty,
+    SourceEditRecord, SynthesizedShared, VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
 from composer.pipeline.pinned import PinnedRun, write_pinned_run
@@ -388,6 +388,15 @@ class ExtractionResult[U: FeatureUnit](NamedTuple):
     lost. A component appears in at most one of the two."""
     batches: list[_Batch[U]]
     failed: list[ExtractionFailure[U]]
+
+
+class _Prioritized[U: FeatureUnit](NamedTuple):
+    """A prioritized run's focus: the one batch it formalizes, and what the report says about the
+    choice."""
+    batches: list[_Batch[U]]
+    prioritization: Prioritization
+    deprioritized: list[DeprioritizedProperty]
+    run_scoped: list[RunScopedProperty]
 
 
 def extract_task_id(idx: int) -> str:
@@ -734,11 +743,12 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
     #     The empty-batch check deliberately stays *after* the await below rather than moving
     #     up here to guard this: a setup that failed is the more useful error than "nothing was
     #     extracted", and raising early would mask it.
+    prioritization: Prioritization | None = None
     deprioritized: list[DeprioritizedProperty] = []
     run_scoped: list[RunScopedProperty] = []
     if batches and run.run_mode is RunMode.PRIORITIZED:
         with named_budget_or_nop("property_extraction"):
-            batches, deprioritized, run_scoped = await _prioritize(
+            batches, prioritization, deprioritized, run_scoped = await _prioritize(
                 backend.analysis_spec.properties_key, backend.artifact_store,
                 batches, run, phases["extraction"], threat_model, extra_context,
                 shared.entry_points if (shared := backend.shared_unit) is not None else None,
@@ -962,6 +972,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 findings_llm=run.env.llm_heavy() if findings_evidence else None,
                 fetch_evidence=findings_evidence,
                 run_mode=run.run_mode.value,
+                prioritization=prioritization,
                 deprioritized=deprioritized,
                 hoisted=hoisted,
                 run_scoped=run_scoped,
@@ -1050,12 +1061,13 @@ async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
     threat_model: Document | None,
     extra_context: Sequence[Document],
     entry_points: Callable[[U], list[str]] | None,
-) -> tuple[list[_Batch[U]], list[DeprioritizedProperty], list[RunScopedProperty]]:
+) -> _Prioritized[U]:
     """Rank every extracted property and cut the run down to one claim's worth of them.
 
     Returns the surviving batch list — always exactly one entry, so the driver's
-    "no properties extracted" guard cannot fire on our account — alongside every candidate it
-    set aside, which the report carries so a reader can see what this run did not look at.
+    "no properties extracted" guard cannot fire on our account — alongside the ranking of what it
+    pursued and every candidate it set aside, which the report carries so a reader can see why
+    the run looked at what it did and what it did not look at.
 
     ``entry_points`` is the backend's :attr:`SharedUnit.entry_points`, for a backend whose rules
     drive only the entry points they name. With it, a pursued property that also names other
@@ -1130,6 +1142,7 @@ async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
             sort=detail[rp.key].sort,
             description=detail[rp.key].description,
             score=rp.score,
+            critical_match=rp.critical_match,
             rationale=(
                 "Part of the chosen claim, but it names only other components' entry points, "
                 "and a prioritized run checks a property only at its own component's."
@@ -1156,7 +1169,21 @@ async def _prioritize[P: enum.Enum, H, U: FeatureUnit](
         chosen.feat.display_name, selection.claim, len(props),
         len(deprioritized), len(batches) - 1,
     )
-    return [_Batch(chosen.feat, props, chosen.feat_ctx)], deprioritized, run_scoped
+    prioritization = Prioritization(
+        claim=selection.claim,
+        justification=ranking.justification,
+        pursued=[
+            PursuedProperty(
+                component=rp.key[0], title=rp.key[1], score=rp.score,
+                critical_match=rp.critical_match, rationale=rp.rationale,
+            )
+            for rp in ranking.ranked
+            if rp.key in pursued
+        ],
+    )
+    return _Prioritized(
+        [_Batch(chosen.feat, props, chosen.feat_ctx)], prioritization, deprioritized, run_scoped
+    )
 
 
 HOIST_TASK_ID = "hoist"
