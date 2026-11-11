@@ -660,9 +660,11 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         )
 
     def _record_property_set(batches: Sequence[_Batch[U]]) -> None:
-        """Write the run's property set, unless there are no batches."""
+        """Write the run's property set, unless there are no batches. A loaded set's ranking
+        carries over for the properties still in the batches."""
         if not batches:
             return
+        kept = {(b.feat.display_name, p.title) for b in batches for p in b.props}
         backend.artifact_store.write_property_set(PropertySet(
             ecosystem=ecosystem.name,
             contract_name=source.contract_name,
@@ -674,6 +676,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 )
                 for b in batches
             ],
+            ranking=property_set.ranking_of(kept) if property_set is not None else None,
         ))
 
     # External modes prepare backend support instead of formalization.

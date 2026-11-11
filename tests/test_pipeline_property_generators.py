@@ -18,7 +18,7 @@ from composer.pipeline.property_generators import (
     PROPERTY_GENERATOR_ENTRY_POINT_GROUP, PROPERTY_GENERATOR_ENV, PropertyGeneratorImpl,
     PropertyGeneratorLoader, load_property_generator, resolve_property_generator,
 )
-from composer.pipeline.property_set import PropertySet, PropertySetComponent
+from composer.pipeline.property_set import PropertyRank, PropertySet, PropertySetComponent
 from composer.pipeline.run_mode import RunMode
 
 from tests.test_evaluate_mode import _EntryPoint, _Impl, _install, _loader_for
@@ -165,6 +165,23 @@ async def test_a_property_generation_run_stops_once_the_set_is_written(monkeypat
     assert d.formalizer.calls == [] and d.report_components is None
     assert d.result is not None and (d.result.n_components, d.result.n_properties) == (2, 3)
     assert not d.result.all_failed
+
+
+async def test_the_recorded_set_keeps_the_generated_ranking(monkeypatch):
+    ps = _generated()
+    ranking = [
+        PropertyRank(component=c.name, title=p.title, rank=i + 1)
+        for i, (c, p) in enumerate(
+            (c, p) for c in ps.property_components for p in c.properties
+        )
+    ]
+    d = await _drive_generated(
+        monkeypatch, _Generator(ps.model_copy(update={"ranking": ranking})),
+        run_mode=RunMode.PROPERTY_GENERATION,
+    )
+
+    recorded = d.backend.artifact_store.property_set
+    assert recorded is not None and recorded.ranking == ranking
 
 
 async def test_a_property_generation_set_loads_into_a_comprehensive_run():
