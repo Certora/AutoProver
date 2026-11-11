@@ -57,6 +57,7 @@ from composer.pipeline.core import (
     ToolBinder
 )
 from composer.pipeline.ecosystem import ChainTag, Ecosystem
+from composer.pipeline.refusal import RunRefusal
 from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import BackendSpec, SandboxConfig
 from composer.rustapp.descriptor import AppDescriptor, PhaseRole, PhaseSpec
@@ -254,7 +255,7 @@ async def run_workspace_prep(
     return facts
 
 
-class PreflightFailed(RuntimeError):
+class PreflightFailed(RunRefusal):
     """The prepared workspace does not build, or its skeleton artifact does not run — established
     before any property or authored artifact exists.
 

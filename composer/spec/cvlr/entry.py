@@ -48,11 +48,13 @@ from composer.pipeline.cli import AtExit, cli_pipeline, user_ns
 from composer.pipeline.pinned import load_pinned_run
 from composer.pipeline.ecosystem import SOLANA
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS, CorePipelineResult
+from composer.pipeline.run_failure import reporting_run_failure
 from composer.pipeline.run_mode import RunMode, add_run_mode_arg, resolve_run_mode
 from composer.prover.core import make_prover_options
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
+from composer.spec.gen_types import CVLR_REPORT_DIR, under_project
 from composer.spec.cvlr.patch import write_patch
 from composer.spec.cvlr.editor import EditingServices
 from composer.spec.cvlr.pipeline import CvlrBackend, CvlrPhase, run_work_directory
@@ -332,11 +334,35 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     Split from :func:`_entry_point` the way ``autoprove_executor`` is split from its parser: a
     caller with an ``CvlrArgs`` in hand — a test, or an embedder of this pipeline — should not have
     to go through ``sys.argv`` to reach the run.
+
+    Whatever ends the run before it writes its report — preflight refusing the project included —
+    leaves a report saying so in its place.
     """
-    thread_id = f"cvlr_{uuid.uuid4().hex[:12]}"
     project_root = pathlib.Path(args.project_root).resolve()
     main_source, identifier = parse_main_program(args.main_contract)
     run_mode = resolve_run_mode(args.run_mode, CVLR_RUN_MODES)
+    with reporting_run_failure(
+        under_project(project_root, CVLR_REPORT_DIR),
+        contract_name=identifier, backend="prover", run_mode=run_mode.value,
+    ):
+        async with _executor(
+            args, summary, project_root=project_root, main_source=main_source,
+            identifier=identifier, run_mode=run_mode,
+        ) as runner:
+            yield runner
+
+
+@asynccontextmanager
+async def _executor(
+    args: CvlrArgs,
+    summary: RunSummary,
+    *,
+    project_root: pathlib.Path,
+    main_source: str,
+    identifier: str,
+    run_mode: RunMode,
+) -> AsyncIterator[CvlrRunner]:
+    thread_id = f"cvlr_{uuid.uuid4().hex[:12]}"
 
     # Before any service starts: a workspace cargo cannot read, a package that is not a member, and
     # a multi-program workspace with nothing naming the one to verify are all usage errors, and

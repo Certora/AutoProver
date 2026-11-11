@@ -35,8 +35,8 @@ from composer.spec.source.report.schema import (
     AutoProverReport, BuildEnvironment, ComponentName, ConfCoverage, CoverageReport,
     CoverageStatus, CurtailedComponent, FeedbackSeverity, Finding, FormalizedProperty,
     GaveUpComponent, GroupStatus, HoistedClaim, Outcome, PropertyGroup, PropertyKey,
-    ReportBackend, RuleFeedback, RuleName, RuleRef, RuleVerdict, SkippedClaim, SourceEditRecord,
-    SpecCoverageScore,
+    ReportBackend, RuleFeedback, RuleName, RuleRef, RuleVerdict, RunFailure, SkippedClaim,
+    SourceEditRecord, SpecCoverageScore,
 )
 
 
@@ -296,6 +296,7 @@ class ReportTemplateParams(TypedDict):
     #: existed, so the template states only what it has rather than inferring confinement from
     #: silence.
     build_environment: BuildEnvironment | None
+    run_failure: RunFailure | None
 
 
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
@@ -579,6 +580,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         "curtailed": [_curtailed_view(c) for c in report.curtailed_components],
         "source_edits": report.source_edits,
         "build_environment": report.build_environment,
+        "run_failure": report.run_failure,
     }
 
 

@@ -23,7 +23,7 @@ from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import PropertyRuleMapping, RuleSubject
 from composer.spec.cvlr.tuning import SummaryDirective
-from composer.spec.gen_types import CVLR_DELIVERABLE_DIR, CVLR_INTERNAL_DIR
+from composer.spec.gen_types import CVLR_DELIVERABLE_DIR, CVLR_INTERNAL_DIR, CVLR_REPORT_DIR
 from composer.spec.source.munge.edit_store import AppliedEdit
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 from composer.spec.util import ensure_dir
@@ -109,7 +109,7 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
             "property_rules",
             deliverable_dir=CVLR_DELIVERABLE_DIR,
             internal_dir=CVLR_INTERNAL_DIR,
-            report_dir=CVLR_DELIVERABLE_DIR / "reports",
+            report_dir=CVLR_REPORT_DIR,
         )
         self._package_dir = package_dir
 

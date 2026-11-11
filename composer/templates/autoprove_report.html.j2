@@ -363,6 +363,18 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
   </div>
 </header>
 
+{%- if run_failure %}
+<div class="warnings"><strong>The run failed before it could report its results.</strong>
+  {%- if run_failure.kind == "refused" %}
+  <p>{{ run_failure.message }}</p>
+  {%- elif run_failure.kind == "interrupted" %}
+  <p>It was stopped before it finished.</p>
+  {%- else %}
+  <p>It hit an internal error.</p>
+  {%- endif %}
+</div>
+{%- endif %}
+
 {%- if build_environment and build_environment.kind == "unconfined" %}
 <div class="warnings"><strong>Unconfined builds:</strong>
   the project was compiled with the operator's full environment — its own build scripts and

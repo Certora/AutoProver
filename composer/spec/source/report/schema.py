@@ -630,9 +630,35 @@ class HoistedClaim(BaseModel):
     absorbed: list[ComponentProperty]
 
 
+class Refused(BaseModel):
+    """The run stopped on a problem with what it was given — a project this build cannot verify,
+    say. ``message`` is written for the person who started the run, and is what they need to act
+    on."""
+    kind: Literal["refused"] = "refused"
+    message: str
+
+
+class Interrupted(BaseModel):
+    """The run was stopped from outside — a cancel, or the stall guard — before it finished."""
+    kind: Literal["interrupted"] = "interrupted"
+
+
+class InternalError(BaseModel):
+    """The run failed on a fault of its own. Deliberately carries no exception text: that is for
+    whoever debugs the run, from its logs, and not for the reader of the report."""
+    kind: Literal["internal_error"] = "internal_error"
+
+
+type RunFailure = Refused | Interrupted | InternalError
+"""Why a run produced no report of its own. A report carrying one has no properties, rules or groups:
+it stands in for the report the run did not get to write."""
+
+
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8"] = "3.8"
+    schema_version: Literal[
+        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9"
+    ] = "3.9"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written
@@ -712,3 +738,6 @@ class AutoProverReport(BaseModel):
     scene: SceneAssessment | None = None
     #: Mutation testing of the specs (evaluate run, when mutation ran). None otherwise.
     mutation: MutationReport | None = None
+    #: Set only on the report written in place of one the run failed to produce; every other field
+    #: is then empty. ``None`` on every report a run built, and on reports written before schema 3.9.
+    run_failure: RunFailure | None = Field(default=None, discriminator="kind")

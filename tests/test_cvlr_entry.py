@@ -20,6 +20,8 @@ from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.spec.cvlr import entry, preflight
 from composer.spec.cvlr.pipeline import CvlrPhase
 from composer.pipeline.run_mode import RUN_MODE_ENV, RunMode
+from composer.spec.gen_types import CVLR_REPORT_DIR
+from composer.spec.source.report.schema import AutoProverReport, Refused
 
 
 def _package(root: Path, name: str, *, lib: bool = True) -> CratePackage:
@@ -531,11 +533,17 @@ async def test_a_bad_package_fails_before_any_service_starts(project, monkeypatc
         [str(project), "programs/vault/src/lib.rs:vault", "--package", "typo"]
     )
 
-    with pytest.raises(preflight.PreflightFailed):
+    with pytest.raises(preflight.PreflightFailed) as refused:
         async with entry.cvlr_executor(args, SimpleNamespace()):  # type: ignore[arg-type]
             pass
 
     assert wiring.kwargs == {}
+    # And it still leaves a report, saying why: the run's only output a consumer reads.
+    report = AutoProverReport.model_validate_json(
+        (project / CVLR_REPORT_DIR / "report.json").read_text()
+    )
+    assert report.run_failure == Refused(message=str(refused.value))
+    assert report.contract_name == "vault"
 
 
 @pytest.mark.asyncio
