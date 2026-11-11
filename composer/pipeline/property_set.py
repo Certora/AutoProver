@@ -13,28 +13,31 @@ against the commit that wrote it.
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ValidationError
+from collections.abc import Collection
+
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from composer.pipeline.ecosystem import ChainTag
 from composer.pipeline.run_mode import RunMode
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import (
-    ComponentName, PropertyFormulation, PropertyKey, SourceIdentifier,
+    ComponentName, PropertyFormulation, PropertyKey, PropertyTitle, SourceIdentifier,
 )
-
-
-class PropertySetProperty(PropertyFormulation):
-    """A property as the set records it."""
-    #: The property's 1-based importance rank across the whole set (1 = most important), from a
-    #: property generator that ranks; ``None`` when the property was not ranked.
-    rank: int | None = None
 
 
 class PropertySetComponent(BaseModel):
     """One unit's identity among the rebuilt units, and its final properties."""
     name: ComponentName
     unit_index: int
-    properties: list[PropertySetProperty]
+    properties: list[PropertyFormulation]
+
+
+class PropertyRank(BaseModel):
+    """A property's place in its set's importance ranking."""
+    component: ComponentName
+    title: PropertyTitle
+    #: 1 is the most important.
+    rank: int = Field(ge=1)
 
 
 class PropertySet(BaseModel):
@@ -48,6 +51,38 @@ class PropertySet(BaseModel):
     #: The batches handed to formalization, in order — after the post-inference plugins and, in a
     #: prioritized run, after the focus was chosen.
     property_components: list[PropertySetComponent]
+    #: The importance ranking of the set's properties, from a property generator that ranks them;
+    #: ``None`` when the set is unranked. Every entry names a property of the set, at most once.
+    #: A ranking may leave properties out, and its ranks may have gaps.
+    ranking: list[PropertyRank] | None = None
+
+    @model_validator(mode="after")
+    def _ranking_names_the_set_properties(self) -> "PropertySet":
+        if self.ranking is None:
+            return self
+        keys = self.keys()
+        seen: set[PropertyKey] = set()
+        for r in self.ranking:
+            key = (r.component, r.title)
+            if key not in keys:
+                raise ValueError(
+                    f"the ranking names {r.title!r} of {r.component!r}, which the set does not hold"
+                )
+            if key in seen:
+                raise ValueError(f"the ranking names {r.title!r} of {r.component!r} more than once")
+            seen.add(key)
+        return self
+
+    def keys(self) -> set[PropertyKey]:
+        """The ``(component, title)`` of every property in the set."""
+        return {(c.name, p.title) for c in self.property_components for p in c.properties}
+
+    def ranking_of(self, keys: Collection[PropertyKey]) -> list[PropertyRank] | None:
+        """This set's ranking restricted to ``keys``, for a set that holds only those properties;
+        ``None`` when this set is unranked."""
+        if self.ranking is None:
+            return None
+        return [r for r in self.ranking if (r.component, r.title) in keys]
 
     @staticmethod
     def load(path: Path) -> "PropertySet":
@@ -68,20 +103,10 @@ class PropertySet(BaseModel):
     def analyzed[App: BaseApplication](self, ty: type[App]) -> App:
         return ty.model_validate(self.system_model)
 
-    def ranks(self) -> dict[PropertyKey, int]:
-        """The rank of each ranked property, by ``(component, title)``."""
-        return {
-            (c.name, p.title): p.rank
-            for c in self.property_components
-            for p in c.properties
-            if p.rank is not None
-        }
-
     def match_units[U: FeatureUnit](
         self, units: list[U]
     ) -> list[tuple[U, list[PropertyFormulation]]]:
-        """Pair each recorded component with the rebuilt unit of the same name and index, and its
-        properties without their ranks (see ``ranks``).
+        """Pair each recorded component with the rebuilt unit of the same name and index.
 
         Any disagreement is fatal: a component formalized against the wrong unit, or silently
         dropped, would make the run's CVL incomparable with the run that wrote the file."""
@@ -106,8 +131,5 @@ class PropertySet(BaseModel):
                     f"property set component {c.name!r} has unit index {c.unit_index}, "
                     f"but the rebuilt unit has {unit.unit_index}"
                 )
-            paired.append((unit, [
-                PropertyFormulation(title=p.title, sort=p.sort, description=p.description)
-                for p in c.properties
-            ]))
+            paired.append((unit, c.properties))
         return paired

@@ -18,12 +18,12 @@ from composer.pipeline.property_generators import (
     PROPERTY_GENERATOR_ENTRY_POINT_GROUP, PROPERTY_GENERATOR_ENV, PropertyGeneratorImpl,
     PropertyGeneratorLoader, load_property_generator, resolve_property_generator,
 )
-from composer.pipeline.property_set import PropertySet, PropertySetComponent
+from composer.pipeline.property_set import PropertyRank, PropertySet, PropertySetComponent
 from composer.pipeline.run_mode import RunMode
 
 from tests.test_evaluate_mode import _EntryPoint, _Impl, _install, _loader_for
 from tests.test_pipeline_property_set import (
-    ANALYZED, ECOSYSTEM, UNITS, _CachingRun, _Drive, _set_prop,
+    ANALYZED, ECOSYSTEM, UNITS, _CachingRun, _Drive,
 )
 from tests.test_pipeline_staged_formalizer import _prop, _ranking
 
@@ -36,7 +36,7 @@ def _generated(**update: Any) -> PropertySet:
         system_model=ANALYZED.model_dump(mode="json"),
         property_components=[
             PropertySetComponent(
-                name=name, unit_index=i, properties=[_set_prop("gen_" + t) for t in titles],
+                name=name, unit_index=i, properties=[_prop("gen_" + t) for t in titles],
             )
             for i, (name, titles) in enumerate(UNITS.items())
         ],
@@ -167,23 +167,21 @@ async def test_a_property_generation_run_stops_once_the_set_is_written(monkeypat
     assert not d.result.all_failed
 
 
-async def test_the_recorded_set_keeps_the_generated_ranks(monkeypatch):
+async def test_the_recorded_set_keeps_the_generated_ranking(monkeypatch):
     ps = _generated()
-    first, *rest = ps.property_components
-    ranked = ps.model_copy(update={"property_components": [
-        first.model_copy(update={"properties": [
-            first.properties[0].model_copy(update={"rank": 2}), *first.properties[1:],
-        ]}),
-        *rest,
-    ]})
+    ranking = [
+        PropertyRank(component=c.name, title=p.title, rank=i + 1)
+        for i, (c, p) in enumerate(
+            (c, p) for c in ps.property_components for p in c.properties
+        )
+    ]
     d = await _drive_generated(
-        monkeypatch, _Generator(ranked), run_mode=RunMode.PROPERTY_GENERATION,
+        monkeypatch, _Generator(ps.model_copy(update={"ranking": ranking})),
+        run_mode=RunMode.PROPERTY_GENERATION,
     )
 
     recorded = d.backend.artifact_store.property_set
-    assert recorded is not None
-    assert recorded.ranks() == {(first.name, first.properties[0].title): 2}
-    assert [p.rank for c in recorded.property_components for p in c.properties] == [2, None, None]
+    assert recorded is not None and recorded.ranking == ranking
 
 
 async def test_a_property_generation_set_loads_into_a_comprehensive_run():

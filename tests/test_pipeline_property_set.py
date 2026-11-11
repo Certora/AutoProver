@@ -19,7 +19,7 @@ import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM, main_instance
 from composer.pipeline.modes import ModeSupport
-from composer.pipeline.property_set import PropertySet, PropertySetComponent, PropertySetProperty
+from composer.pipeline.property_set import PropertyRank, PropertySet, PropertySetComponent
 from composer.pipeline.run_mode import RunMode
 from composer.spec.source.harness import (
     HarnessDef, HarnessedContract, SystemDescriptionHarnessed, lift_harnessed,
@@ -28,7 +28,6 @@ from composer.spec.system_model import (
     ComponentInteraction, ContractComponent, ExternalDependency, SourceApplication,
     SourceExplicitContract, SourceExternalActor,
 )
-from composer.spec.types import PropertyFormulation
 
 from tests.test_evaluate_mode import _EntryPoint, _Impl, _install, _loader_for
 from tests.test_pipeline_staged_formalizer import (
@@ -47,10 +46,6 @@ class _Model(BaseModel):
 
 
 ANALYZED = _Model(application_type="vault", components=list(UNITS))
-
-
-def _set_prop(title: str, rank: int | None = None) -> PropertySetProperty:
-    return PropertySetProperty(title=title, sort="invariant", description="d", rank=rank)
 
 
 class _RecStore(_Store):
@@ -358,29 +353,48 @@ def _set(*components: tuple[str, int]) -> PropertySet:
     return PropertySet(
         ecosystem="evm", contract_name="Vault", run_mode=RunMode.COMPREHENSIVE, system_model={},
         property_components=[
-            PropertySetComponent(name=n, unit_index=i, properties=[_set_prop("p")])
+            PropertySetComponent(name=n, unit_index=i, properties=[_prop("p")])
             for n, i in components
         ],
     )
+
+
+def test_a_ranking_names_only_properties_of_the_set():
+    ranked = _set(("deposits", 0), ("admin", 1)).model_copy(update={"ranking": [
+        PropertyRank(component="admin", title="p", rank=1),
+    ]})
+    assert PropertySet.model_validate(ranked.model_dump()).ranking == ranked.ranking
+    assert ranked.ranking_of({("deposits", "p")}) == []
+
+
+@pytest.mark.parametrize(
+    "ranking, match",
+    [
+        ([("gone", "p")], "does not hold"),
+        ([("admin", "q")], "does not hold"),
+        ([("admin", "p"), ("admin", "p")], "more than once"),
+    ],
+    ids=["unknown-component", "unknown-title", "duplicate"],
+)
+def test_a_ranking_of_other_properties_is_rejected(ranking, match):
+    data = _set(("admin", 1)).model_dump()
+    data["ranking"] = [
+        {"component": c, "title": t, "rank": i + 1} for i, (c, t) in enumerate(ranking)
+    ]
+    with pytest.raises(ValueError, match=match):
+        PropertySet.model_validate(data)
+
+
+def test_a_set_without_a_ranking_loads_unranked(tmp_path):
+    path = tmp_path / "set.json"
+    path.write_text(_set(("admin", 1)).model_dump_json(exclude={"ranking"}))
+    assert PropertySet.load(path).ranking is None
 
 
 def test_match_units_pairs_in_file_order():
     units = _units()
     paired = _set(("admin", 1), ("deposits", 0)).match_units(units)  # type: ignore[arg-type]
     assert [u.display_name for u, _ in paired] == ["admin", "deposits"]
-
-
-def test_match_units_leaves_out_the_ranks():
-    ps = _set(("deposits", 0))
-    component = ps.property_components[0]
-    ranked = ps.model_copy(update={"property_components": [
-        component.model_copy(update={"properties": [_set_prop("p", rank=1)]}),
-    ]})
-
-    assert ranked.ranks() == {("deposits", "p"): 1}
-    [(_, props)] = ranked.match_units(_units())  # type: ignore[arg-type]
-    assert props == [PropertyFormulation(title="p", sort="invariant", description="d")]
-    assert type(props[0]) is PropertyFormulation
 
 
 @pytest.mark.parametrize(
@@ -472,7 +486,7 @@ def test_a_reloaded_evm_model_rebuilds_the_same_units_whatever_the_harness(tmp_p
         ecosystem="evm", contract_name="Vault", run_mode=RunMode.COMPREHENSIVE,
         system_model=EVM_APP.model_dump(mode="json"),
         property_components=[
-            PropertySetComponent(name=u.display_name, unit_index=u.unit_index, properties=[_set_prop("p")])
+            PropertySetComponent(name=u.display_name, unit_index=u.unit_index, properties=[_prop("p")])
             for u in original
         ],
     )

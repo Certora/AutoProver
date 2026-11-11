@@ -101,7 +101,7 @@ from .plugin_api import (
 )
 from .plugins import load_plugins, PluginManager, PluginPhaseManager, PluginPhaseRunner
 from .modes import ModeContext, ModeSupport, RunModeImpl, load_run_mode
-from .property_set import PropertySet, PropertySetComponent, PropertySetProperty
+from .property_set import PropertySet, PropertySetComponent
 from .property_generators import (
     PropertyGenerationContext, PropertyGeneratorImpl, load_property_generator,
 )
@@ -659,13 +659,12 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             extraction_plugins,
         )
 
-    # The ranks of a loaded set, re-attached to the properties that are still in the batches.
-    ranks = property_set.ranks() if property_set is not None else {}
-
     def _record_property_set(batches: Sequence[_Batch[U]]) -> None:
-        """Write the run's property set, unless there are no batches."""
+        """Write the run's property set, unless there are no batches. A loaded set's ranking
+        carries over for the properties still in the batches."""
         if not batches:
             return
+        kept = {(b.feat.display_name, p.title) for b in batches for p in b.props}
         backend.artifact_store.write_property_set(PropertySet(
             ecosystem=ecosystem.name,
             contract_name=source.contract_name,
@@ -673,17 +672,11 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             system_model=analyzed.model_dump(mode="json"),
             property_components=[
                 PropertySetComponent(
-                    name=b.feat.display_name, unit_index=b.feat.unit_index,
-                    properties=[
-                        PropertySetProperty(
-                            title=p.title, sort=p.sort, description=p.description,
-                            rank=ranks.get((b.feat.display_name, p.title)),
-                        )
-                        for p in b.props
-                    ],
+                    name=b.feat.display_name, unit_index=b.feat.unit_index, properties=b.props,
                 )
                 for b in batches
             ],
+            ranking=property_set.ranking_of(kept) if property_set is not None else None,
         ))
 
     # External modes prepare backend support instead of formalization.
