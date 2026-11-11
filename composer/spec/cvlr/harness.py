@@ -17,7 +17,6 @@ from pydantic import BaseModel, Field
 from composer.authoring.state import SkippedProperty
 from composer.cargo.features import CargoFeature
 from composer.diagnostics.timing import RunSummary
-from composer.prover.conf import Conf, dump_conf
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.scaffold import SPECS_DIR
@@ -27,10 +26,6 @@ from composer.spec.gen_types import CVLR_DELIVERABLE_DIR, CVLR_INTERNAL_DIR, CVL
 from composer.spec.source.munge.edit_store import AppliedEdit
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 from composer.spec.util import ensure_dir
-
-#: One prover conf per delivered unit, for rerunning its rules.
-CONFS_DIR = CVLR_DELIVERABLE_DIR / "confs"
-
 
 @dataclass(frozen=True)
 class HarnessModule:
@@ -132,29 +127,6 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
             "prover_usage": summary.prover_usage_summary(),
         }
 
-    def write_confs(self, confs: dict[HarnessModule, Conf]) -> dict[HarnessModule, Path]:
-        """Write each unit's conf under :data:`CONFS_DIR`, and return the paths, project-relative.
-
-        A conf this call does not write is removed, so a resumed run does not keep one for a unit
-        it did not deliver.
-        """
-        directory = Path(self._project_root) / CONFS_DIR
-        written: dict[HarnessModule, Path] = {}
-        if confs:
-            directory.mkdir(parents=True, exist_ok=True)
-            for unit, conf in confs.items():
-                path = directory / f"{unit.module}.conf"
-                path.write_text(dump_conf(conf))
-                written[unit] = path.relative_to(self._project_root)
-        if directory.is_dir():
-            keep = {p.name for p in written.values()}
-            for stale in directory.glob("*.conf"):
-                if stale.name not in keep:
-                    stale.unlink()
-            if not any(directory.iterdir()):
-                directory.rmdir()
-        return written
-
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
         """Write ``specs/mod.rs`` naming every unit (:func:`declare_modules`).
 
@@ -170,11 +142,9 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
 SHARED_INVARIANTS = "invariants"
 
 
-def declare_modules(
-    specs_dir: Path, units: Sequence[HarnessModule], *, shared: Sequence[str] = ()
-) -> Path:
-    """Write ``specs_dir/mod.rs``: every unit's module behind its cargo feature, and each module in
-    ``shared`` ungated.
+def render_mod_rs(units: Sequence[HarnessModule], *, shared: Sequence[str] = ()) -> str:
+    """The text of ``specs/mod.rs``: every unit's module behind its cargo feature, and each module
+    in ``shared`` ungated.
 
     rustc does not read a module whose ``cfg`` is disabled, and that module does not enter
     dep-info: a missing file does not fail another unit's build, and one unit's draft does not
@@ -196,6 +166,13 @@ def declare_modules(
     )
     if shared:
         header += "//! The ungated modules are compiled with every unit.\n"
+    return header + "\n" + declarations
+
+
+def declare_modules(
+    specs_dir: Path, units: Sequence[HarnessModule], *, shared: Sequence[str] = ()
+) -> Path:
+    """Write ``specs_dir/mod.rs`` (:func:`render_mod_rs`) and return its path."""
     mod_rs = specs_dir / "mod.rs"
-    mod_rs.write_text(header + "\n" + declarations)
+    mod_rs.write_text(render_mod_rs(units, shared=shared))
     return mod_rs

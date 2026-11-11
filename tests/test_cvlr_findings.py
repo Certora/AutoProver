@@ -150,7 +150,7 @@ async def test_the_backend_opts_into_findings_and_reads_back_what_it_captured():
     await _CaptureCallbacks(store, _idle_permit()).on_analysis_complete(rule, "the collector aliases the vault")
 
     formalizer = CvlrFormalizer(
-        object, "prover", SimpleNamespace(cex_analysis=store), SimpleNamespace()
+        object, "prover", SimpleNamespace(cex_analysis=store), SimpleNamespace(), ()
     )
     fetch = formalizer.findings_evidence()
     assert fetch is not None
@@ -172,7 +172,7 @@ def test_the_report_records_how_the_builds_that_earned_its_verdicts_ran(sandbox,
     nowhere in the deliverable, so a report read a week later could not be told from a production
     one. The backend answers this unconditionally — the base's ``None`` means "compiles nothing",
     and a reader who cannot distinguish that from "nobody recorded it" has no use for the field."""
-    formalizer = CvlrFormalizer(object, "prover", SimpleNamespace(sandbox=sandbox), SimpleNamespace())
+    formalizer = CvlrFormalizer(object, "prover", SimpleNamespace(sandbox=sandbox), SimpleNamespace(), ())
 
     assert formalizer.build_environment() == expected
 

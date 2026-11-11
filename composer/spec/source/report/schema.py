@@ -401,10 +401,25 @@ class SourceEditRecord(BaseModel):
     applied_edits: list[AppliedEditRecord]
     cumulative_diff: str
     #: Project-relative path of a patch that applies this component's proved tree — the harness and
-    #: these edits — to the project as shipped. Set when the harness lives inside the program, where
-    #: ``cumulative_diff`` is the program edits alone and applies to the tree the run left behind.
-    #: ``None`` for every other backend, and on reports written before schema 3.6.
+    #: these edits — to the project as shipped: its ``unit_deliverables`` patch. Set when the harness
+    #: lives inside the program, where ``cumulative_diff`` is the program edits alone and applies to
+    #: the tree the run left behind. ``None`` for every other backend, and on reports written before
+    #: schema 3.6.
     patch_path: str | None = None
+
+
+class UnitDeliverable(BaseModel):
+    """What rebuilds one component's tree, for a backend whose harness lives inside the program.
+    Paths are relative to the project root."""
+    #: A unified diff that applies the component's harness, the wiring it needs, and the
+    #: component's edits to the program, to the project as shipped. Applied on its own: every
+    #: component's patch applies to that same clean project. The files it adds are also copied
+    #: beside it, under ``files/``.
+    patch: str
+    #: A prover conf that checks the component's rules again once ``patch`` is applied. ``None``
+    #: for a curtailed component, whose draft was never validated, and for a result cached before
+    #: its settings were recorded.
+    conf: str | None = None
 
 
 class VerificationArtifactRecord(BaseModel):
@@ -677,8 +692,8 @@ it stands in for the report the run did not get to write."""
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
     schema_version: Literal[
-        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9", "3.10"
-    ] = "3.10"
+        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9", "3.10", "4.0"
+    ] = "4.0"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written
@@ -729,15 +744,11 @@ class AutoProverReport(BaseModel):
     #: nothing of the project, and on any report written before schema 3.3 — which is why the
     #: absent case must not be read as "confined".
     build_environment: BuildEnvironment | None = Field(default=None, discriminator="kind")
-    #: A unified diff, relative to the project root, that applies the run's verification
-    #: scaffolding (the harness and the manifest wiring it needs) to the project as shipped, for a
-    #: backend whose harness lives inside the program rather than beside it. ``None`` for every
-    #: other backend, when the run changed nothing, and on reports written before schema 3.5.
-    deliverable_patch: str | None = None
-    #: Component to a prover conf, relative to the project root, that checks that component's rules
-    #: again once ``deliverable_patch`` is applied. Empty for a backend whose confs need nothing
-    #: from the run, and on reports written before schema 3.7.
-    prover_confs: dict[ComponentName, str] = Field(default_factory=dict)
+    #: Component to what rebuilds its tree, for a backend whose harness lives inside the program
+    #: rather than beside it. A curtailed component's entry rebuilds its unvalidated draft. Empty
+    #: for every other backend. Schema 4.0 replaced the run-wide ``deliverable_patch`` and
+    #: ``prover_confs`` with it.
+    unit_deliverables: dict[ComponentName, UnitDeliverable] = Field(default_factory=dict)
     #: Verification-supporting artifacts registered by plugin tools during
     #: formalization (Lean proofs et al.), written to disk by the artifact store.
     verification_artifacts: list[VerificationArtifactRecord] = Field(default_factory=list)

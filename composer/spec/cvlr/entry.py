@@ -55,7 +55,6 @@ from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
 from composer.spec.gen_types import CVLR_REPORT_DIR, under_project
-from composer.spec.cvlr.patch import write_patch
 from composer.spec.cvlr.editor import EditingServices
 from composer.spec.cvlr.pipeline import CvlrBackend, CvlrPhase, run_work_directory
 from composer.spec.cvlr.preflight import SelectedPackage, select_package
@@ -310,13 +309,6 @@ def _usage_exit_logger(
             )
         except Exception:
             _log.exception("failed to dump cvlr job info")
-        try:
-            # Again after finalize's, because a run that ended before finalize still leaves the
-            # harness it delivered in the tree, and the patch is the only way that reaches a
-            # consumer that takes certora/ alone.
-            await asyncio.to_thread(write_patch, pathlib.Path(run.project_root))
-        except Exception:
-            _log.exception("failed to write the cvlr harness patch")
     return exit_logger
 
 

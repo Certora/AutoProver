@@ -43,7 +43,7 @@ from composer.spec.source.report.schema import (
     AppliedEditRecord, GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel,
     Outcome, PropertyCoverage, PropertyGroup, RuleFeedback, RuleVerdict, SeverityTier, SkippedClaim,
     SourceEditRecord, SpecCoverageScore, UnconfinedBuilds, DeprioritizedProperty, Prioritization,
-    PursuedProperty,
+    PursuedProperty, UnitDeliverable,
 )
 from composer.spec.types import ComponentName, PropertyTitle
 from composer.spec.source.report_prover import job_input, make_prover_fetcher, make_run_link_fetcher
@@ -1585,9 +1585,9 @@ def _evaluate_report() -> AutoProverReport:
     })
 
 
-def test_schema_3_10_round_trips():
+def test_schema_4_0_round_trips():
     report = _evaluate_report()
-    assert report.schema_version == "3.10"
+    assert report.schema_version == "4.0"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
@@ -1597,7 +1597,7 @@ def test_schema_3_10_round_trips():
     assert reloaded.properties[1].coverage.added_by_evaluator
 
 
-def test_schema_3_10_prioritization_round_trips():
+def test_prioritization_round_trips():
     report = _mini_report().model_copy(update={
         "run_mode": "prioritized",
         "prioritization": Prioritization(
@@ -1627,6 +1627,36 @@ def test_pre_3_10_deprioritized_loads_without_critical_match():
     old = AutoProverReport.model_validate(data)
     assert old.prioritization is None
     assert old.deprioritized[0].critical_match is None
+
+
+def test_a_3_9_report_with_the_run_wide_patch_still_loads():
+    """Schema 4.0 replaced ``deliverable_patch`` and ``prover_confs`` with per-unit deliverables. A
+    report that still has them loads, without them."""
+    data = _mini_report().model_dump(mode="json")
+    del data["unit_deliverables"]
+    data["schema_version"] = "3.9"
+    del data["prioritization"]
+    data["deliverable_patch"] = "certora/cvlr/harness.patch"
+    data["prover_confs"] = {"Vault": "certora/cvlr/confs/vault.conf"}
+
+    old = AutoProverReport.model_validate(data)
+    assert old.unit_deliverables == {}
+    assert "deliverable_patch" not in old.model_dump()
+
+
+def test_unit_deliverables_render_as_a_table():
+    report = _mini_report().model_copy(update={"unit_deliverables": {
+        "Vault": UnitDeliverable(
+            patch="certora/cvlr/components/vault/vault.patch",
+            conf="certora/cvlr/components/vault/vault.conf",
+        ),
+        "Cut": UnitDeliverable(patch="certora/cvlr/components/cut/cut.patch"),
+    }})
+    h = render_html(report)
+    assert "Reproducing the proofs" in h
+    assert "certora/cvlr/components/vault/vault.conf" in h
+    assert "certora/cvlr/components/cut/cut.patch" in h
+    assert "Reproducing the proofs" not in render_html(_mini_report())
 
 
 @pytest.mark.parametrize("version", ["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8"])

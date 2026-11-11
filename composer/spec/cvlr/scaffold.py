@@ -1005,6 +1005,14 @@ def declare_unit_features(
     return tuple(wanted)
 
 
+def withdraw_unit_features(manifest: str, features: Sequence[CargoFeature]) -> str:
+    """``manifest`` without the declarations of ``features``: the inverse of
+    :func:`declare_unit_features`, for a tree that carries fewer units than the run declared."""
+    edited = ManifestEditor(manifest)
+    edited.remove(("features",), features)
+    return edited.text()
+
+
 def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
     """Carry out ``plan`` under ``root``, returning the paths it touched, in order.
 

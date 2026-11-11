@@ -63,6 +63,8 @@ class _Formalizer:
 
     def __init__(self, calls: list[tuple[str, list[str]]] | None = None):
         self.calls = [] if calls is None else calls
+        #: The components :meth:`settle` was called with, in order.
+        self.settled: list[str] = []
 
     async def formalize(self, _label, feat, props, _ctx, _run, _extra_tools):
         # A yield point, so a driver that started the fan-out before `begin` finished would
@@ -77,8 +79,9 @@ class _Formalizer:
     async def source_edits(self, _outcomes, _run): return []
     async def curtailed_source_edits(self, _outcomes, _run): return []
     def build_environment(self): return None
-    def deliverable_patch(self): return None
-    def deliverable_confs(self): return {}
+    async def settle(self, outcome, _run):
+        self.settled.append(outcome.feat.display_name)
+    def unit_deliverables(self): return {}
 
 
 class _Staged(core.StagedFormalizer):
@@ -228,6 +231,11 @@ async def test_begin_runs_once_before_any_unit_is_formalized(monkeypatch):
     assert sorted(names[1:]) == ["formalize:admin", "formalize:deposits", "formalize:farms"]
 
 
+async def test_every_formalized_unit_is_settled_once(monkeypatch):
+    f = await _drive(monkeypatch, {"deposits": ["a"], "admin": ["b"]}, _Formalizer())
+    assert sorted(f.settled) == ["admin", "deposits"]
+
+
 async def test_begin_sees_every_unit_s_properties(monkeypatch):
     # The point of the staged type: the shared artifact is designed around all of them, not around
     # whichever unit won the race to formalize first.
@@ -316,7 +324,7 @@ async def test_comprehensive_never_calls_the_ranker(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-class _Result:
+class _FocusResult:
     """The two members ``_focus_satisfied`` reads off a backend result."""
 
     def __init__(self, mapped: list[str], skipped: list[str] = []):
@@ -332,20 +340,20 @@ def _props(*titles):
 
 
 def test_a_result_that_maps_every_focus_property_satisfies_the_focus():
-    assert core._focus_satisfied(_Result(["a", "b"]), _props("a", "b"))  # type: ignore[arg-type]
+    assert core._focus_satisfied(_FocusResult(["a", "b"]), _props("a", "b"))  # type: ignore[arg-type]
 
 
 def test_a_skipped_focus_property_does_not_satisfy_the_focus():
     # The exact hazard: a cached comprehensive result that retired the property a prioritized run
     # exists to establish. A replay never runs the author's tools, so nothing else would catch it.
     assert not core._focus_satisfied(  # type: ignore[arg-type]
-        _Result(["b"], skipped=["a"]), _props("a", "b")
+        _FocusResult(["b"], skipped=["a"]), _props("a", "b")
     )
 
 
 def test_an_unmapped_focus_property_does_not_satisfy_the_focus():
-    assert not core._focus_satisfied(_Result(["a"]), _props("a", "b"))  # type: ignore[arg-type]
-    assert not core._focus_satisfied(_Result([]), _props("a"))  # type: ignore[arg-type]
+    assert not core._focus_satisfied(_FocusResult(["a"]), _props("a", "b"))  # type: ignore[arg-type]
+    assert not core._focus_satisfied(_FocusResult([]), _props("a"))  # type: ignore[arg-type]
 
 
 async def test_ranking_does_not_wait_for_pre_formalization(monkeypatch):

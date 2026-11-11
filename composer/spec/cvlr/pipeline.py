@@ -75,11 +75,14 @@ from composer.spec.cvlr.conf import (
     delivered_conf,
 )
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
-from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness, HarnessModule
+from composer.spec.artifacts import QUARANTINE_SUFFIX
+from composer.spec.cvlr.deliverable import UnitTree, clear_components, snapshot, write_unit
+from composer.spec.cvlr.harness import (
+    CvlrArtifactStore, GeneratedHarness, HarnessModule, render_mod_rs,
+)
 from composer.spec.cvlr.preflight import CvlrPreflight, gate_workspace, prepare_workspace
-from composer.spec.cvlr.patch import snapshot, write_component_patches, write_patch
 from composer.spec.cvlr.prover import Submission
-from composer.spec.cvlr.scaffold import ENVS_DIR, declare_unit_features
+from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR, declare_unit_features
 from composer.spec.cvlr.tree import SharedTree
 from composer.spec.cvlr.tuning import SUMMARIES, TuningFiles
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
@@ -101,6 +104,7 @@ from composer.spec.source.report.collect import (
 )
 from composer.spec.source.report.schema import (
     AppliedEditRecord, BuildEnvironment, ConfinedBuilds, SourceEditRecord, UnconfinedBuilds,
+    UnitDeliverable,
 )
 from composer.spec.source.munge.vfs_diff import diff_against_baseline
 from composer.spec.source.report_prover import make_run_link_fetcher
@@ -213,31 +217,16 @@ def _partial(outcome: _Outcome) -> GeneratedHarness | None:
             return None
 
 
-def _component_overlays(outcomes: list[_Outcome]) -> dict[str, dict[str, str]]:
-    """Harness-module name to the edited files of each unit that edited the program.
-
-    A curtailed partial is included: its verdicts are not claims, but without its edits the draft
-    the run kept cannot be rebuilt.
-    """
-    overlays: dict[str, dict[str, str]] = {}
-    for outcome in outcomes:
-        harness = _delivered(outcome) or _partial(outcome)
-        if harness is not None and harness.applied_edits:
-            overlays[HarnessModule(outcome.feat.slug).module] = harness.vfs
-    return overlays
-
-
 @dataclasses.dataclass
 class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
     deps: CvlrDeps
     build: SharedBuild
-    #: What :meth:`finalize` wrote, for the report to name.
-    patch: Path | None = dataclasses.field(default=None, init=False)
-    #: Harness-module name to the patch :meth:`finalize` wrote for that unit, relative to the
-    #: project. Empty until then, and empty when no unit edited the program.
-    component_patches: dict[str, Path] = dataclasses.field(default_factory=dict, init=False)
-    #: Component to the conf :meth:`finalize` wrote for it, relative to the project.
-    confs: dict[ComponentName, Path] = dataclasses.field(default_factory=dict, init=False)
+    #: Every unit the run declared, whether or not it delivers.
+    units: tuple[HarnessModule, ...]
+    #: Component to what :meth:`settle` wrote for it. Filled as units settle.
+    deliverables: dict[ComponentName, UnitDeliverable] = dataclasses.field(
+        default_factory=dict, init=False
+    )
 
     @override
     async def formalize(
@@ -347,7 +336,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
         in place, and it survives the working tree being deleted. Two units' overlays are not
         merged. The harness module is never in an overlay — it is a new file and this unit's own
         deliverable, not a modification of the program. The patch that applies to the project as
-        shipped is the one :meth:`finalize` wrote for the unit, named here by ``patch_path``.
+        shipped is the one :meth:`settle` wrote for the unit, named here by ``patch_path``.
         """
         # Delivered only. A curtailed partial's verdicts are unreliable by construction, and a
         # SourceEditRecord here means "these outcomes are claims about the modified code" — which
@@ -373,8 +362,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             harness = harness_of(outcome)
             if harness is None or not harness.applied_edits:
                 continue
-            stem = HarnessModule(outcome.feat.slug).module
-            patch = self.component_patches.get(stem)
+            deliverable = self.deliverables.get(outcome.feat.display_name)
             records.append(
                 SourceEditRecord(
                     component=outcome.feat.display_name,
@@ -384,63 +372,93 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
                     cumulative_diff=await asyncio.to_thread(
                         diff_against_baseline, harness.vfs, project
                     ),
-                    patch_path=None if patch is None else patch.as_posix(),
+                    patch_path=None if deliverable is None else deliverable.patch,
                 )
             )
         return records
 
     @override
-    async def finalize(
-        self, outcomes: list[ComponentOutcome[GeneratedHarness, SolanaComponentInstance]],
-        run: PipelineRun,
-    ) -> None:
-        root = Path(run.source.project_root)
-        await asyncio.to_thread(self._write_confs, outcomes, root)
-        self.patch = await asyncio.to_thread(write_patch, root)
-        self.component_patches = await asyncio.to_thread(
-            write_component_patches, root, _component_overlays(outcomes)
+    async def settle(self, outcome: _Outcome, run: PipelineRun) -> None:
+        """Write the unit's directory (:mod:`composer.spec.cvlr.deliverable`) for a delivered unit,
+        and for a curtailed partial: its verdicts are not claims, but without the patch the draft
+        the run kept cannot be rebuilt.
+
+        A failure is logged and the unit keeps its outcome: a deliverable that could not be written
+        is no reason to report a proof as lost.
+        """
+        harness = _delivered(outcome) or _partial(outcome)
+        if harness is None:
+            return
+        unit = HarnessModule(outcome.feat.slug)
+        try:
+            written = await asyncio.to_thread(
+                write_unit,
+                Path(run.source.project_root),
+                unit.module,
+                self._unit_tree(unit, harness),
+                self._delivered_conf(outcome, unit),
+            )
+        except Exception:
+            _log.exception("cvlr: failed to write the deliverable for %s", outcome.feat.display_name)
+            return
+        if written is not None:
+            self.deliverables[outcome.feat.display_name] = written
+
+    def _unit_files(self, unit: HarnessModule) -> tuple[Path, Path]:
+        """The harness module and the summaries file the run writes for ``unit``,
+        project-relative."""
+        package = self.deps.package_dir
+        return (
+            package / SPECS_DIR / unit.artifact_file,
+            package / ENVS_DIR / SUMMARIES.unit_composite(unit.module),
         )
 
-    def _write_confs(self, outcomes: list[_Outcome], root: Path) -> None:
-        """Write each delivered unit's conf, and the summaries file it names into the project.
+    def _unit_tree(self, unit: HarnessModule, harness: GeneratedHarness) -> UnitTree:
+        dropped: set[str] = set()
+        for each in self.units:
+            module, summaries = self._unit_files(each)
+            dropped |= {
+                module.as_posix(), f"{module.as_posix()}{QUARANTINE_SUFFIX}", summaries.as_posix()
+            }
+        module, summaries = self._unit_files(unit)
+        tuning = TuningFiles(
+            envs_dir=self.deps.package_dir / ENVS_DIR,
+            dialect=self.deps.preflight.scaffold.dialect,
+            unit=unit.module,
+        )
+        return UnitTree(
+            dropped=frozenset(dropped),
+            own={
+                module.as_posix(): harness.harness,
+                (self.deps.package_dir / SPECS_DIR / "mod.rs").as_posix(): render_mod_rs([unit]),
+                summaries.as_posix(): tuning.summaries_text(tuple(harness.summaries)),
+            },
+            edits=harness.vfs if harness.applied_edits else {},
+            manifest=(self.deps.package_dir / "Cargo.toml").as_posix(),
+            withdrawn=tuple(u.feature for u in self.units if u != unit),
+        )
 
-        The summaries file is otherwise only in the run's working tree. Written before the patches
-        are diffed, so both patches carry it.
-        """
-        confs: dict[HarnessModule, Conf] = {}
-        names: dict[HarnessModule, ComponentName] = {}
-        for outcome in outcomes:
-            harness = _delivered(outcome)
-            if harness is None or harness.settings is None:
-                continue
-            unit = HarnessModule(outcome.feat.slug)
-            TuningFiles(
-                envs_dir=root / self.deps.package_dir / ENVS_DIR,
-                dialect=self.deps.preflight.scaffold.dialect,
-                unit=unit.module,
-            ).write(tuple(harness.summaries))
-            confs[unit] = delivered_conf(
-                harness.settings,
-                features=(DEFAULT_FEATURE, unit.feature),
-                summaries=(ENVS_DIR / SUMMARIES.unit_composite(unit.module),),
-                rules=(
-                    SelectRules(tuple(harness.declared_rules))
-                    if harness.declared_rules
-                    else InheritRules()
-                ),
-                msg=f"{self.deps.preflight.package}: {outcome.feat.display_name}",
-            )
-            names[unit] = outcome.feat.display_name
-        written = self.deps.store.write_confs(confs)
-        self.confs = {names[unit]: path for unit, path in written.items()}
+    def _delivered_conf(self, outcome: _Outcome, unit: HarnessModule) -> Conf | None:
+        """The conf that reruns a delivered unit's rules from the package directory. ``None`` for
+        a curtailed partial, and for a result cached before its settings were recorded."""
+        harness = _delivered(outcome)
+        if harness is None or harness.settings is None:
+            return None
+        return delivered_conf(
+            harness.settings,
+            features=(DEFAULT_FEATURE, unit.feature),
+            summaries=(ENVS_DIR / SUMMARIES.unit_composite(unit.module),),
+            rules=(
+                SelectRules(tuple(harness.declared_rules))
+                if harness.declared_rules
+                else InheritRules()
+            ),
+            msg=f"{self.deps.preflight.package}: {outcome.feat.display_name}",
+        )
 
     @override
-    def deliverable_patch(self) -> str | None:
-        return self.patch.as_posix() if self.patch is not None else None
-
-    @override
-    def deliverable_confs(self) -> dict[ComponentName, str]:
-        return {name: path.as_posix() for name, path in self.confs.items()}
+    def unit_deliverables(self) -> dict[ComponentName, UnitDeliverable]:
+        return dict(self.deliverables)
 
     @override
     def build_environment(self) -> BuildEnvironment:
@@ -498,6 +516,7 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
         project = Path(run.source.project_root)
         modules = [HarnessModule(job.feat.slug) for job in jobs]
         manifest = self.deps.package_dir / "Cargo.toml"
+        await asyncio.to_thread(clear_components, project)
         declared = await asyncio.to_thread(self.deps.store.declare_modules, modules)
         added = await asyncio.to_thread(
             declare_unit_features, project / manifest, [m.feature for m in modules]
@@ -539,7 +558,7 @@ class CvlrStagedFormalizer(StagedFormalizer[GeneratedHarness, SolanaComponentIns
             submission_dir=submission_dir,
             warm_failure=failure,
         )
-        return CvlrFormalizer(GeneratedHarness, "prover", self.deps, build)
+        return CvlrFormalizer(GeneratedHarness, "prover", self.deps, build, tuple(modules))
 
 
 @dataclasses.dataclass

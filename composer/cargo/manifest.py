@@ -8,7 +8,7 @@ Parsing is ``tomlkit``'s for reading and editing alike, so what is validated is 
 :class:`ManifestEditor` keeps everything it does not change as it was, comments included.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -160,7 +160,7 @@ class ManifestConflict(ValueError):
 class ManifestEditor:
     """One ``Cargo.toml``, parsed once, to read and to add to.
 
-    Edits only add. A new table is built whole before it is placed, which is what keeps its keys
+    Edits add, except :meth:`remove`, which takes keys out of an existing table. A new table is built whole before it is placed, which is what keeps its keys
     together and its spacing like the tables around it.
     """
 
@@ -193,6 +193,15 @@ class ManifestEditor:
                         _insert(existing, table, key, value, note=note)
             case AddTable(table=table, body=body):
                 self._add_table(table, body, note=note)
+
+    def remove(self, table: TablePath, keys: Iterable[str]) -> None:
+        """Delete each of ``keys`` that ``table`` has. A missing table or key is no error."""
+        existing = self._find(table)
+        if existing is None:
+            return
+        for key in keys:
+            if key in existing:
+                del existing[key]
 
     def text(self) -> str:
         """The manifest with the edits, ending in as many newlines as it did."""

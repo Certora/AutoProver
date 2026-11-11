@@ -36,7 +36,7 @@ from composer.spec.source.report.schema import (
     CoverageStatus, CurtailedComponent, FeedbackSeverity, Finding, FormalizedProperty,
     GaveUpComponent, GroupStatus, HoistedClaim, Outcome, PropertyGroup, PropertyKey,
     ReportBackend, RuleFeedback, RuleName, RuleRef, RuleVerdict, RunFailure, SkippedClaim,
-    SourceEditRecord, SpecCoverageScore,
+    SourceEditRecord, SpecCoverageScore, UnitDeliverable,
 )
 
 
@@ -292,6 +292,7 @@ class ReportTemplateParams(TypedDict):
     coverage_scores: list[ScoreView]
     curtailed: list[CurtailedView]
     source_edits: list[SourceEditRecord]
+    unit_deliverables: dict[ComponentName, UnitDeliverable]
     #: ``None`` both for a backend that compiles nothing and for a report written before the field
     #: existed, so the template states only what it has rather than inferring confinement from
     #: silence.
@@ -579,6 +580,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         "coverage_scores": [_score_view(sc) for sc in report.coverage_scores],
         "curtailed": [_curtailed_view(c) for c in report.curtailed_components],
         "source_edits": report.source_edits,
+        "unit_deliverables": report.unit_deliverables,
         "build_environment": report.build_environment,
         "run_failure": report.run_failure,
     }

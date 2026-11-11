@@ -78,7 +78,7 @@ from composer.spec.source.report.collect import Abandoned, ReportComponentInput,
 from composer.spec.source.report.schema import (
     AutoProverReport, BuildEnvironment, ChosenShared, ComponentProperty, DeprioritizedProperty,
     HoistedClaim, Prioritization, PursuedProperty, RuleName, ReportBackend, RunScopedProperty,
-    SourceEditRecord, SynthesizedShared, VerificationArtifactRecord,
+    SourceEditRecord, SynthesizedShared, UnitDeliverable, VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
 from composer.pipeline.pinned import PinnedRun, write_pinned_run
@@ -248,17 +248,17 @@ class Formalizer[FormT: BackendResult, U: FeatureUnit](ABC):
         3 — and stderr on a machine nobody kept is not a record."""
         return None
 
-    def deliverable_patch(self) -> str | None:
-        """The patch, relative to the project root, that :meth:`finalize` wrote to carry the run's
-        harness into the project as shipped. Default None: a backend whose harness is a file beside
-        the program delivers it as that file."""
-        return None
-
-    def deliverable_confs(self) -> dict[ComponentName, str]:
-        """Component to the prover conf, relative to the project root, that :meth:`finalize` wrote
-        for rerunning its rules. Default empty: a backend whose submissions need nothing from the
-        run to be repeated ships no conf."""
+    def unit_deliverables(self) -> dict[ComponentName, UnitDeliverable]:
+        """Component to what :meth:`settle` wrote to rebuild its tree in the project as shipped.
+        Default empty: a backend whose harness is a file beside the program delivers it as that
+        file."""
         return {}
+
+    async def settle(self, outcome: ComponentOutcome[FormT, U], run: PipelineRun) -> None:
+        """Emit one component's deliverables as soon as its outcome is known, whether formalized
+        now or replayed from the cache, so a run that ends early keeps every component it finished.
+        Default: none."""
+        return None
 
     async def finalize(self, outcomes: list[ComponentOutcome[FormT, U]], run: PipelineRun) -> None:
         """Emit any backend-specific run-level artifacts from the full outcome set (prover:
@@ -919,7 +919,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             )
             for pa in collected.items
         ]
-        return ComponentOutcome(batch.feat, batch.props, outcome, persisted)
+        component = ComponentOutcome(batch.feat, batch.props, outcome, persisted)
+        await formalizer.settle(component, run)
+        return component
 
     settled = await asyncio.gather(*[_run(b) for b in batches], return_exceptions=True)
     outcomes = [o if isinstance(o, ComponentOutcome)
@@ -978,8 +980,7 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
                 run_scoped=run_scoped,
                 active_plugins=plugin_manager.plugin_manifest,
                 build_environment=formalizer.build_environment(),
-                deliverable_patch=formalizer.deliverable_patch(),
-                prover_confs=formalizer.deliverable_confs(),
+                unit_deliverables=formalizer.unit_deliverables(),
             )
         report = await run.runner(
             job=_report,

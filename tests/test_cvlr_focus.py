@@ -64,7 +64,7 @@ async def _focus_for(run_mode: RunMode, monkeypatch, tmp_path: Path) -> FocusPol
         build_sem=None,
         submission_dir=tmp_path,
     )
-    formalizer = CvlrFormalizer(object, "prover", deps, build)  # type: ignore[arg-type]
+    formalizer = CvlrFormalizer(object, "prover", deps, build, ())  # type: ignore[arg-type]
     run = SimpleNamespace(run_mode=run_mode, env=None)
     ctx = SimpleNamespace(abstract=lambda _ty: None)
     feat = SimpleNamespace(slug="vault_core")

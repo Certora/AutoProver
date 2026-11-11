@@ -260,9 +260,11 @@ class TuningFiles:
         drop one of the two.
         """
         self.envs_dir.mkdir(parents=True, exist_ok=True)
-        self.composite_path(SUMMARIES).write_text(
-            compose_env(SUMMARIES, unit_layer=render_layer(directives), dialect=self.dialect)
-        )
+        self.composite_path(SUMMARIES).write_text(self.summaries_text(directives))
+
+    def summaries_text(self, directives: tuple[SummaryDirective, ...]) -> str:
+        """What :meth:`write` puts in the summaries file this unit's conf names."""
+        return compose_env(SUMMARIES, unit_layer=render_layer(directives), dialect=self.dialect)
 
     def ensure_composite(self) -> None:
         """Create this unit's summaries composite when the conf's file is absent.

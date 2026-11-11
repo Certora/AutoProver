@@ -24,7 +24,7 @@ from composer.spec.source.report.grouping import (
 from composer.spec.source.report.schema import (
     AutoProverReport, BuildEnvironment, DeprioritizedProperty, HoistedClaim, Outcome,
     Prioritization, PropertyKey,
-    ReportBackend, RuleRef, RunScopedProperty, SourceEditRecord,
+    ReportBackend, RuleRef, RunScopedProperty, SourceEditRecord, UnitDeliverable,
     VerificationArtifactRecord,
 )
 
@@ -59,8 +59,7 @@ async def build_report[R: ReportableResult](
     run_scoped: list[RunScopedProperty] | None = None,
     active_plugins: list[str] | None = None,
     build_environment: BuildEnvironment | None = None,
-    deliverable_patch: str | None = None,
-    prover_confs: dict[ComponentName, str] | None = None,
+    unit_deliverables: dict[ComponentName, UnitDeliverable] | None = None,
 ) -> AutoProverReport:
     """Build and return the in-memory `AutoProverReport`. Persistence is the caller's job.
 
@@ -169,8 +168,7 @@ async def build_report[R: ReportableResult](
         curtailed_components=curtailed,
         source_edits=source_edits or [],
         build_environment=build_environment,
-        deliverable_patch=deliverable_patch,
-        prover_confs=prover_confs or {},
+        unit_deliverables=unit_deliverables or {},
         verification_artifacts=verification_artifacts or [],
         coverage=coverage,
         findings=synthesized.findings,

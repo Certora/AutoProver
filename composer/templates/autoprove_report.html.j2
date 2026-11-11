@@ -626,8 +626,8 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
   {%- if c.source_edits %}
   {%- set se = c.source_edits %}
   <p class="note">The draft was written against {{ se.applied_edits | length }} edit{{ "s" if se.applied_edits | length != 1 else "" }} to the program.
-  {%- if se.patch_path %} <code>{{ se.patch_path }}</code> applies them and the harness wiring to the
-  project as it was before the run; rename the draft over its module to build it.{% endif %}</p>
+  {%- if se.patch_path %} <code>{{ se.patch_path }}</code> applies them, the harness wiring and the
+  draft to the project as it was before the run.{% endif %}</p>
   <details>
     <summary>Edits and cumulative diff</summary>
     {%- for e in se.applied_edits %}
@@ -687,6 +687,28 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
     <pre class="diff">{{ se.cumulative_diff | diff_html }}</pre>
   </details>
   {%- endfor %}
+</section>
+{%- endif %}
+
+{%- if unit_deliverables %}
+<section class="gaps" id="deliverables">
+  <h2>Reproducing the proofs</h2>
+  <p>The harness lives inside the program, so each component's is delivered as a patch. Apply one
+  component's patch to the project as it was before the run: each one creates the same scaffold,
+  so a second does not apply on top of it. The files a patch adds are copied beside it, under
+  <code>files/</code>. Run the conf from the package directory.</p>
+  <table class="rules">
+    <thead><tr><th>Component</th><th>Patch</th><th>Conf</th></tr></thead>
+    <tbody>
+      {%- for name, d in unit_deliverables.items() %}
+      <tr>
+        <td>{{ name }}</td>
+        <td><code class="unit">{{ d.patch }}</code></td>
+        <td>{%- if d.conf %}<code class="unit">{{ d.conf }}</code>{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+      {%- endfor %}
+    </tbody>
+  </table>
 </section>
 {%- endif %}
 
