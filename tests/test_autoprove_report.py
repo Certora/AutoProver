@@ -1344,9 +1344,9 @@ def _evaluate_report() -> AutoProverReport:
     })
 
 
-def test_schema_3_2_round_trips():
+def test_schema_3_3_round_trips():
     report = _evaluate_report()
-    assert report.schema_version == "3.2"
+    assert report.schema_version == "3.3"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
@@ -1356,11 +1356,11 @@ def test_schema_3_2_round_trips():
     assert reloaded.properties[1].coverage.added_by_evaluator
 
 
-@pytest.mark.parametrize("version", ["3.0", "3.1"])
+@pytest.mark.parametrize("version", ["3.0", "3.1", "3.2"])
 def test_older_reports_still_load_and_render(version):
-    # Written before the 3.2 fields existed: none of them is present in the JSON.
+    # Written before the 3.2 and 3.3 fields existed: none of them is present in the JSON.
     data = _mini_report().model_dump(mode="json")
-    for key in ("rule_feedback", "conf_coverage", "coverage_scores"):
+    for key in ("rule_feedback", "conf_coverage", "coverage_scores", "run_failure"):
         del data[key]
     for prop in data["properties"]:
         del prop["coverage"]

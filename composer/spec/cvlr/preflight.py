@@ -21,6 +21,7 @@ from pathlib import Path
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
+from composer.pipeline.refusal import RunRefusal
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.crates import CvlrSources, Divergence
@@ -36,7 +37,7 @@ from composer.spec.cvlr.tree import ProjectSource
 _log = logging.getLogger(__name__)
 
 
-class PreflightFailed(RuntimeError):
+class PreflightFailed(RunRefusal):
     """The project cannot be prepared for verification, so the run stops.
 
     Separate from :class:`composer.rustapp.adapter.PreflightFailed`, which says the same thing

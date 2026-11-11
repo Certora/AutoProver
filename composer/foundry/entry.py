@@ -17,6 +17,7 @@ from the non-source spec modules).
 
 import argparse
 import logging
+import pathlib
 import uuid
 from contextlib import asynccontextmanager
 from typing import Annotated, AsyncIterator, Awaitable, Callable, Protocol, cast
@@ -31,11 +32,13 @@ from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
 from composer.spec.context import SourceFields
 
 from composer.foundry.artifacts import FoundryArtifactStore
+from composer.spec.gen_types import FOUNDRY_REPORT_DIR, under_project
 from composer.foundry.env import build_foundry_env
 from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, backend
 )
 from composer.pipeline.cli import cli_pipeline, user_ns, AtExit
+from composer.pipeline.run_failure import reporting_run_failure
 from composer.pipeline.run_mode import RunMode
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
@@ -196,4 +199,9 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
             )
             return await cont(env, f_backend)
 
-    yield runner
+    with reporting_run_failure(
+        under_project(pathlib.Path(args.project_root).resolve(), FOUNDRY_REPORT_DIR),
+        contract_name=args.main_contract.split(":", 1)[-1],
+        backend="foundry", run_mode=RunMode.COMPREHENSIVE.value,
+    ):
+        yield runner
