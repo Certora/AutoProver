@@ -61,11 +61,11 @@ You need the EVM pipeline's prerequisites from [README.md](README.md#prerequisit
 
 The harness is a Rust module inside the verified crate, under `<pkg>/src/certora/`, with the rules in `specs/`. It is wired into the crate's `Cargo.toml` (a `certora` feature, and one `certora_unit_<module>` feature per component) and `lib.rs`. Everything else goes under `certora/cvlr/` in the project root: the report, the property-to-rule mapping and the per-rule reports.
 
-Each component with a harness gets a directory, `certora/cvlr/components/<module>/`, named by the report's `unit_deliverables`:
+Each component with a harness gets a directory, `certora/cvlr/components/<module>/`, and each delivered component a conf, `certora/cvlr/confs/<module>.conf`. The report's `unit_deliverables` names both for each component:
 
 - `<module>.patch` is that component's tree: the scaffold, its harness module, its cargo feature and summaries file, and its edits to the program. `git apply` it on the project as it was before the run, then build with `--features "certora certora_unit_<module>"`. Apply one component's patch to that clean project. Each patch creates the scaffold, so it does not apply on top of another component's patch.
-- `<module>.conf` reruns the component's rules, with the cargo features, loop settings and summaries it was verified with. After applying the patch, run it from the package directory: `cd <pkg> && certoraSolanaProver <path to the conf>`. The conf has no build script, so the Prover CLI builds with `cargo certora-sbf` in that directory. Its summaries path is relative to the package for the same reason.
 - `files/` has a copy of each file the patch adds, at its project-relative path, for reading the harness without applying anything. Edits to files the project already has are in the patch only.
+- `confs/<module>.conf` reruns the component's rules, with the cargo features, loop settings and summaries it was verified with. After applying the patch, run it from the package directory: `cd <pkg> && certoraSolanaProver <path to the conf>`. The conf has no build script, so the Prover CLI builds with `cargo certora-sbf` in that directory. Its summaries path is relative to the package for the same reason.
 
 `source_edits[].cumulative_diff` is a component's edits to the program alone, against the tree the run left behind. It is the record of what changed in the program; the file to apply is the patch, which `source_edits[].patch_path` also names. A component the run budget cut short is not in `source_edits`. If its partial edited the program, its `curtailed_components[]` entry carries the same record. A curtailed component's directory rebuilds its unvalidated draft and has no conf.
 

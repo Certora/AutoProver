@@ -3,12 +3,16 @@
 A CVLR harness is not a file beside the program: it is a module inside the crate, wired in through
 the crate's ``Cargo.toml`` and ``lib.rs``, with tuning files next to it. A consumer that takes only
 :data:`~composer.spec.gen_types.CVLR_DELIVERABLE_DIR` gets none of that, so every unit with a
-harness gets a directory under :data:`COMPONENTS_DIR`::
+harness gets a directory under :data:`COMPONENTS_DIR`, and a delivered unit a conf under
+:data:`CONFS_DIR`::
 
-    <module>/
+    components/<module>/
       <module>.patch   # git apply to the project as shipped: this unit's proved tree
-      <module>.conf    # rerun its rules, from the package directory (delivered units only)
       files/<path>     # each file the patch adds, as a file
+    confs/<module>.conf  # rerun its rules, from the package directory
+
+The conf is not in the unit's directory because consumers recognize a CVLR conf by
+``cvlr/confs/<module>.conf``; the report's ``unit_deliverables`` is what pairs the two.
 
 The patch is the unit's tree diffed against a baseline, a copy of the project taken before
 preflight writes anything and kept under :data:`BASELINE_DIR`. Diffing against it rather than
@@ -43,6 +47,8 @@ from composer.spec.source.report.schema import UnitDeliverable
 BASELINE_DIR = CVLR_INTERNAL_DIR / "baseline"
 #: One directory per unit. Under :data:`CVLR_DELIVERABLE_DIR`, so no unit's patch diffs another in.
 COMPONENTS_DIR = CVLR_DELIVERABLE_DIR / "components"
+#: One prover conf per delivered unit, for rerunning its rules.
+CONFS_DIR = CVLR_DELIVERABLE_DIR / "confs"
 #: Where, inside a unit's directory, the files its patch adds are copied.
 FILES_DIR = "files"
 
@@ -146,14 +152,16 @@ class UnitTree:
 
 
 def clear_components(root: Path) -> None:
-    """Remove every unit's directory, so a unit this run does not deliver keeps none from an
-    earlier run."""
+    """Remove every unit's directory and conf, so a unit this run does not deliver keeps none from
+    an earlier run."""
     shutil.rmtree(root / COMPONENTS_DIR, ignore_errors=True)
+    shutil.rmtree(root / CONFS_DIR, ignore_errors=True)
 
 
 def write_unit(root: Path, module: str, tree: UnitTree, conf: Conf | None) -> UnitDeliverable | None:
-    """Write ``module``'s directory under :data:`COMPONENTS_DIR`, replacing any already there, and
-    return its paths relative to ``root``. ``None``, writing nothing, when there is no baseline to
+    """Write ``module``'s directory under :data:`COMPONENTS_DIR` and, given a ``conf``, its conf
+    under :data:`CONFS_DIR`, replacing any already there, and return their paths relative to
+    ``root``. ``None``, writing nothing, when there is no baseline to
     diff against.
 
     Raises :class:`ValueError` when ``module`` is not a harness module name.
@@ -177,11 +185,12 @@ def write_unit(root: Path, module: str, tree: UnitTree, conf: Conf | None) -> Un
         copy = directory / FILES_DIR / path
         copy.parent.mkdir(parents=True, exist_ok=True)
         copy.write_text(text, encoding="utf-8")
-    conf_path: Path | None = None
+    conf_path = root / CONFS_DIR / f"{module}.conf"
+    conf_path.unlink(missing_ok=True)
     if conf is not None:
-        conf_path = directory / f"{module}.conf"
+        conf_path.parent.mkdir(parents=True, exist_ok=True)
         conf_path.write_text(dump_conf(conf))
     return UnitDeliverable(
         patch=patch.relative_to(root).as_posix(),
-        conf=None if conf_path is None else conf_path.relative_to(root).as_posix(),
+        conf=None if conf is None else conf_path.relative_to(root).as_posix(),
     )

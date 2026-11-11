@@ -1,5 +1,5 @@
-"""Each unit's deliverable directory: a patch of that unit's tree alone, its conf, and the files the
-patch adds."""
+"""Each unit's deliverables: a directory with a patch of that unit's tree alone and the files the
+patch adds, and its conf beside the other units'."""
 
 import json
 import shutil
@@ -14,6 +14,7 @@ from composer.spec.cvlr.conf import PLATFORM_TOOLS_VERSION, OptimisticLoop, Tuna
 from composer.spec.cvlr.deliverable import (
     BASELINE_DIR,
     COMPONENTS_DIR,
+    CONFS_DIR,
     FILES_DIR,
     UnitTree,
     clear_components,
@@ -218,15 +219,21 @@ def test_rewriting_a_unit_replaces_its_directory_and_clearing_removes_them_all(t
     root = _project(tmp_path / "proj")
     snapshot(root)
     _scaffold(root)
-    stale = root / COMPONENTS_DIR / "vault" / "vault.conf"
+    stale = root / COMPONENTS_DIR / "vault" / "stale.txt"
     stale.parent.mkdir(parents=True)
-    stale.write_text("{}\n")
+    stale.write_text("stale\n")
+    stale_conf = root / CONFS_DIR / "vault.conf"
+    stale_conf.parent.mkdir(parents=True)
+    stale_conf.write_text("{}\n")
 
     write_unit(root, "vault", _tree("vault"), None)
     assert not stale.exists()
+    assert not stale_conf.exists()
 
+    write_unit(root, "fees", _tree("fees"), {"msg": "fees"})
     clear_components(root)
     assert not (root / COMPONENTS_DIR).exists()
+    assert not (root / CONFS_DIR).exists()
 
 
 def _formalizer(root: Path):
@@ -301,7 +308,7 @@ async def test_settling_writes_every_unit_with_a_harness_and_the_report_names_th
     assert sorted(deliverables) == ["Cut", "Fees", "Vault & Fees"]
     vault = deliverables["Vault & Fees"]
     assert vault.patch == (COMPONENTS_DIR / "vault" / "vault.patch").as_posix()
-    assert vault.conf == (COMPONENTS_DIR / "vault" / "vault.conf").as_posix()
+    assert vault.conf == (CONFS_DIR / "vault.conf").as_posix()
     assert deliverables["Fees"].conf is None
     assert deliverables["Cut"].conf is None
     assert not (root / COMPONENTS_DIR / "lost").exists()
