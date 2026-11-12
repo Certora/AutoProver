@@ -35,7 +35,7 @@ import subprocess
 from dataclasses import dataclass
 
 from composer.spec.system_model import BaseApplication
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, ScopedPropertyFormulation
 
 _log = logging.getLogger(__name__)
 
@@ -123,11 +123,18 @@ def load_pinned_run[App: BaseApplication](
             raise ValueError(f"{path}: {slug!r} must map to a list of properties")
         if not props:
             raise ValueError(f"{path}: {slug!r} has no properties; drop the key instead")
-        properties[slug] = [PropertyFormulation.model_validate(p) for p in props]
+        properties[slug] = [_property(p) for p in props]
     if not properties:
         raise ValueError(f"{path}: no components pinned")
 
     return PinnedRun(analysis, properties, raw.get("target_commit"), path)
+
+
+def _property(raw: object) -> PropertyFormulation:
+    """A pinned property, keeping a prioritized run's narrowing when the fixture recorded one."""
+    if isinstance(raw, dict) and "checked_at" in raw:
+        return ScopedPropertyFormulation.model_validate(raw)
+    return PropertyFormulation.model_validate(raw)
 
 
 def write_pinned_run(

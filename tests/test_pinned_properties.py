@@ -24,7 +24,7 @@ from composer.spec.solana.model import (
     SolanaInstruction,
     SolanaProgram,
 )
-from composer.spec.types import PropertyFormulation
+from composer.spec.types import PropertyFormulation, ScopedPropertyFormulation
 
 PROPS = [
     {"sort": "safety_property", "title": "manager_must_sign",
@@ -309,3 +309,17 @@ def test_the_component_the_gate_should_pin_is_present() -> None:
 
     assert "admin_fee_configuration" in pin.properties
     assert len(pin.properties["admin_fee_configuration"]) == 23
+
+
+def test_a_prioritized_runs_narrowing_survives_the_round_trip(tmp_path: pathlib.Path) -> None:
+    """A prioritized run pins after narrowing; a replay that dropped ``checked_at`` would check the
+    property at every entry point it names, a wider claim than the pinned run made."""
+    scoped = ScopedPropertyFormulation(
+        sort="invariant", title="scoped", description="holds at Initialize and Deposit",
+        checked_at=["Initialize"], excluded=["Deposit"],
+    )
+    path = tmp_path / "pin.json"
+    write_pinned_run(path, _analysis(), {"pool_initialization": [scoped]}, tmp_path)
+    back = load_pinned_run(path, SolanaApplication).properties["pool_initialization"]
+    assert back == [scoped]
+    assert isinstance(back[0], ScopedPropertyFormulation)
