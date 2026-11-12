@@ -148,6 +148,8 @@ class _VerdictsParams(TypedDict):
     property_failures: list[str]
     #: Timed out, errored, failed sanity, or were skipped.
     unfinished: list[str]
+    #: Runs in a row with a timed-out rule, ending with this one; 0 leaves the note out.
+    timeout_streak: int
     stamped: bool
 
 
@@ -448,6 +450,19 @@ class VerifyDeps:
 DOMINANT_SHARE = 40
 
 
+#: Runs in a row with a timed-out rule before the verdict note says to stop restating: the first
+#: draft and two restatements. In the vault tutorial's cloud run (5bb6e2c7) the author restated the
+#: same handler-level rules through ten more timed-out runs.
+TIMEOUT_STREAK_WARNING = 3
+
+
+def timeout_streak(status: Mapping[str, StatusCodes], previous: LastVerdicts | None) -> int:
+    """How many runs in a row, ending with this one, had a rule time out."""
+    if "TIMEOUT" not in status.values():
+        return 0
+    return (previous.timeout_streak if previous is not None else 0) + 1
+
+
 def symptoms(report: ProverReport) -> set[Symptom]:
     """What in ``report`` a recipe can be pushed on."""
     found: set[Symptom] = {
@@ -474,8 +489,8 @@ def symptoms(report: ProverReport) -> set[Symptom]:
         # Read back after a benchmark to move DOMINANT_SHARE: which timeouts were told, and at
         # what share, against whether a stand-in for that function then cleared them.
         _log.info(
-            "cvlr timeout statistics: rule=%s phase=%s top_share=%s dominant=%s",
-            path.pprint(), stats.phase.render(), stats.top_share, dominant,
+            "cvlr timeout statistics: rule=%s top_share=%s dominant=%s: %s",
+            path.pprint(), stats.top_share, dominant, stats.render(),
         )
     if report.halted:
         found.add(JobSymptom(job="halted"))
@@ -501,10 +516,12 @@ def _verdicts_note(
     *,
     symptoms: Collection[Symptom] = (),
     stamped: bool,
+    timeout_streak: int = 0,
 ) -> str:
     """The author's notes on this run's verdicts, or an empty string when there are none."""
     ordered = sorted(incomplete.items())
     return _Verdicts.bind({
+        "timeout_streak": timeout_streak if timeout_streak >= TIMEOUT_STREAK_WARNING else 0,
         "marked_verified": [name for name in unexcused if status[name] == "VERIFIED"],
         "incomplete": [{"name": name, "assertion": stopped.assertion} for name, stopped in ordered],
         "recipes": pushed_recipes(symptoms),
@@ -881,6 +898,7 @@ class VerifyRules(
                     unverdicted=unverdicted,
                     draft=checks_digest(self.state, tuning_history(self.state)),
                     rules=tuple(sorted(declared)),
+                    timeout_streak=timeout_streak(status, self.state.get("last_verdicts")),
                 )
                 stamped = accounted_for(last, expected)
                 lines = [report.result_str]
@@ -893,6 +911,7 @@ class VerifyRules(
                     unverdicted,
                     symptoms=symptoms(report),
                     stamped=stamped,
+                    timeout_streak=last.timeout_streak,
                 )
                 if note:
                     lines.append(note)

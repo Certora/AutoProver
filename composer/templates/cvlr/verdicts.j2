@@ -22,6 +22,13 @@ the rule, or mark it with expect_rule_failure and say why the failure is real.
 {%- if unfinished %}
 {{ unfinished | join(", ") }} did not reach a property verdict. A timeout, an error, a sanity failure, or a skip is not a
 finding, and expect_rule_failure does not account for one.
+{% endif %}
+{%- if timeout_streak %}
+{{ timeout_streak }} runs in a row have had a rule that timed out, and each of those ran to the job's time limit whatever
+else it checked. Do not restate the timed-out rules again: renaming, splitting or dropping a conjunct does not
+change what a rule runs over. Before the next submission, change what is under the rule (a stand-in for the function or
+operation the statistics name, recipe K8), drop a handler-level rule whose fact a rule on the program's accounting
+function already proves and say how the two connect, or skip the property and cite these timeouts.
 {% endif %}{%- for recipe in recipes %}
 {{ recipe }}
 {% endfor %}

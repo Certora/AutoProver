@@ -42,10 +42,13 @@ from composer.spec.cvlr.verify import (
     CexAnalysis,
     _CaptureCallbacks,
     DOMINANT_SHARE,
+    TIMEOUT_STREAK_WARNING,
     _verdicts_note,
     symptoms,
+    timeout_streak,
     unaccounted,
 )
+from composer.spec.cvlr.state import LastVerdicts
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 FIXTURES = Path(__file__).parent / "data" / "solana_cex"
@@ -367,3 +370,27 @@ def test_the_cvlr_author_reads_the_prover_report_whole() -> None:
     handler = CexAnalysis(store=_store(), model=model).handler({"messages": []})  # type: ignore[arg-type]
     assert isinstance(handler, TrivialFanoutCexHandler)
     assert handler.summarization_threshold is None
+
+
+def _last(streak: int) -> LastVerdicts:
+    return LastVerdicts(status={}, incomplete=[], unverdicted=[], draft="d", timeout_streak=streak)
+
+
+def test_the_timeout_streak_counts_runs_in_a_row_with_a_timed_out_rule():
+    timed_out: dict[str, StatusCodes] = {"a": "VERIFIED", "b": "TIMEOUT"}
+    assert timeout_streak(timed_out, None) == 1
+    assert timeout_streak(timed_out, _last(2)) == 3
+
+
+def test_a_run_with_no_timed_out_rule_ends_the_streak():
+    assert timeout_streak({"a": "VERIFIED", "b": "VIOLATED"}, _last(5)) == 0
+
+
+def test_the_note_tells_the_author_to_stop_restating_only_once_the_streak_is_long():
+    status: dict[str, StatusCodes] = {"b": "TIMEOUT"}
+
+    def note(streak: int) -> str:
+        return _verdicts_note(status, {}, ["b"], [], stamped=False, timeout_streak=streak)
+
+    assert "Do not restate" not in note(TIMEOUT_STREAK_WARNING - 1)
+    assert f"{TIMEOUT_STREAK_WARNING} runs in a row" in note(TIMEOUT_STREAK_WARNING)

@@ -182,6 +182,9 @@ class LastVerdicts(BaseModel):
     #: them, which is also what a checkpoint from before this field loads as.
     #: An empty tuple means the section was present and named no rules.
     rules: tuple[str, ...] | None = None
+    #: How many runs in a row, ending with this one, had a rule come back
+    #: ``TIMEOUT``. A job with one runs to its time limit.
+    timeout_streak: int = 0
 
 
 class CvlrGenerationExtra(CheckingExtra, VersionedHistory):
