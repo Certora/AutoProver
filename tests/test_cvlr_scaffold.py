@@ -596,15 +596,16 @@ def test_a_reference_set_crate_the_project_does_not_name_is_not_a_refusal(tmp_pa
     # pinned core and chain crate and names neither specialization; the scaffold adds them. A gate
     # that read "not in the graph" as a disagreement would refuse every project it is meant to set
     # up, starting with the fresh one.
+    chain = SOLANA_V2.chain_crate.version
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
-        '[dependencies]\ncvlr = "=0.6.2"\ncvlr-solana = "=0.5.1"\nsolana-program',
+        f'[dependencies]\ncvlr = "=0.6.2"\ncvlr-solana = "={chain}"\nsolana-program',
     )
     plan, _ = _plan(
         tmp_path,
         manifest=manifest,
         workspace_manifest=manifest,
-        cvlr_resolved={"cvlr": "0.6.2", "cvlr-solana": "0.5.1"},
+        cvlr_resolved={"cvlr": "0.6.2", "cvlr-solana": chain},
     )
     assert not plan.blocked
     (dependencies,) = [a for a in _additions(plan) if a.table == ("dependencies",)]

@@ -9,9 +9,12 @@ blocker*), and so did every current Foundation program.
 This document covers what changed, in CVLR and in AutoProver, and what is left: one Prover fix
 for token CPIs.
 
-## Where things stand (2026-10-27)
+## Where things stand (2026-11-12)
 
-Every CVLR release AutoProver pins, for all three Solana generations. All are on crates.io.
+Every CVLR release AutoProver has pinned, for all three Solana generations. All are on crates.io.
+The pins are now the last row's patch releases. Each one changes only how `cvlr_new_account_info`
+reads `is_signer`, `is_writable` and `executable`. The old `byte != 0` read added 2^3 paths per
+nondet account, which timed out handler-level rules.
 
 | Release | Repository | Branch, PR | Release commit | State |
 |---|---|---|---|---|
@@ -19,6 +22,7 @@ Every CVLR release AutoProver pins, for all three Solana generations. All are on
 | `cvlr-solana` 0.5.1, 3 crates (SDK 2) | `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | `2e53877`: `main` (API docs #21, `rt` fix) released | merged (`a9898ba`, a merge commit); tags pushed; `v0.5` moved up to it; **published** 2026-10-27 |
 | `cvlr-solana` 0.6.0, 3 crates (SDK 3) | `Certora/cvlr-solana` | `eric/release-0.6.0` (the port, C1 and C2, on 0.5.1), [#24](https://github.com/Certora/cvlr-solana/pull/24) | `13bb381` | merged (`e92bccd`, a merge commit); tags pushed; **published** 2026-10-27 |
 | `cvlr-solana` 0.4.6, 1 crate (`solana-program` 1.18) | `Certora/cvlr-solana` | `v0.4`, [#23](https://github.com/Certora/cvlr-solana/pull/23) (`cvlr-solana-1-18-support.md` G3) | `b1988a4` | merged; tagged `cvlr-solana-v0.4.6`; **published** 2026-10-27 |
+| `cvlr-solana` 0.6.1, 0.5.2, 0.4.7 (one per line above) | `Certora/cvlr-solana` | [#25](https://github.com/Certora/cvlr-solana/pull/25) on `main`, backported in [#26](https://github.com/Certora/cvlr-solana/pull/26) (`v0.4`) and [#27](https://github.com/Certora/cvlr-solana/pull/27) (`v0.5`); released by [#30](https://github.com/Certora/cvlr-solana/pull/30), [#29](https://github.com/Certora/cvlr-solana/pull/29), [#28](https://github.com/Certora/cvlr-solana/pull/28) | merges `73bdcd9`, `75addcd`, `6d968f4`: account flags read without branching | tags pushed; **published** 2026-11-12; these are the versions AutoProver pins |
 
 Each release commit is what `cargo-release` would produce: versions, CHANGELOG and README. Each
 passes the repository's CI checks and `cargo publish --dry-run --workspace`. `cvlr-solana` PRs are

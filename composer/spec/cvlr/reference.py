@@ -309,19 +309,20 @@ class ChainReference:
 #: with ``#[rule]`` recording each rule in the ``.cvlr_rules`` section.
 _CORE = CrateRelease("cvlr", "0.6.2")
 
-#: ``cvlr-solana`` 0.5.1: 0.5.0 with the public API documented and the ``rt`` feature fixed. The
+#: ``cvlr-solana`` 0.5.2: 0.5.0 with the public API documented, the ``rt`` feature fixed, and
+#: account flags read without branching (each nondet account used to add 2^3 paths to a rule). The
 #: three crates of that repository are released together, at one version.
 SOLANA_V2 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.5.1"),
+    chain_crate=CrateRelease("cvlr-solana", "0.5.2"),
     models=(
         ProgramModel(
-            CrateRelease("cvlr-solana-stake", "0.5.1"), "the stake program"
+            CrateRelease("cvlr-solana-stake", "0.5.2"), "the stake program"
         ),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
         # summaries. Split out of the chain crate, and released with it.
         ProgramModel(
-            CrateRelease("cvlr-spl-token", "0.5.1"), "the SPL token program"
+            CrateRelease("cvlr-spl-token", "0.5.2"), "the SPL token program"
         ),
     ),
     forks=(ANCHOR_FORK, FIXED_FORK),
@@ -377,14 +378,14 @@ SOLANA_V2 = ChainReference(
     ),
 )
 
-#: ``cvlr-solana`` 0.6.0, the SDK 3 line: 0.5.1 ported to the split ``solana-*`` 3.x crates, with
+#: ``cvlr-solana`` 0.6.1, the SDK 3 line: 0.5.2 ported to the split ``solana-*`` 3.x crates, with
 #: both program models.
 SOLANA_V3 = replace(
     SOLANA_V2,
-    chain_crate=CrateRelease("cvlr-solana", "0.6.0"),
+    chain_crate=CrateRelease("cvlr-solana", "0.6.1"),
     models=(
-        ProgramModel(CrateRelease("cvlr-solana-stake", "0.6.0"), "the stake program"),
-        ProgramModel(CrateRelease("cvlr-spl-token", "0.6.0"), "the SPL token program"),
+        ProgramModel(CrateRelease("cvlr-solana-stake", "0.6.1"), "the stake program"),
+        ProgramModel(CrateRelease("cvlr-spl-token", "0.6.1"), "the SPL token program"),
     ),
     platform=PlatformGeneration(
         # No `solana-program` at all: every platform type is in its own crate.
@@ -438,12 +439,12 @@ SOLANA_V3 = replace(
     ),
 )
 
-#: ``cvlr-solana`` 0.4.6, the release for ``solana-program`` 1.18 (branch ``v0.4``): 0.4.5 with
-#: the public API documented and the ``rt`` feature fixed. It requires ``cvlr-*`` ``>=0.4, <1``,
+#: ``cvlr-solana`` 0.4.7, the release for ``solana-program`` 1.18 (branch ``v0.4``): 0.4.5 with
+#: the public API documented, the ``rt`` feature fixed, and account flags read without branching. It requires ``cvlr-*`` ``>=0.4, <1``,
 #: so it resolves onto the shared 0.6.2 core with one copy of each core crate.
 SOLANA_V1_18 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.4.6"),
+    chain_crate=CrateRelease("cvlr-solana", "0.4.7"),
     # None. The 0.4 line has no stake model, and its token helpers are in the chain crate. It has
     # no SPL Token CPI model either: a token CPI reaches ``invoke_signed_unchecked``, which the
     # core summaries make opaque.

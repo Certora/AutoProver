@@ -626,12 +626,17 @@ def test_a_public_module_keeps_its_own_path():
 
 
 def test_a_checkout_of_one_release_line_reaches_only_its_generation():
-    """Patched into the other generation's probe, a cvlr-solana 0.6.0 checkout fails at cargo."""
+    """Patched into the other generation's probe, an SDK 3 cvlr-solana checkout fails at cargo."""
     from composer.scripts.cvlr_api_docs import sources_for
     from composer.spec.cvlr.reference import SOLANA_V2, SOLANA_V3
 
     root = Path("/home/eric/src/cvlr-solana")
-    sdk3 = LocalCheckout(root=root, crate_dir=root / "cvlr-solana", version="0.6.0", revision="x")
+    sdk3 = LocalCheckout(
+        root=root,
+        crate_dir=root / "cvlr-solana",
+        version=SOLANA_V3.chain_crate.version,
+        revision="x",
+    )
     core = _checkout("cvlr-asserts")
     sources = {"cvlr-solana": sdk3, "cvlr-asserts": core}
     assert sources_for(SOLANA_V3, sources) == sources

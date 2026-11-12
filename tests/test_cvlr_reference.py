@@ -46,14 +46,14 @@ def test_the_dependency_block_carries_the_platform_too():
     # gate for a missing import rather than for anything about CVLR.
     block = ref.SOLANA_V2.cargo_dependencies()
     assert 'cvlr = "=0.6.2"' in block
-    assert 'cvlr-solana = "=0.5.1"' in block
+    assert 'cvlr-solana = "=0.5.2"' in block
     assert 'solana-program = "2.2"' in block
 
 
 def test_the_solana_choice_records_the_platform_it_implies():
     # cvlr-solana 0.5.x requires solana-program 2.2, and each Solana generation has its own
     # AccountInfo. Changing the chain crate without changing this label pairs the wrong types.
-    assert (ref.SOLANA_V2.chain_crate.name, ref.SOLANA_V2.chain_crate.version) == ("cvlr-solana", "0.5.1")
+    assert (ref.SOLANA_V2.chain_crate.name, ref.SOLANA_V2.chain_crate.version) == ("cvlr-solana", "0.5.2")
     assert "2.x" in ref.SOLANA_V2.platform.label
 
 
@@ -61,7 +61,7 @@ def test_the_spl_token_model_is_part_of_the_reference_set():
     # Released with the chain crate it was split from, at its version. Leaving it off the
     # reference set would keep the scaffold from pinning it.
     (token,) = [m for m in ref.SOLANA_V2.models if m.program == "the SPL token program"]
-    assert (token.release.name, token.release.version) == ("cvlr-spl-token", "0.5.1")
+    assert (token.release.name, token.release.version) == ("cvlr-spl-token", "0.5.2")
     assert ref.SOLANA_V2.unpublished == ()
 
 
@@ -161,7 +161,7 @@ def test_the_1_18_line_shares_the_core_and_has_no_program_models():
     The 0.4 line has no stake model and no separate token crate, so there is nothing to withhold."""
     v1 = ref.SOLANA_V1_18
     assert v1.core == ref.SOLANA_V2.core
-    assert (v1.chain_crate.name, v1.chain_crate.version) == ("cvlr-solana", "0.4.6")
+    assert (v1.chain_crate.name, v1.chain_crate.version) == ("cvlr-solana", "0.4.7")
     assert v1.models == ()
     assert {c.name for c in v1.scaffold_crates()} == {"cvlr", "cvlr-solana"}
     assert 'solana-program = "1.18"' in v1.cargo_dependencies()
@@ -181,7 +181,7 @@ def test_the_sdk3_line_is_released_whole():
     """Chain crate and models together, at one version, and on the same core as 2.x."""
     v3 = ref.SOLANA_V3
     assert {(c.name, c.version) for c in (v3.chain_crate, *(m.release for m in v3.models))} == {
-        ("cvlr-solana", "0.6.0"), ("cvlr-solana-stake", "0.6.0"), ("cvlr-spl-token", "0.6.0")
+        ("cvlr-solana", "0.6.1"), ("cvlr-solana-stake", "0.6.1"), ("cvlr-spl-token", "0.6.1")
     }
     assert v3.core == ref.SOLANA_V2.core
     assert [w.name for w in v3.platform.witnesses] == ["solana-account-info"]
