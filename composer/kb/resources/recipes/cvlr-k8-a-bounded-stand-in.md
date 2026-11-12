@@ -64,6 +64,25 @@ the output of `swap_output` crosses `pool_fee_tier`, but uses only the rate it r
 for `pool_fee_tier` returning a `nondet()` rate within the bounds its code enforces lets that rule
 run on the real `swap_output`. The names are illustrative.
 
+**An exact stand-in for a multiply-divide helper.** A `mul_div(a, b, c)` that widens to `u128`,
+multiplies, divides and narrows back is a bitvector product, a division and two overflow branches on
+every call. When the properties need its exact result (rounding, conversion amounts), a `nondet()`
+stand-in loses them. Compute it over `NativeInt` instead, with the operation built for this:
+
+```rust,ignore
+pub fn mul_div_floor(a: u64, b: u64, c: u64) -> VaultResult<u64> {
+    let r = NativeInt::from(a).muldiv(NativeInt::from(b), NativeInt::from(c));
+    if r.is_u64() { Ok(u64::from(r)) } else { Err(VaultError::MathOverflow) }
+}
+```
+
+`muldiv_ceil` rounds up. Both return 0 for a zero divisor where the program returns an error, so
+the stand-in is exact only for a non-zero divisor: say so, or add the program's own zero check.
+Prove it equal to the program's function in a rule of its own, against the original body the editor
+extracted, and cite that rule in the commentary. This is what the hand-written specification of a
+share vault does, and its handler-level rules verify on it under that project's own prover
+settings.
+
 Three things follow from a stand-in:
 
 * **It replaces the function for every rule in this unit.** The munge is gated on the unit's
