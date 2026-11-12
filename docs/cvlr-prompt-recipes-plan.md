@@ -507,7 +507,7 @@ Against the criteria above:
 * **New reimplementation.** None. Each run made one source edit, both extracting the same decision
   statement in the liquidation handler.
 * **New skips.** "After" skipped two properties "before" covered. One is individual deleveraging's
-  eligibility, and it is the case K8 should have prevented. "Before" wrote one rule per liquidation
+  eligibility, and K8 could have prevented it (§8.2: "before" also skipped it in the second pair). "Before" wrote one rule per liquidation
   reason. All six timed out, with the 256-bit division at 92 to 96 % of their branching. It then
   fixed the obligation's deposited value at one, and all six verified. "After" wrote one rule
   matching on every reason, which never reached the solver. It got no function share to act on,
@@ -530,6 +530,40 @@ What it says about the provisional parts:
 
 Both authors' threads were summarized during the run, so a thread's latest checkpoint holds only the
 history since its last summary. The counts above merge every checkpoint.
+
+### 8.2 The second pair (2026-11-11)
+
+The same unit and setup. "After" is the branch with §8.1's changes: K8's two new shapes and the
+stuck-rule totals.
+
+| | Before | After |
+|---|---|---|
+| Rules delivered | 33 (31 good, 2 marked) | 33 (32 good, 1 marked) |
+| Properties covered / skipped | 22 / 11 | 20 / 13 |
+| Wall clock, spend (log estimate) | 2h 49m, about $29 | 5h 11m, about $33 |
+| Prover jobs (halted) | 7 (0) | 9 (2), plus one lost to an error |
+| Recipes pushed | none | K4 once, K8 four times, K9 twice |
+| Recipes fetched: author / judges | none / none | K14, K7, K3, K13, K4 / K9 |
+
+The pair reverses §8.1: "before" covered more. Across the two pairs, "before" delivered 25 and 33
+rules covering 21 and 22 properties, and "after" 42 and 33 covering 24 and 20. No difference in
+outcome shows through the variation between runs; the change's measured effect is the smaller
+standing prompt and the recipes reaching the author.
+
+* **Individual deleveraging was skipped by both sides.** So run 5's "before" covering it was
+  variation, not something the old prompt did reliably. "After" did use K8's new divisor move: it
+  fixed the deposited value at one, noting that with any positive value both rules timed out. For
+  this property it then asked the editor to expose the private function that makes the decision,
+  and the editor refused: a visibility-only wrapper is not one of its kinds. That is a gap in the
+  editor, not in the recipes.
+* **The stuck-rule totals reached the author** as intended, for example "205 memory updates, the
+  longest sequence 202" on a socialize-loss rule whose statistics named no function.
+* **"After"'s first job halted in both pairs, and "before"'s in neither.** The first drafts were
+  the same size (29 and 30 rules here), so it is which rules went in, not how many. Two pairs are
+  not enough to say the standing prompt's change caused it. Each halt costs about 30 minutes, and
+  it is most of the wall-clock difference.
+* One author task stopped on a `ReadTimeout` and resumed from its checkpoint. The Prover job it was
+  waiting on was lost and resubmitted. The call that timed out was not identified.
 
 ## 9. Open questions
 
