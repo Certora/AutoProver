@@ -2,12 +2,16 @@
 (`output_config.format`), never a forced tool call: the Claude 5.5 family 400s on
 `tool_choice: "tool"`/`"any"`. Checked on the request payload, no network."""
 
+import re
+from pathlib import Path
+
 import pytest
 from langchain_anthropic import ChatAnthropic
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableBinding, RunnableSequence
 from pydantic import BaseModel
 
+import composer
 from composer.llm.structured import with_structured_output
 
 
@@ -35,3 +39,22 @@ def test_structured_output_uses_output_config_not_forced_tool_choice(model, thin
     fmt = payload["output_config"]["format"]
     assert fmt["type"] == "json_schema"
     assert fmt["schema"]["properties"]["value"]["type"] == "integer"
+
+
+def test_no_caller_binds_a_schema_except_through_the_helper():
+    """A direct ``llm.with_structured_output(schema)`` defaults to a forced tool call, which the
+    Claude 5.5 family rejects with a 400; property hoisting shipped one and died on every
+    comprehensive multi-unit run. Fakes in ``composer/testing`` define the method, not call it."""
+    root = Path(composer.__file__).parent
+    helper = root / "llm" / "structured.py"
+    callers = [
+        f"{path.relative_to(root)}:{n}"
+        for path in root.rglob("*.py")
+        if path != helper
+        for n, line in enumerate(path.read_text().splitlines(), 1)
+        if _DIRECT_CALL.search(line) and not line.lstrip().startswith("#")
+    ]
+    assert callers == []
+
+
+_DIRECT_CALL = re.compile(r"\.with_structured_output\(")

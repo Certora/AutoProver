@@ -34,6 +34,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from composer.llm.structured import with_structured_output
 from composer.spec.types import ComponentName, PropertyFormulation, PropertyKey, PropertyTitle
 from composer.templates.loader import load_jinja_template
 
@@ -273,7 +274,7 @@ async def plan_hoist(
     user = load_jinja_template(
         "property_hoisting_prompt.j2", contract_name=contract_name, candidates=candidates
     )
-    bound = llm.with_structured_output(HoistPlan)
+    bound = with_structured_output(llm, HoistPlan)
 
     messages: list[BaseMessage] = [SystemMessage(system), HumanMessage(user)]
     problem: str | None = None
