@@ -78,7 +78,27 @@ services:
     #   export HOST_UID=$(id -u) HOST_GID=$(id -g)
     user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     environment:
+      # Required with either LLM backend: AutoSetup's own LLM calls always use the
+      # Anthropic API.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?ANTHROPIC_API_KEY must be set in your shell}
+      # Claude on Amazon Bedrock (README, "Claude on Amazon Bedrock"). Each entry with
+      # no value is copied from your shell when set there and left unset otherwise,
+      # so the container sees only the AWS variables your shell exports. The
+      # credentials must be static keys, exported session credentials or a Bedrock
+      # API key (AWS_BEARER_TOKEN_BEDROCK or ANTHROPIC_AWS_API_KEY): ~/.aws is not
+      # mounted, so profiles and SSO sessions are not visible in the container.
+      AUTOPROVER_LLM_BACKEND:
+      AWS_REGION:
+      AWS_DEFAULT_REGION:
+      AWS_ACCESS_KEY_ID:
+      AWS_SECRET_ACCESS_KEY:
+      AWS_SESSION_TOKEN:
+      AWS_BEARER_TOKEN_BEDROCK:
+      ANTHROPIC_AWS_API_KEY:
+      ANTHROPIC_BEDROCK_MANTLE_BASE_URL:
+      AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES:
+      AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES:
+      AUTOPROVER_BEDROCK_MAX_TOKENS:
       # Cloud Certora Prover credentials. CERTORAKEY drives certoraRun job
       # submission; the CERTORA_* OAuth tokens are used to fetch job results.
       # When the OAuth tokens are unset, they're left empty so certora_login

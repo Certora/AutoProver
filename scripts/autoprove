@@ -35,8 +35,22 @@ Options:
   --               Forward all subsequent args untouched to the entry point.
 
 Required environment:
-  ANTHROPIC_API_KEY   Anthropic API key (drives the LLM pipeline).
+  ANTHROPIC_API_KEY   Anthropic API key (drives the LLM pipeline; AutoSetup's
+                      LLM steps use it even when Claude runs on Bedrock).
   CERTORAKEY          Certora cloud prover key (certoraRun job submission).
+
+Claude on Amazon Bedrock (optional):
+  AUTOPROVER_LLM_BACKEND=bedrock   Send the pipeline's Claude traffic to Bedrock.
+  AWS_REGION                       Bedrock region (or AWS_DEFAULT_REGION).
+  AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY[, AWS_SESSION_TOKEN]
+                                   Credentials; ~/.aws is not mounted, so export
+                                   them (e.g. aws configure export-credentials
+                                   --format env).
+  AWS_BEARER_TOKEN_BEDROCK (or ANTHROPIC_AWS_API_KEY)
+                                   A Bedrock API key, instead of the AWS
+                                   credentials above.
+  ANTHROPIC_BEDROCK_MANTLE_BASE_URL
+                                   Endpoint to use instead of the regional one.
 
 Cloud credentials:
   Run `certora-cloud login` once (install via `uv tool install certora-cloud`); it
@@ -88,6 +102,18 @@ DOC_RAW="${POSITIONAL[2]:-}"   # optional; empty -> the design doc is auto-disco
 # ---------------------------------------------------------------------------
 
 [[ -n "${ANTHROPIC_API_KEY:-}" ]] || { echo "[autoprove] error: ANTHROPIC_API_KEY is not set in your shell. Export it and rerun." >&2; exit 1; }
+# With AUTOPROVER_LLM_BACKEND=bedrock the pipeline needs a region and AWS credentials or a
+# Bedrock API key in the container. Checked here so a missing one fails before an image build, not mid-run.
+# Matches how composer reads the variable: case-insensitive, surrounding blanks ignored.
+LLM_BACKEND="$(printf '%s' "${AUTOPROVER_LLM_BACKEND:-}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+if [[ "$LLM_BACKEND" == bedrock ]]; then
+  [[ -n "${AWS_REGION:-}${AWS_DEFAULT_REGION:-}" ]] || { echo "[autoprove] error: AUTOPROVER_LLM_BACKEND=bedrock needs AWS_REGION (or AWS_DEFAULT_REGION). Export it and rerun." >&2; exit 1; }
+  # A Bedrock API key replaces the AWS credentials: the Anthropic SDK sends it instead of
+  # signing with SigV4 when either variable is set.
+  if [[ -z "${AWS_BEARER_TOKEN_BEDROCK:-}${ANTHROPIC_AWS_API_KEY:-}" ]]; then
+    [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]] || { echo "[autoprove] error: AUTOPROVER_LLM_BACKEND=bedrock needs AWS credentials exported in your shell (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN), or a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK or ANTHROPIC_AWS_API_KEY). For a profile or SSO session: eval \"\$(aws configure export-credentials --format env)\"" >&2; exit 1; }
+  fi
+fi
 [[ -n "${CERTORAKEY:-}" ]]       || { echo "[autoprove] error: CERTORAKEY is not set in your shell. Export it and rerun (cloud prover is required)." >&2; exit 1; }
 
 # Cloud job results are fetched with the credentials `certora-cloud login` writes to

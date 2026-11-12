@@ -12,7 +12,10 @@ Vectors covered:
   env scrub, /proc/<ppid>/environ, host file outside workdir, TCP (socket),
   IMDS, io_uring socket setup (seccomp bypass), AF_NETLINK/AF_VSOCK, signal to
   parent (Landlock scope), abstract Unix socket to outside listener (scope),
-  cargo credentials.toml under the shared cargo home (narrow RO grant).
+  cargo credentials.toml under the shared cargo home (narrow RO grant), and the
+  AWS credential sources a job's role is reached through: every ``AWS_*`` env var,
+  the ECS/Batch container credential endpoint (169.254.170.2) and the EC2 metadata
+  endpoint over IPv4 and IPv6.
 
 Runnable without the full Crucible stack (std-only program, no crates, no network
 needed to compile). Skipped unless `rustc` and a working launcher are present. The
@@ -57,6 +60,16 @@ _needs = pytest.mark.skipif(
 )
 
 _ENV_CANARY = "ENVCANARY-a1b2c3"
+# Planted the way an ECS/Batch task or an assumed role exposes them to AutoProver. The
+# values are fake; the probe only reports which names it can see.
+_AWS_ENV_CANARIES = {
+    "AWS_ACCESS_KEY_ID": "aws-access-key-CANARY",
+    "AWS_SECRET_ACCESS_KEY": "aws-secret-CANARY",
+    "AWS_SESSION_TOKEN": "aws-session-CANARY",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/CANARY",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN": "aws-container-token-CANARY",
+    "AWS_REGION": "us-east-1",
+}
 _HOSTFILE_CANARY = "HOSTFILECANARY-d4e5f6"
 _CREDS_CANARY = "crates-io-TOKEN-CANARY-xyz"
 _ABSTRACT_PAYLOAD = b"ABSTRACT-UNIX-LEAK-OK"
@@ -143,6 +156,21 @@ fn main() {
         Err(_) => "denied".to_string(),
     });
 
+    // Any AWS_* name at all: the credentials themselves, or the container-credential
+    // URI and token that let a process fetch them from the ECS/Batch agent.
+    probe("aws_env", &{
+        let mut names: Vec<String> = std::env::vars_os()
+            .filter_map(|(k, _)| k.into_string().ok())
+            .filter(|k| k.starts_with("AWS_"))
+            .collect();
+        names.sort();
+        if names.is_empty() {
+            "denied".to_string()
+        } else {
+            format!("LEAK:{}", names.join(","))
+        }
+    });
+
     probe("procenv", &match fs::read_to_string(format!("/proc/{}/environ", parent_pid)) {
         Ok(s) if s.contains("ENVCANARY") => "LEAK:found-canary".to_string(),
         Ok(_) => "LEAK:proc-readable".to_string(),
@@ -156,6 +184,9 @@ fn main() {
 
     probe("net_ext", &net("1.1.1.1:80"));
     probe("imds", &net("169.254.169.254:80"));
+    probe("imds_v6", &net("[fd00:ec2::254]:80"));
+    // ECS/Batch container credential endpoint: serves the job role's credentials.
+    probe("ecs_creds", &net("169.254.170.2:80"));
 
     // Classic seccomp bypass: create sockets via io_uring without socket(2).
     probe("iouring", &{
@@ -244,6 +275,8 @@ def scenario(tmp_path, monkeypatch):
     # Plant the secret in *this* process's env; run-confined must scrub it, and the
     # /proc/<ppid>/environ read (ppid = this pytest process) must be denied.
     monkeypatch.setenv("ANTHROPIC_API_KEY", _ENV_CANARY)
+    for name, value in _AWS_ENV_CANARIES.items():
+        monkeypatch.setenv(name, value)
     return workdir, outside, creds
 
 
@@ -307,6 +340,9 @@ async def test_all_escapes_denied(scenario):
         "hostfile",
         "net_ext",
         "imds",
+        "imds_v6",
+        "ecs_creds",
+        "aws_env",
         "iouring",
         "netlink",
         "vsock",
@@ -359,6 +395,9 @@ async def test_control_unconfined_would_leak(scenario):
     )
     assert res.exit_code == 0, res.stderr
     assert (workdir / "probe_env.txt").read_text().strip() == f"LEAK:{_ENV_CANARY}"
+    aws_env = (workdir / "probe_aws_env.txt").read_text().strip()
+    assert aws_env.startswith("LEAK:"), aws_env
+    assert set(_AWS_ENV_CANARIES) <= set(aws_env.removeprefix("LEAK:").split(",")), aws_env
     assert _HOSTFILE_CANARY in (workdir / "probe_hostfile.txt").read_text()
     assert "LEAK" in (workdir / "probe_cargo_creds.txt").read_text()
     # io_uring and abstract unix should also work unconfined (control for those fixes).

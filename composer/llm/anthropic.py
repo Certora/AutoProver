@@ -5,18 +5,27 @@ from typing import Literal, TypeGuard, Any, TYPE_CHECKING, override, cast
 from io import BytesIO
 from dataclasses import dataclass, field
 import asyncio
+import base64
 from functools import cache
 
 import anthropic
 import httpx
 
-from composer.input.files import UploaderBase, ContentRenderer
+from composer.input.files import (
+    UploaderBase, ContentRenderer, FileUploader, FileData, Document, TextDocument,
+    InMemoryBytesFile, InMemoryTextFile,
+)
 from composer.input.types import ModelConfiguration
 from composer.llm.provider import (
     ProviderServiceBase, ProviderSpec, compaction_threshold, payload_error_type,
     standard_callbacks
 )
 from composer.llm.pricing import PriceProvider, price_provider_for
+from composer.llm.bedrock import (
+    MAX_TOKENS_ENV_VAR, llm_backend, bedrock_region, max_document_bytes, max_output_tokens,
+    max_request_bytes, aws_error_type, is_transient_error_type,
+)
+from composer.llm.bedrock_inline import INLINE_MEDIA_TYPES, base64_size, omitted_document_block
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
@@ -160,9 +169,66 @@ class AnthropicRenderer:
         self, basename: str, contents: bytes, mime: str,
         *, cache_level: CacheLevel = CacheLevel.NONE
     ) -> dict:
+        # ``title`` names the document to the model, and lets a request that has to drop
+        # the block for size say which document it dropped.
+        to_ret: dict[str, Any] = {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": mime,
+                "data": base64.b64encode(contents).decode("ascii"),
+            },
+            "title": basename,
+        }
+        if (ttl := level_to_ttl(cache_level)) is not None:
+            to_ret["cache_control"] = {
+                "type": "ephemeral",
+                "ttl": ttl
+            }
+        return to_ret
+
+
+@dataclass
+class BedrockRenderer(AnthropicRenderer):
+    """Content blocks for Claude on Bedrock: binary documents are inlined, within the
+    per-document byte budget. A document that cannot be inlined, being over budget or of a
+    type a ``document`` block does not accept, becomes a text block that names it."""
+
+    max_document_bytes: int = field(default_factory=max_document_bytes)
+
+    @override
+    def file_block(
+        self, file_id: str, *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
         raise NotImplementedError(
-            "Anthropic content is uploaded to the Files API, not inlined."
+            "Bedrock has no Files API; binary content is inlined by BedrockFileUploader "
+            "as an InMemoryBytesFile."
         )
+
+    @override
+    def inline_file_block(
+        self, basename: str, contents: bytes, mime: str,
+        *, cache_level: CacheLevel = CacheLevel.NONE
+    ) -> dict:
+        cache_control = (
+            {"type": "ephemeral", "ttl": ttl}
+            if (ttl := level_to_ttl(cache_level)) is not None else None
+        )
+        if mime not in INLINE_MEDIA_TYPES:
+            return omitted_document_block(
+                basename,
+                f"Claude on Bedrock accepts inline documents of type "
+                f"{', '.join(sorted(INLINE_MEDIA_TYPES))} only, and this one is {mime}",
+                cache_control=cache_control,
+            )
+        if (size := base64_size(len(contents))) > self.max_document_bytes:
+            return omitted_document_block(
+                basename,
+                f"it is {size} bytes as base64, over the {self.max_document_bytes}-byte "
+                "per-document budget for Claude on Bedrock",
+                cache_control=cache_control,
+            )
+        return super().inline_file_block(basename, contents, mime, cache_level=cache_level)
 
 @cache
 def _get_service():
@@ -202,12 +268,67 @@ class AnthropicFileUploader(UploaderBase):
 
     @staticmethod
     def lazy() -> "AnthropicFileUploader":
-        """A lazily-seeding uploader — no account file-list until first upload."""
+        """A lazily-seeding uploader — no account file-list until first upload. The Files
+        API exists only on the Anthropic API, so this refuses to build a first-party
+        client when the Bedrock backend is selected; use :func:`uploader_for_backend`."""
+        if llm_backend() != "anthropic":
+            raise ValueError(
+                "The Anthropic Files API uploader is only available with the anthropic "
+                "LLM backend"
+            )
         return AnthropicFileUploader(client=anthropic.AsyncAnthropic())
+
+
+@dataclass
+class BedrockFileUploader(UploaderBase):
+    """``FileUploader`` for Claude on Bedrock, which has no Files API. Text that would be
+    uploaded stays in the prompt instead, and binary documents become
+    :class:`InMemoryBytesFile`, sent as base64 in every request that carries them. The
+    document keeps its bytes whatever its size; :class:`BedrockRenderer` decides, when it is
+    rendered, whether they fit the budget."""
+
+    renderer: ContentRenderer = field(default_factory=BedrockRenderer)
+
+    @override
+    async def _upload_bytes(
+        self, crc_basename: str, file_data: bytes, mime: str
+    ) -> str:
+        raise NotImplementedError("Bedrock has no Files API.")
+
+    @override
+    async def _binary_document(self, data: FileData) -> Document:
+        return InMemoryBytesFile(
+            basename=data.basename,
+            contents=data.raw_data,
+            mime=data.mime,
+            renderer=self.renderer,
+        )
+
+    @override
+    async def _text_upload_document(self, data: FileData) -> TextDocument:
+        # There is no upload to make it smaller than the prompt, so the very-large-text
+        # case this exists for collapses into the ordinary one.
+        return InMemoryTextFile(
+            basename=data.basename,
+            string_contents=data.raw_data.decode("utf-8"),
+            renderer=self.renderer,
+        )
+
+
+def uploader_for_backend() -> FileUploader:
+    """The Claude uploader for the selected LLM backend. Never builds a first-party
+    Anthropic client when the Bedrock backend is selected."""
+    match llm_backend():
+        case "anthropic":
+            return AnthropicFileUploader.lazy()
+        case "bedrock":
+            return BedrockFileUploader()
 
 
 # --- ModelProvider ---------------------------------------------------------
 
+
+INTERLEAVED_THINKING_BETA = "interleaved-thinking-2025-05-14"
 
 RETRYABLE_ERROR_TYPES = frozenset({
     "overloaded_error",  # 529
@@ -224,7 +345,7 @@ class AnthropicService(ProviderServiceBase):
         from graphcore.tools.memory import anthropic_async_memory_tool
         super().__init__(
             anthropic_async_memory_tool,
-            AnthropicFileUploader.lazy
+            uploader_for_backend
         )
 
     @override
@@ -249,8 +370,16 @@ class AnthropicService(ProviderServiceBase):
         failures (``APITimeoutError`` subclasses ``APIConnectionError``), a
         transport failure mid-stream, and an error the server reports inside a
         stream. 400-class request errors are deterministic — an over-long prompt
-        fails identically on every attempt — and are deliberately excluded."""
-        if isinstance(exc, anthropic.APIConnectionError):
+        fails identically on every attempt — and are deliberately excluded.
+
+        On Bedrock the same statuses carry the same meaning (429 throttling and model
+        not ready, 500, 503, 408 model timeout; 400 validation, 403 access denied and
+        404 unknown model are deterministic). Bedrock's exception names for transient
+        errors count as well (``composer.llm.bedrock.TRANSIENT_ERROR_TYPES``, read from the
+        payload or, failing that, the ``x-amzn-errortype`` header), and so
+        does any ``RetryableError``, which is how a passing failure to fetch the AWS
+        credentials that sign a request reaches here once the SDK's retries are spent."""
+        if isinstance(exc, (anthropic.APIConnectionError, anthropic.RetryableError)):
             return True
         # The SDK does not wrap streamed-body failures as APIConnectionError: a dropped stream
         # raises httpx.RemoteProtocolError, a stalled one httpx.ReadTimeout. Both are transient.
@@ -263,7 +392,13 @@ class AnthropicService(ProviderServiceBase):
             # 200 response, and the SDK builds the exception from that response — so the
             # status code carries none of the meaning and the class stays the base
             # APIStatusError. The transient/deterministic split lives in the payload.
-            return payload_error_type(exc.body) in RETRYABLE_ERROR_TYPES
+            # AWS front ends may name the exception in a response header, either instead of
+            # an ``error.type`` in the body or next to a generic one (``permission_error``
+            # for an expired token), so a transient name in either place counts.
+            error_types = (payload_error_type(exc.body), aws_error_type(exc.response.headers))
+            return any(
+                t in RETRYABLE_ERROR_TYPES or is_transient_error_type(t) for t in error_types
+            )
         return False
 
 @dataclass
@@ -298,6 +433,15 @@ class AnthropicModelProvider:
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
 
+        # Read first so a bad AUTOPROVER_LLM_BACKEND (or, for Bedrock, a missing region or a
+        # malformed request budget) fails here, when the model is built, rather than on its
+        # first request.
+        backend = llm_backend()
+        bedrock_settings = (
+            (bedrock_region(), max_request_bytes(), max_output_tokens())
+            if backend == "bedrock" else None
+        )
+
         opts = self.options
         thinking: dict[str, Any] | None
         if opts.thinking_tokens is None or disable_thinking:
@@ -311,9 +455,13 @@ class AnthropicModelProvider:
         else:
             thinking = {"type": "enabled", "budget_tokens": opts.thinking_tokens}
 
-        betas = ["files-api-2025-04-14"]
+        betas: list[str] = []
+        if backend == "anthropic":
+            # Documents uploaded through the Files API are referenced by id, which needs
+            # this beta. Bedrock has no Files API, so its requests never carry such a block.
+            betas.append("files-api-2025-04-14")
         if self.features.interleaved_thinking and opts.interleaved_thinking:
-            betas.append("interleaved-thinking-2025-05-14")
+            betas.append(INTERLEAVED_THINKING_BETA)
         if opts.memory_tool:
             betas.append("context-management-2025-06-27")
 
@@ -321,6 +469,44 @@ class AnthropicModelProvider:
         model_kwargs = (
             {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl is not None else {}
         )
+
+        callbacks = standard_callbacks(
+            self.price_provider, long_cache=cache_level == CacheLevel.LONG
+        )
+        if bedrock_settings is not None:
+            from composer.llm.bedrock_chat import ChatAnthropicBedrock
+            aws_region, request_budget, token_cap = bedrock_settings
+            # Bedrock counts max_tokens against the token quota when it admits a request, so
+            # it is capped here; see composer.llm.bedrock.DEFAULT_MAX_TOKENS.
+            max_tokens = min(opts.tokens, token_cap)
+            # With interleaved thinking the budget covers every thinking block of a turn and
+            # may exceed max_tokens; without it, one thinking block must fit below max_tokens.
+            budget = (thinking or {}).get("budget_tokens")
+            interleaved = INTERLEAVED_THINKING_BETA in betas
+            if budget is not None and not interleaved and budget >= max_tokens:
+                raise ValueError(
+                    f"The thinking budget of {budget} tokens must be below max_tokens, which "
+                    f"on Bedrock is {max_tokens}, the smaller of --tokens ({opts.tokens}) and "
+                    f"{MAX_TOKENS_ENV_VAR} ({token_cap}); lower --thinking-tokens or raise "
+                    "the other two"
+                )
+            return ChatAnthropicBedrock(
+                aws_region=aws_region,
+                max_request_bytes=request_budget,
+                model_name=self.model_name,
+                max_tokens_to_sample=max_tokens,
+                # The same transport settings as the Anthropic API path below; see there.
+                timeout=300.0,
+                streaming=True,
+                max_retries=8,
+                stop=None,
+                # None rather than an empty list: with no betas the request goes to the
+                # plain messages endpoint instead of the beta one.
+                betas=betas or None,
+                thinking=thinking,
+                model_kwargs=model_kwargs,
+                callbacks=callbacks,
+            )
 
         return ChatAnthropic(
             model_name=self.model_name,
@@ -340,9 +526,7 @@ class AnthropicModelProvider:
             betas=betas,
             thinking=thinking,
             model_kwargs=model_kwargs,
-            callbacks=standard_callbacks(
-                self.price_provider, long_cache=cache_level == CacheLevel.LONG
-            ),
+            callbacks=callbacks,
         )
 
 ANTHROPIC_SPEC = ProviderSpec(
