@@ -25,7 +25,7 @@ from composer.spec import cvlr_research
 from composer.rag.types import ManualRef, ManualSectionHit
 from composer.cargo.doctest import Passed
 from composer.scripts.cvlr_api_docs import CrateDocs, ExampleGate, build_manifest, gated_sources
-from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING, get_tools
+from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING, ApiCorpus, get_tools
 from composer.ui.tool_display import CommonTools
 
 _DATA = Path(__file__).parent / "data" / "cvlr_rustdoc"
@@ -333,6 +333,44 @@ async def test_a_crate_the_run_does_not_pin_is_shown_at_the_version_the_corpus_h
     tools = _scoped(two_generations, {"cvlr-solana": "0.5.1"})
     out = await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_assert_le"})
     assert "cvlr-asserts > 0.6.1" in out
+
+
+@pytest.mark.asyncio
+async def test_a_patch_release_reads_the_corpus_of_an_earlier_patch_on_its_line(two_generations):
+    """A corpus seeded at 0.6.0 serves a run on 0.6.1: a patch release adds nothing the corpus
+    would have to describe, so the corpus need not be re-seeded for one."""
+    tools = _scoped(two_generations, {"cvlr-solana": "0.6.1"})
+    out = await tools["cvlr_api_surface"].ainvoke({"crate": "cvlr-solana"})
+    assert "cvlr-solana > 0.6.0" in out
+    out = await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_deserialize_nondet_accounts"})
+    assert "cvlr-solana > 0.6.0" in out
+    assert "0.5.1" not in out
+
+
+@pytest.mark.parametrize(
+    ("row", "pin", "admitted"),
+    [
+        ("0.5.1", "0.5.1", True),
+        ("0.5.1", "0.5.2", True),
+        # A later release may describe items this build lacks.
+        ("0.5.2", "0.5.1", False),
+        # Another line is another generation.
+        ("0.5.1", "0.6.1", False),
+        ("0.6.0", "0.5.2", False),
+        ("1.2.0", "1.4.1", True),
+        ("1.2.0", "2.0.0", False),
+        # 0.0.x has no compatible releases.
+        ("0.0.3", "0.0.4", False),
+        # Anything that is not plain major.minor.patch matches only itself.
+        ("0.5.1-rc.1", "0.5.2", False),
+        ("0.5.1-rc.1", "0.5.1-rc.1", True),
+    ],
+)
+def test_which_releases_a_pin_admits(row, pin, admitted):
+    corpus = ApiCorpus(db=object(), pinned={"cvlr-solana": pin})  # type: ignore[arg-type]
+    assert corpus.admits(["root", "cvlr-solana", row, "item"]) is admitted
+    # A crate the run does not pin is admitted whatever its version.
+    assert corpus.admits(["root", "cvlr-asserts", row, "item"])
 
 
 def test_the_answer_cache_is_kept_apart_per_platform_generation():

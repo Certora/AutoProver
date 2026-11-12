@@ -88,7 +88,7 @@ def corpus_tools(
     """The search tools over both CVLR corpora, querying with ``model``.
 
     ``pinned`` maps each CVLR crate the run builds to its version. The API corpus holds every
-    platform generation's releases and shows only these
+    platform generation's releases and shows only these, or an earlier patch release of one
     (:class:`composer.tools.cvlr_api_rag.ApiCorpus`).
 
     A corpus that cannot be opened contributes no tools rather than failing the run: search is an
