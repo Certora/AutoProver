@@ -60,7 +60,7 @@ class TextNativeFS(NativeFS):
 class RAGDBOptions(Protocol):
     # database options
     rag_db: Annotated[str, Arg(
-        help="Database connection string for CVL manual search",
+        help="CVL manual corpus for manual search: a PostgreSQL connection URI or a corpus file path",
         default=RAGDB_DEFAULT_CONNECTION
     )]
 

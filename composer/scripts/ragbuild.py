@@ -24,8 +24,9 @@ import pathlib
 from bs4 import BeautifulSoup, Tag
 from bs4.element import NavigableString
 import spacy
+from composer.rag.base import ComposerRAGDB
 from composer.rag.db import (
-    get_rag_db, DEFAULT_CONNECTION, SANITY_DEFAULT_CONNECTION, CVLR_DEFAULT_CONNECTION,
+    parse_rag_location, rag_build_context, DEFAULT_CONNECTION, SANITY_DEFAULT_CONNECTION, CVLR_DEFAULT_CONNECTION,
 )
 from composer.rag.types import BlockChunk
 from composer.rag.text import get_code_refs
@@ -289,21 +290,24 @@ async def main() -> None:
     target.add_argument('--corpus', choices=sorted(NAMED_CORPORA), default='cvl',
         help='Named corpus to ingest into (default: cvl).')
     target.add_argument('--output', '-o',
-        help='Ingest into this ChromaDB directory or PostgreSQL connection string '
-             'instead of a named corpus.')
+        help='Ingest into this PostgreSQL connection URI or corpus file path instead of a '
+             'named corpus. A corpus file is rebuilt from scratch.')
     args = parser.parse_args()
 
-    file_entries = [{"file": (path:=pathlib.Path(f)), "section": path.stem} for f in args.files]
-
     output = args.output or NAMED_CORPORA[args.corpus]
-    db = await get_rag_db(output, get_model())
+    async with rag_build_context(parse_rag_location(output), get_model()) as db:
+        await _ingest_html(db, [pathlib.Path(f) for f in args.files])
 
+    logger.info(f"RAG database created at {output}")
+
+
+async def _ingest_html(db: ComposerRAGDB, files: list[pathlib.Path]) -> None:
     buffer: list[BlockChunk] = []
 
-    for entry in file_entries:
-        section_label_ctx.set(entry["section"])
+    for path in files:
+        section_label_ctx.set(path.stem)
 
-        with open(entry["file"], "r") as f:
+        with open(path, "r") as f:
             manual = f.read()
 
         m = BeautifulSoup(manual, "html.parser")
@@ -354,8 +358,6 @@ async def main() -> None:
 
     if buffer:
         await db.add_chunks_batch(buffer)
-
-    logger.info(f"RAG database created at {output}")
 
 if __name__ == "__main__":
     import asyncio

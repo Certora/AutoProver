@@ -1,11 +1,9 @@
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, cast, Any, LiteralString, override, TYPE_CHECKING
+from typing import AsyncIterator, Any, LiteralString, cast, override, TYPE_CHECKING
 from dataclasses import dataclass
-import asyncio
 import logging
-import threading
-from abc import ABC, abstractmethod
 import os
+import pathlib
 
 from psycopg_pool.pool_async import AsyncConnectionPool
 from psycopg.cursor_async import AsyncCursor
@@ -17,21 +15,16 @@ if TYPE_CHECKING:
 else:
     SentenceTransformer = "SentenceTransformer"
 
-from numpy import ndarray
-
+from composer.rag.base import ComposerRAGDB
+from composer.rag.sqlite import SqliteRAGDatabase
 from composer.rag.types import ManualRef, BlockChunk, ManualSectionHit
 from composer.rag.text import code_ref_tag
-from composer.rag.models import ENCODE_LOCK
 
-import sqlite3
-
-if TYPE_CHECKING:
-    import chromadb
-
-try:
-    import chromadb
-except ImportError:
-    pass
+__all__ = [
+    "ComposerRAGDB", "PostgreSQLRAGDatabase", "SqliteRAGDatabase", "BlockChunk",
+    "PostgresRag", "SqliteRag", "RagLocation", "parse_rag_location",
+    "open_rag_db", "rag_context", "rag_build_context", "get_rag_db",
+]
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +39,30 @@ import threading
 from tqdm import tqdm as _tqdm_cls
 _tqdm_cls.set_lock(threading.RLock())
 
+
+@dataclass(frozen=True)
+class PostgresRag:
+    """A corpus in a schema of a PostgreSQL database; the role in ``conninfo`` selects it."""
+    conninfo: str
+
+
+@dataclass(frozen=True)
+class SqliteRag:
+    """A corpus in a single file (see :mod:`composer.rag.sqlite`)."""
+    path: pathlib.Path
+
+
+type RagLocation = PostgresRag | SqliteRag
+
+
+def parse_rag_location(spec: str) -> RagLocation:
+    """The location a ``--rag-db``/``--output`` argument names: a PostgreSQL connection URI, or
+    otherwise the path of a corpus file."""
+    if spec.startswith(("postgresql://", "postgres://")):
+        return PostgresRag(spec)
+    return SqliteRag(pathlib.Path(spec))
+
+
 _RAG_HOST = os.environ.get("CERTORA_AI_COMPOSER_PGHOST", "localhost")
 _RAG_PORT = os.environ.get("CERTORA_AI_COMPOSER_PGPORT", "5432")
 DEFAULT_CONNECTION: str = f"postgresql://rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
@@ -53,75 +70,17 @@ SANITY_DEFAULT_CONNECTION: str = f"postgresql://extended_rag_user:rag_password@{
 FOUNDRY_DEFAULT_CONNECTION: str = f"postgresql://foundry_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 CVLR_DEFAULT_CONNECTION: str = f"postgresql://cvlr_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 
-# Logical knowledge-base tag -> default DB connection, for corpora ingested by the generic importer
-# (`composer.scripts.rag_import`). The tag is the one the manifest carries (== a wheel's
+# Logical knowledge-base tag -> default corpus location, for corpora ingested by the generic
+# importer (`composer.scripts.rag_import`). The tag is the one the manifest carries (== a wheel's
 # `rag_db_default`), so the import target and the runtime search tools resolve by one name —
 # `composer.tools.rag_env` requires both halves before a tag is usable. Empty until the first such
 # corpus lands with the application that declares it; the CVL/Foundry builders use the constants
 # above instead.
-KNOWLEDGE_BASES: dict[str, str] = {}
+KNOWLEDGE_BASES: dict[str, RagLocation] = {}
 
 
 type _RagHeader = str | None
 type _ContentHeaders = tuple[_RagHeader, _RagHeader, _RagHeader, _RagHeader, _RagHeader, _RagHeader]
-
-class ComposerRAGDB(ABC):
-    """Abstract base class for RAG database implementations."""
-
-    def __init__(self, model: SentenceTransformer):
-        self.tr = model
-
-    @abstractmethod
-    async def add_chunks_batch(self, chunks: list[BlockChunk]) -> None:
-        """Add chunks to the database in batches."""
-        ...
-
-    @abstractmethod
-    async def add_manual_section(self, ch: BlockChunk) -> None:
-        """Add a manual section for keyword search and exact retrieval."""
-        ...
-
-    @abstractmethod
-    async def find_refs(self, query: str, similarity_cutoff: float = 0.5,
-                  top_k: int = 10, manual_section: list[str] = []) -> list[ManualRef]:
-        """Search for similar documents using semantic similarity."""
-        ...
-
-    @abstractmethod
-    async def search_manual_keywords(self, query: str, *, min_depth: int = 0,
-                               limit: int = 10) -> list[ManualSectionHit]:
-        """Search sections by keywords using full-text search."""
-        ...
-
-    @abstractmethod
-    async def get_manual_section(self, headers: list[str]) -> str | None:
-        """Retrieve full section content by exact headers."""
-        ...
-
-    
-    # Encodes race when concurrent (see ENCODE_LOCK in composer.rag.models — the lock
-    # is shared with the sync DefaultEmbedder so neither path can race the other).
-    def _encode_query_locked(self, query: str) -> ndarray:
-        with ENCODE_LOCK:
-            return cast(ndarray, self.tr.encode_query(query, show_progress_bar=False))
-
-    def _encode_docs_locked(self, docs: list[str]) -> list[ndarray]:
-        with ENCODE_LOCK:
-            return cast(list[ndarray], self.tr.encode_document(docs, show_progress_bar=False))
-
-    async def embed_query(
-        self, query: str
-    ) -> ndarray:
-        return await asyncio.to_thread(
-            self._encode_query_locked, f"search_query: {query}"
-        )
-
-    async def embed_docs(
-        self, doc: list[BlockChunk]
-    ) -> list[ndarray]:
-        return await asyncio.to_thread(
-                self._encode_docs_locked, [f"search_document: {d.chunk}" for d in doc]
-            )
 
 type RagConnection = str | AsyncConnectionPool[AsyncConnection[TupleRow]]
 
@@ -156,10 +115,15 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
         async with self._pool.connection() as conn:
             yield conn
 
+    @override
     async def aclose(self) -> None:
         if self._owns_pool and self._opened:
             await self._pool.close()
             self._opened = False
+
+    @override
+    async def open(self) -> None:
+        await self.test_connection()
 
     async def test_connection(self) -> None:
         """Test database connection and setup"""
@@ -184,18 +148,6 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
         except Exception as e:
             logger.error(f"Database connection failed: {e}")
             raise
-
-    @asynccontextmanager
-    @staticmethod
-    async def rag_context(
-        model: SentenceTransformer, conn_str: str = DEFAULT_CONNECTION
-    ) -> AsyncIterator["PostgreSQLRAGDatabase"]:
-        db = PostgreSQLRAGDatabase(conn_str, model)
-        try:
-            await db.test_connection()
-            yield db
-        finally:
-            await db.aclose()
 
     async def _create_schema(self, cur: AsyncCursor) -> None:
         """Create database schema"""
@@ -344,8 +296,8 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
         if len(manual_section) > 0:
             clauses = []
             for i in range(1, 7):
-                params = params + (tuple(manual_section),)
-                clauses.append(f"h{i} in %s")
+                params = params + (list(manual_section),)
+                clauses.append(f"h{i} = ANY(%s)")
             where_clause = "WHERE (" + " OR ".join(clauses) + ")"
         params += (question_embedding.tolist(), top_k)
         async with self._get_connection() as conn:
@@ -430,325 +382,48 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
                 parts.append(await self._replace_manual_code_refs(cur, row[1], row[0]))
             return "\n".join(parts)
 
-class ChromaRAGDatabase(ComposerRAGDB):
-    """ChromaDB-based RAG database (file-based, no PostgreSQL required)"""
 
-    def __init__(self, persist_dir: str, model: SentenceTransformer):
-        super().__init__(model)
-        self.persist_dir = persist_dir
-        self.client = chromadb.PersistentClient(path=persist_dir)
-        # Collection for semantic search (embedded chunks)
-        self.collection = self.client.get_or_create_collection(
-            name="cvl_manual",
-            metadata={"hnsw:space": "cosine"}
-        )
-        # Collection for section storage (exact retrieval by headers)
-        self.sections = self.client.get_or_create_collection(
-            name="cvl_manual_sections"
-        )
-        self._next_id = self.collection.count()
-        self._next_section_id = self.sections.count()
+def open_rag_db(location: RagLocation, model: SentenceTransformer) -> ComposerRAGDB:
+    """A handle on the corpus at ``location`` that connects on first use. The caller owns it and
+    must ``aclose`` it; prefer :func:`rag_context`, which also fails fast on an unusable corpus."""
+    match location:
+        case PostgresRag(conninfo):
+            return PostgreSQLRAGDatabase(conninfo, model)
+        case SqliteRag(path):
+            return SqliteRAGDatabase.reader(path, model)
 
-        # Create FTS5 index for keyword search
-        self.fts_loc = os.path.join(persist_dir, "fts_index.db")
-
-        self.did_setup = False
-        self.setup_lock = asyncio.Lock()
-
-    @dataclass
-    class ASqliteCursor:
-        cursor: sqlite3.Cursor
-
-        async def fetchall(self) -> list[sqlite3.Row]:
-            return await asyncio.to_thread(self.cursor.fetchall)
-
-    @dataclass
-    class AsyncSqlite:
-        conn: sqlite3.Connection
-
-        async def execute(self, query: str, params: "sqlite3._Parameters | None" = None) -> "ChromaRAGDatabase.ASqliteCursor":
-            if params is not None:
-                cur = await asyncio.to_thread(
-                    self.conn.execute, query, params
-                )
-                return ChromaRAGDatabase.ASqliteCursor(cur)
-            else:
-                cur = await asyncio.to_thread(
-                    self.conn.execute, query
-                )
-                return ChromaRAGDatabase.ASqliteCursor(cur)
-            
-        async def rollback(self):
-            await asyncio.to_thread(
-                self.conn.rollback
-            )
-
-        async def commit(self):
-            await asyncio.to_thread(
-                self.conn.commit
-            )
-
-    async def _setup_internal(self):
-        if self.did_setup:
-            return
-        async with self.setup_lock:
-            if self.did_setup:
-                return
-            async with self._raw_conn() as conn:
-                await conn.execute(
-                    "PRAGMA journal_mode=WAL"
-                )
-                await conn.execute(
-                    """
-                    CREATE VIRTUAL TABLE IF NOT EXISTS sections_fts USING fts5(
-                        content,
-                        h1, h2, h3, h4, h5, h6,
-                        section_id UNINDEXED
-                    )
-                """
-                )
-                await conn.commit()
-                self.did_setup = True
-
-    @asynccontextmanager
-    async def _raw_conn(self):
-        conn = sqlite3.connect(self.fts_loc, check_same_thread=False)
-        try:
-            yield ChromaRAGDatabase.AsyncSqlite(conn)
-        finally:
-            conn.close()
-
-    @asynccontextmanager
-    async def _conn(self) -> AsyncIterator["ChromaRAGDatabase.AsyncSqlite"]:
-        await self._setup_internal()
-        conn = ChromaRAGDatabase.AsyncSqlite(sqlite3.connect(self.fts_loc, check_same_thread=False))
-        try:
-            yield conn
-            await conn.commit()
-        except:
-            await conn.rollback()
-            raise
-
-    async def _setup(self):
-        await self._setup_internal()
-
-    @asynccontextmanager
-    @staticmethod
-    async def rag_context(persist_dir: str, model: SentenceTransformer):
-        to_ret = ChromaRAGDatabase(persist_dir, model)
-        await to_ret._setup()
-        yield to_ret
-
-    @override
-    async def add_chunks_batch(self, chunks: list[BlockChunk]) -> None:
-        """Add chunks to ChromaDB"""
-        if not chunks:
-            return
-
-        embeddings = await self.embed_docs(chunks)
-
-        logger.info(f"Adding {len(chunks)} chunks to ChromaDB...")
-
-        ids = []
-        documents = []
-        embedding_list = []
-        metadatas = []
-
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-            doc_id = str(self._next_id + i)
-            ids.append(doc_id)
-
-            # Expand code refs inline
-            body = chunk.chunk
-            for j, code in enumerate(chunk.code_refs):
-                to_replace = code_ref_tag(j)
-                body = body.replace(to_replace, code)
-            documents.append(body)
-
-            embedding_list.append(embedding.tolist())
-
-            # Store headers in metadata
-            metadata = {}
-            for j, header in enumerate(chunk.headers, start=1):
-                if header:
-                    metadata[f"h{j}"] = header
-            metadatas.append(metadata)
-
-        self.collection.add(
-            ids=ids,
-            embeddings=embedding_list,
-            documents=documents,
-            metadatas=metadatas
-        )
-        self._next_id += len(chunks)
-
-    @override
-    async def find_refs(self, query: str, similarity_cutoff: float = 0.5,
-                  top_k: int = 10, manual_section: list[str] = []) -> list[ManualRef]:
-        """Search for similar documents"""
-        query_embedding = await self.embed_query(query)
-
-        # Build where filter for manual_section if provided
-        where_filter : chromadb.Where | None = None
-        if manual_section:
-            # ChromaDB uses $or for multiple conditions
-            or_conditions : list[chromadb.Where] = []
-            for section in manual_section:
-                for i in range(1, 7):
-                    or_conditions.append({f"h{i}": section})
-            if or_conditions:
-                where_filter = {"$or": or_conditions}
-
-        results = self.collection.query(
-            query_embeddings=[query_embedding.tolist()],
-            n_results=top_k,
-            where=where_filter,
-            include=["documents", "metadatas", "distances"]
-        )
-
-        to_ret: list[ManualRef] = []
-        if not results['documents'] or not results['documents'][0]:
-            return to_ret
-
-        for i, doc in enumerate(results['documents'][0]):
-            # ChromaDB returns L2 distance by default, but we configured cosine
-            # For cosine distance: similarity = 1 - distance
-            distance = results['distances'][0][i] if results['distances'] else 0
-            similarity = 1 - distance
-
-            if similarity < similarity_cutoff:
-                continue
-
-            metadata = results['metadatas'][0][i] if results['metadatas'] else {}
-            headers = []
-            for j in range(1, 7):
-                h = metadata.get(f'h{j}')
-                if h:
-                    headers.append(h)
-                else:
-                    break
-
-            to_ret.append(ManualRef(headers=headers, content=doc, similarity=similarity))
-
-        return to_ret
-
-    @override
-    async def add_manual_section(self, ch: BlockChunk) -> None:
-        """Add a manual section for keyword search and exact retrieval."""
-        # Expand code refs inline
-        body = ch.chunk
-        for j, code in enumerate(ch.code_refs):
-            body = body.replace(code_ref_tag(j), code)
-
-        metadata: dict[str, str | int] = {"part": ch.part}
-        for i, h in enumerate(ch.headers, start=1):
-            if h:
-                metadata[f"h{i}"] = h
-
-        self.sections.add(
-            ids=[str(self._next_section_id)],
-            documents=[body],
-            metadatas=[metadata]
-        )
-
-        # Also insert into FTS index for keyword search
-        headers: list[str | None] = list(ch.headers) + [None] * (6 - len(ch.headers))
-        async with self._conn() as conn:
-            await conn.execute(
-                """INSERT INTO sections_fts(content, h1, h2, h3, h4, h5, h6, section_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (body, *headers[:6], str(self._next_section_id))
-            )
-
-        self._next_section_id += 1
-
-    @override
-    async def search_manual_keywords(self, query: str, *, min_depth: int = 0, limit: int = 10) -> list[ManualSectionHit]:
-        """Search sections by keywords using FTS5 full-text search."""
-        if min_depth < 0 or min_depth > 6:
-            raise ValueError("min_depth must be between 0 and 6")
-
-        depth_filter = f"AND h{min_depth} IS NOT NULL" if min_depth > 0 else ""
-
-        try:
-            async with self._conn() as conn:
-                cursor = await conn.execute(f"""
-                    SELECT bm25(sections_fts) as rank, h1, h2, h3, h4, h5, h6
-                    FROM sections_fts
-                    WHERE sections_fts MATCH ?
-                    {depth_filter}
-                    ORDER BY rank
-                    LIMIT ?
-                """, (query, limit))
-
-
-                return [
-                    ManualSectionHit(
-                        headers=[h for h in row[1:7] if h],
-                        relevance=-row[0]  # bm25 returns negative scores, lower = better
-                    )
-                    for row in await cursor.fetchall()
-                ]
-        except sqlite3.OperationalError:
-            # Handle invalid FTS query syntax gracefully
-            return []
-
-    async def get_manual_section(self, headers: list[str]) -> str | None:
-        """Retrieve full section content by exact headers."""
-        if not headers:
-            return None
-
-        # Build filter for exact header match on provided levels
-        conditions : list[chromadb.Where] = []
-        for i, h in enumerate(headers, start=1):
-            conditions.append({f"h{i}": {"$eq": h}})
-
-        where_filter : chromadb.Where | None = {"$and": conditions} if len(conditions) > 1 else conditions[0] if conditions else None
-
-        results = self.sections.get(
-            where=where_filter,
-            include=["documents", "metadatas"]
-        )
-
-        if not results['documents'] or not results['metadatas']:
-            return None
-
-        # Post-filter: exclude subsections where deeper headers exist.
-        # ChromaDB can't express "field IS NULL", so we filter in Python.
-        # This mirrors Postgres's "hN IS NOT DISTINCT FROM NULL" for N > len(headers).
-        depth = len(headers)
-        filtered = [
-            (doc, meta)
-            for doc, meta in zip(results['documents'], results['metadatas'])
-            if not any(meta.get(f"h{j}") for j in range(depth + 1, 7))
-        ]
-
-        if not filtered:
-            return None
-
-        parts = sorted(filtered, key=lambda x: cast(int, x[1].get('part', 0)))
-        return "\n".join(doc for doc, _ in parts)
 
 @asynccontextmanager
 async def rag_context(
-    rag_connection_str: str,
-    model: SentenceTransformer
+    location: RagLocation, model: SentenceTransformer
 ) -> AsyncIterator[ComposerRAGDB]:
-    if rag_connection_str.startswith("postgresql://"):
-        async with PostgreSQLRAGDatabase.rag_context(model, rag_connection_str) as conn:
-            yield conn
-    else:
-        async with ChromaRAGDatabase.rag_context(persist_dir=rag_connection_str, model=model) as conn:
-            yield conn
+    """The corpus at ``location``, opened (so an unusable corpus fails here) and closed on exit."""
+    db = open_rag_db(location, model)
+    try:
+        await db.open()
+        yield db
+    finally:
+        await db.aclose()
 
-# NOTE: this leaks the entire pool, so consider deprecating and force the callers
-# to use `rag_context` instead.
-async def get_rag_db(rag_connection_str: str, model: SentenceTransformer) -> ComposerRAGDB:
-    if rag_connection_str.startswith("postgresql://"):
-        db = PostgreSQLRAGDatabase(rag_connection_str, model)
-        await db.test_connection()
-        return db
-    else:
-        to_ret = ChromaRAGDatabase(model=model, persist_dir=rag_connection_str)
-        await to_ret._setup()
-        return to_ret
+
+@asynccontextmanager
+async def rag_build_context(
+    location: RagLocation, model: SentenceTransformer
+) -> AsyncIterator[ComposerRAGDB]:
+    """The corpus at ``location``, for ingesting into. A PostgreSQL corpus is appended to in place
+    (creating its tables if missing); a corpus file is rebuilt from scratch and replaces the
+    existing file only once the block exits normally."""
+    match location:
+        case PostgresRag():
+            async with rag_context(location, model) as db:
+                yield db
+        case SqliteRag(path):
+            async with SqliteRAGDatabase.build(path, model) as db:
+                yield db
+
+
+async def get_rag_db(location: RagLocation, model: SentenceTransformer) -> ComposerRAGDB:
+    """Like :func:`rag_context`, for a process that holds the corpus open until it exits."""
+    db = open_rag_db(location, model)
+    await db.open()
+    return db

@@ -11,7 +11,7 @@ from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 from composer.diagnostics.timing import RunSummary
 from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, PropertySetOptions, RAGDBOptions
 from composer.input.parsing import add_extra_context_args, add_protocol_args
-from composer.rag.db import PostgreSQLRAGDatabase
+from composer.rag.db import parse_rag_location, rag_context
 from composer.pipeline.core import CorePipelineResult
 
 from composer.spec.context import (
@@ -161,7 +161,7 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 run_mode=run_mode,
                 workflow="autoprove"
             ) as (staged, cont),
-            PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as rag_db
+            rag_context(parse_rag_location(args.rag_db), staged.embed_model) as rag_db
 
         ):
             source_data_ns = user_ns("source_agent", "cache", staged.root_key)

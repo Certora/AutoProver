@@ -246,7 +246,7 @@ the authoring agent. A callback protocol streams per-rule outcomes to the UI and
 ## 9. Knowledge: RAG + curated KB
 
 - **RAG** ([composer/rag/](composer/rag/)) — the CVL manual, chunked and embedded
-  (`nomic-embed-text-v1.5`) into `rag_db` (pgvector, with a ChromaDB fallback). Agents query it
+  (`nomic-embed-text-v1.5`) into `rag_db` (pgvector, or a self-contained SQLite corpus file). Agents query it
   for CVL syntax/semantics during authoring. Read-only at runtime; rebuilt offline from the docs.
 - **Curated KB** ([composer/kb/](composer/kb/)) — ~30 hand-written articles on CVL pitfalls
   (vacuity traps, ghost semantics, summary misapplication…) stored in the LangGraph store and

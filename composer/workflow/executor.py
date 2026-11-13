@@ -30,7 +30,7 @@ from composer.core.context import AIComposerContext
 from composer.core.state import AIComposerState
 from composer.prover.core import make_prover_options
 from composer.core.validation import ProverValidation, CodegenValidation, ReqsValidation
-from composer.rag.db import rag_context, ComposerRAGDB
+from composer.rag.db import parse_rag_location, rag_context, ComposerRAGDB
 from composer.rag.models import get_model as get_rag_model
 from composer.audit.store import AuditStore, ResumeArtifact
 from composer.natreq.extractor import get_requirements
@@ -265,7 +265,7 @@ async def execute_ai_composer_workflow(
     model = get_rag_model()
     async with (
         standard_connections(provider=llm.provider, embedder=DefaultEmbedder(model)) as conn,
-        rag_context(workflow_options.rag_db, model) as rag_db,
+        rag_context(parse_rag_location(workflow_options.rag_db), model) as rag_db,
     ):
         return await _run_codegen(
             handler, llm, input, workflow_options, conn, rag_db,

@@ -27,7 +27,7 @@ from composer.input.parsing import Arg, add_extra_context_args, add_protocol_arg
 from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions, PropertySetOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
-from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
+from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, parse_rag_location, rag_context
 from composer.spec.context import SourceFields
 
 from composer.foundry.artifacts import FoundryArtifactStore
@@ -55,7 +55,7 @@ class FoundryRAGDBOptions(RAGDBOptions, Protocol):
     foundry workflow only talks to a single RAG DB; we reuse the existing
     ``--rag-db`` flag rather than introducing a separate one."""
     rag_db: Annotated[str, Arg(
-        help="Database connection string for the foundry cheatcodes RAG",
+        help="Foundry cheatcodes corpus: a PostgreSQL connection URI or a corpus file path",
         default=FOUNDRY_DEFAULT_CONNECTION,
     )]
 
@@ -175,7 +175,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
                   at_exit=_usage_exit_logger(summary),
                   workflow="foundry"
             ) as (staged, cont),
-            PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as foundry_rag_db,
+            rag_context(parse_rag_location(args.rag_db), staged.embed_model) as foundry_rag_db,
         ):
             source_question_ns = user_ns("source_agent", "cache", staged.root_key)
 

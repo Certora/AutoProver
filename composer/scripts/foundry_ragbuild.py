@@ -50,7 +50,7 @@ import spacy
 from bs4 import BeautifulSoup, Tag
 from bs4.element import NavigableString
 
-from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, rag_context
+from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, parse_rag_location, rag_build_context
 from composer.rag.models import get_model
 from composer.rag.types import BlockChunk
 from composer.scripts.text_processors import (
@@ -459,7 +459,7 @@ async def _async_main(args: argparse.Namespace) -> int:
         return 0
 
     output = args.output or FOUNDRY_DEFAULT_CONNECTION
-    async with rag_context(output, get_model()) as db:
+    async with rag_build_context(parse_rag_location(output), get_model()) as db:
         buffer: list[BlockChunk] = []
         n_chunks = 0
         for f in files:
@@ -491,7 +491,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--output", "-o", default=None,
-        help="ChromaDB directory or PostgreSQL connection string. "
+        help="PostgreSQL connection URI or corpus file path (rebuilt from scratch). "
              f"Defaults to {FOUNDRY_DEFAULT_CONNECTION}.",
     )
     parser.add_argument(

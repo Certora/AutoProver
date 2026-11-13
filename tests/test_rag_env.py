@@ -22,7 +22,7 @@ from composer.tools import rag_env
 def _register(monkeypatch: pytest.MonkeyPatch, tag: str, factory) -> None:
     """Register both halves of a corpus for one test — the module-level tables are the registry,
     so a test corpus goes in the same way a real one would."""
-    monkeypatch.setitem(rag_db.KNOWLEDGE_BASES, tag, "postgresql://stub/rag_db")
+    monkeypatch.setitem(rag_db.KNOWLEDGE_BASES, tag, rag_db.PostgresRag("postgresql://stub/rag_db"))
     monkeypatch.setitem(rag_env._FACTORIES, tag, factory)
 
 
@@ -53,7 +53,7 @@ def test_half_a_registration_is_not_a_corpus(monkeypatch: pytest.MonkeyPatch):
         rag_env.validate_rag_db("tools_only")
 
     # …and a connection with no tools factory is just as unusable.
-    monkeypatch.setitem(rag_db.KNOWLEDGE_BASES, "conn_only", "postgresql://stub/rag_db")
+    monkeypatch.setitem(rag_db.KNOWLEDGE_BASES, "conn_only", rag_db.PostgresRag("postgresql://stub/rag_db"))
     with pytest.raises(ValueError, match="not a registered RAG corpus"):
         rag_env.validate_rag_db("conn_only")
 
