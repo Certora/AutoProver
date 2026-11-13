@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from composer.input.parsing import add_protocol_args
 from composer.input.types import ModelOptions, WorkflowOptions
-from composer.rag.db import SANITY_DEFAULT_CONNECTION, get_rag_db, parse_rag_location
+from composer.rag.db import EXTENDED_CORPUS, get_rag_db, parse_rag_location
 from composer.rag.models import get_model
 from composer.tools.search import cvl_manual_search
 from composer.templates.loader import load_jinja_template
@@ -144,7 +144,7 @@ Examples:
 
     add_protocol_args(parser, ModelOptions)
     add_protocol_args(parser, WorkflowOptions)
-    parser.set_defaults(rag_db=SANITY_DEFAULT_CONNECTION, model="claude-sonnet-5-5", interleaved_thinking=True)
+    parser.set_defaults(rag_db=str(EXTENDED_CORPUS.path), model="claude-sonnet-5-5", interleaved_thinking=True)
 
     args = parser.parse_args()
     details = analyze(cast(SanityAnalysisArgs, args))

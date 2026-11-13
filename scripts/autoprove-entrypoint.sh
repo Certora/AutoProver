@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Entrypoint for the autoprove container.
 #
-# Three responsibilities:
+# Responsibilities:
 #   1. Patch /etc/passwd for the host UID compose is running us as, so
 #      libraries that call pwd.getpwuid() (torch via getpass.getuser(), etc.)
 #      don't crash.
-#   2. One-time `setup-db` subcommand — populates the RAG corpora against the
-#      compose-managed postgres.
-#   3. For console-autoprove / tui-autoprove, transparently inject --rag-db
-#      pointing at the in-network postgres service.
+#   2. `setup-db` subcommand — applies the schema (checkpoints, store, memory)
+#      to a postgres that was not initialized from init-db.sql. The compose
+#      postgres applies it on first boot, so it needs no setup-db. The RAG
+#      corpora are not in postgres: they are built into the image, under
+#      $CERTORA_AI_COMPOSER_RAG_DIR, and every entry point opens them by default.
+#   3. For console-foundry / tui-foundry, enable the hardened forge's guards.
 
 set -euo pipefail
 
@@ -26,19 +28,15 @@ if ! getent group "$_gid" >/dev/null 2>&1; then
 fi
 export USER=autoprove LOGNAME=autoprove
 
-PGHOST="${CERTORA_AI_COMPOSER_PGHOST:-postgres}"
-PGPORT="${CERTORA_AI_COMPOSER_PGPORT:-5432}"
-RAG_CONN="postgresql://rag_user:rag_password@${PGHOST}:${PGPORT}/rag_db"
-
 if [[ "${1:-}" == "setup-db" ]]; then
   shift
+  PGHOST="${CERTORA_AI_COMPOSER_PGHOST:-postgres}"
+  PGPORT="${CERTORA_AI_COMPOSER_PGPORT:-5432}"
   export PGPASSWORD=postgres_admin_password
-  # Skip schema init if rag_user already exists. The compose postgres service
-  # applies init-db.sql on first boot via /docker-entrypoint-initdb.d, so the
-  # schema is usually already present; this also guards re-runs (init-db.sql is
-  # plain CREATE USER/DATABASE, not idempotent).
+  # Skip schema init if it is already there (init-db.sql is plain CREATE
+  # USER/DATABASE, not idempotent).
   if psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres -tAc \
-      "SELECT 1 FROM pg_user WHERE usename='rag_user'" | grep -q 1; then
+      "SELECT 1 FROM pg_user WHERE usename='langgraph_checkpoint_user'" | grep -q 1; then
     echo "[autoprove] schema already initialized, skipping init-db.sql"
   else
     # composer ships init-db.sql as package-data of composer.scripts, so it's at
@@ -49,30 +47,11 @@ if [[ "${1:-}" == "setup-db" ]]; then
     psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres \
         -v ON_ERROR_STOP=1 -f "$init_sql"
   fi
-  echo "[autoprove] populating rag_db at ${RAG_CONN} ..."
-  python -m composer.scripts.ragbuild \
-      --output "$RAG_CONN" \
-      "$AUTOPROVE_HOME/prover-docs/cvl.html"
   echo "[autoprove] setup-db done."
   exit 0
 fi
 
-# For the prove entry points, inject --rag-db if the user didn't supply one.
 case "${1:-}" in
-  console-autoprove|tui-autoprove)
-    cmd="$1"; shift
-    has_rag_db=0
-    for arg in "$@"; do
-      if [[ "$arg" == "--rag-db" || "$arg" == --rag-db=* ]]; then
-        has_rag_db=1
-        break
-      fi
-    done
-    if (( has_rag_db == 0 )); then
-      set -- "$@" --rag-db "$RAG_CONN"
-    fi
-    exec "$cmd" "$@"
-    ;;
   console-foundry|tui-foundry)
     # Foundry mode runs the project's own `forge test`, which can use the `ffi`
     # cheatcode and external cheatcodes. Enable the hardened fork's guards so

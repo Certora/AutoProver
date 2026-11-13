@@ -7,7 +7,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from composer.rag.db import SqliteRag, parse_rag_location, PostgresRag, rag_build_context, rag_context
+from composer.rag.db import (
+    PostgresRag, SqliteRag, default_corpus_dir, parse_rag_location, rag_build_context, rag_context,
+)
 from composer.rag.fts_query import to_fts5_query
 from composer.rag.sqlite import CorpusFileError
 from composer.rag.types import BlockChunk
@@ -136,3 +138,12 @@ async def test_a_file_that_is_not_a_corpus_is_refused(
     with pytest.raises(CorpusFileError, match="not a RAG corpus file"):
         async with rag_context(SqliteRag(path), model):
             pass
+
+
+def test_the_corpus_dir_follows_the_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    monkeypatch.setenv("CERTORA_AI_COMPOSER_RAG_DIR", str(tmp_path / "baked"))
+    assert default_corpus_dir() == tmp_path / "baked"
+
+    monkeypatch.delenv("CERTORA_AI_COMPOSER_RAG_DIR")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    assert default_corpus_dir() == tmp_path / "xdg" / "autoprover" / "rag"

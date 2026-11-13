@@ -26,7 +26,7 @@ from bs4.element import NavigableString
 import spacy
 from composer.rag.base import ComposerRAGDB
 from composer.rag.db import (
-    parse_rag_location, rag_build_context, DEFAULT_CONNECTION, SANITY_DEFAULT_CONNECTION, CVLR_DEFAULT_CONNECTION,
+    CVL_CORPUS, CVLR_CORPUS, EXTENDED_CORPUS, RagLocation, parse_rag_location, rag_build_context,
 )
 from composer.rag.types import BlockChunk
 from composer.rag.text import get_code_refs
@@ -35,13 +35,12 @@ from composer.scripts.text_processors import (
     BlockBuilder, BuilderConfig, TextCollector, TextStreamer,
 )
 
-#: Corpora this builder can ingest into, by the name the populate_*.sh scripts pass. The
-#: connections come from composer.rag.db so they follow CERTORA_AI_COMPOSER_PGHOST/PGPORT --
-#: a DSN spelled out at a call site would send a containerised ingest to the wrong host.
-NAMED_CORPORA: dict[str, str] = {
-    "cvl": DEFAULT_CONNECTION,
-    "extended": SANITY_DEFAULT_CONNECTION,
-    "cvlr": CVLR_DEFAULT_CONNECTION,
+#: Corpora this builder can ingest into, by the name the populate_*.sh scripts pass. The locations
+#: come from composer.rag.db, the same ones the runtime opens by default.
+NAMED_CORPORA: dict[str, RagLocation] = {
+    "cvl": CVL_CORPUS,
+    "extended": EXTENDED_CORPUS,
+    "cvlr": CVLR_CORPUS,
 }
 
 logging.basicConfig(
@@ -294,8 +293,8 @@ async def main() -> None:
              'named corpus. A corpus file is rebuilt from scratch.')
     args = parser.parse_args()
 
-    output = args.output or NAMED_CORPORA[args.corpus]
-    async with rag_build_context(parse_rag_location(output), get_model()) as db:
+    output = parse_rag_location(args.output) if args.output else NAMED_CORPORA[args.corpus]
+    async with rag_build_context(output, get_model()) as db:
         await _ingest_html(db, [pathlib.Path(f) for f in args.files])
 
     logger.info(f"RAG database created at {output}")

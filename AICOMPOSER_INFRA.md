@@ -23,34 +23,29 @@ NB: You will need to restart this docker image each time your host computer rest
 
 ## One-time RAG Setup
 
-You will need to build the local RAG database used for CVL manual searches by the LLM:
+The LLM's documentation searches read RAG corpora: one SQLite file each, under `$CERTORA_AI_COMPOSER_RAG_DIR`
+(default `~/.local/share/autoprover/rag`). The Docker images carry them prebuilt; on a dev host, build them:
 
 1. Run `./gen_docs.sh` to build the HTML documentation into `prover-docs/`
-2. Run `./populate_rag.sh` to populate the standard `rag_db`
+2. Run `./populate_rag.sh` to build `cvl.sqlite` (CVL manual; AI Composer and cex-analyzer)
+3. Run `./populate_extended_rag.sh` to build `extended.sqlite` (CVL + prover docs; sanity analyzer)
+4. Run `./populate_foundry_rag.sh` to build `foundry.sqlite` (Foundry cheatcodes; foundry mode)
 
-## One-time Extended RAG Setup (for Sanity Analyzer)
-
-The sanity analyzer requires additional prover documentation beyond the CVL manual:
-
-1. Run `./gen_docs.sh` (if not already done for the base RAG setup)
-2. Run `./populate_extended_rag.sh` to populate the `extended_rag_db`
-
-**Note:** The cex-analyzer and AI Composer use the standard `rag_db` (CVL-only), while sanity-analyzer defaults to `extended_rag_db` (CVL + prover docs). You can override this with the `--rag-db` flag if needed.
+Each tool's `--rag-db` flag overrides its corpus with another file or a PostgreSQL connection URI.
 
 ## Updating the RAG
 
-The RAG is read-only at runtime and is fully derived from the documentation HTML, so when the docs change you just rebuild it.
-`./refresh_rag.sh` runs the full offline wipe+rebuild in one step (regenerate docs → wipe → repopulate), saving you from
-chaining `gen_docs.sh`, `wipe_rag.py`, and the `populate_*.sh` scripts by hand:
+The RAG is read-only at runtime and is fully derived from the documentation, so when the docs change you just rebuild it.
+`./refresh_rag.sh` regenerates the docs and rebuilds in one step:
 
 ```
-./refresh_rag.sh                 # regenerate docs, then wipe + rebuild rag_db (CVL-only)
-./refresh_rag.sh --all           # also wipe + rebuild extended_rag_db
+./refresh_rag.sh                 # regenerate docs, then rebuild cvl.sqlite
+./refresh_rag.sh --all           # also rebuild extended.sqlite
 ./refresh_rag.sh --skip-gen-docs # rebuild from the HTML already in prover-docs/
 ```
 
-**Run this offline** (when nothing is querying the RAG): it empties the target database and then re-embeds over a few
-minutes, during which CVL manual search returns no results. See `./refresh_rag.sh --help` for all options.
+A rebuild writes a scratch file and swaps it in only once it finishes, so it is safe while something is searching the
+old corpus. See `./refresh_rag.sh --help` for all options.
 
 ## One-time prover setup
 

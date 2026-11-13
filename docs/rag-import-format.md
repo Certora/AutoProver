@@ -310,8 +310,8 @@ The mechanism, corpus-free:
 
 What an adopting application adds, in one go: its committed `<kb>.rag.json`, both registry halves
 (the `KNOWLEDGE_BASES` connection + a `composer/tools/<corpus>_rag.py` in `rag_env._FACTORIES`), the
-DB role/schema in [`init-db.sql`](../composer/scripts/init-db.sql), and whatever container wiring
-populates it at `setup-db` time.
+corpus file it builds into the image beside the others (see `scripts/Dockerfile`'s `rag-builder`
+stage).
 
 **Untouched:** `foundry_ragbuild.py`, `ragbuild.py` (CVL), their wrappers, and `refresh_rag.sh`.
 No runtime code changes — the search tools, `rag_env.py`, and the DB API are the same.

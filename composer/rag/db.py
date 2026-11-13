@@ -63,12 +63,25 @@ def parse_rag_location(spec: str) -> RagLocation:
     return SqliteRag(pathlib.Path(spec))
 
 
-_RAG_HOST = os.environ.get("CERTORA_AI_COMPOSER_PGHOST", "localhost")
-_RAG_PORT = os.environ.get("CERTORA_AI_COMPOSER_PGPORT", "5432")
-DEFAULT_CONNECTION: str = f"postgresql://rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
-SANITY_DEFAULT_CONNECTION: str = f"postgresql://extended_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
-FOUNDRY_DEFAULT_CONNECTION: str = f"postgresql://foundry_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
-CVLR_DEFAULT_CONNECTION: str = f"postgresql://cvlr_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
+def default_corpus_dir() -> pathlib.Path:
+    configured = os.environ.get("CERTORA_AI_COMPOSER_RAG_DIR")
+    if configured:
+        return pathlib.Path(configured)
+    data_home = os.environ.get("XDG_DATA_HOME") or pathlib.Path.home() / ".local" / "share"
+    return pathlib.Path(data_home) / "autoprover" / "rag"
+
+
+#: Where the built-in corpora live: baked into the images (which set CERTORA_AI_COMPOSER_RAG_DIR),
+#: and built on a dev host by the scripts/populate_*.sh scripts.
+RAG_CORPUS_DIR = default_corpus_dir()
+#: The CVL manual.
+CVL_CORPUS = SqliteRag(RAG_CORPUS_DIR / "cvl.sqlite")
+#: The CVL manual plus the prover and user-guide docs, for the sanity analyzer.
+EXTENDED_CORPUS = SqliteRag(RAG_CORPUS_DIR / "extended.sqlite")
+#: The Foundry cheatcode reference.
+FOUNDRY_CORPUS = SqliteRag(RAG_CORPUS_DIR / "foundry.sqlite")
+#: The CVLR (Solana) manual.
+CVLR_CORPUS = SqliteRag(RAG_CORPUS_DIR / "cvlr.sqlite")
 
 # Logical knowledge-base tag -> default corpus location, for corpora ingested by the generic
 # importer (`composer.scripts.rag_import`). The tag is the one the manifest carries (== a wheel's

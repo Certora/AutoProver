@@ -1,5 +1,5 @@
 from typing import Optional, Protocol, Literal, Any, Annotated
-from composer.rag.db import DEFAULT_CONNECTION as RAGDB_DEFAULT_CONNECTION
+from composer.rag.db import CVL_CORPUS
 import pathlib
 from dataclasses import dataclass
 
@@ -61,7 +61,7 @@ class RAGDBOptions(Protocol):
     # database options
     rag_db: Annotated[str, Arg(
         help="CVL manual corpus for manual search: a PostgreSQL connection URI or a corpus file path",
-        default=RAGDB_DEFAULT_CONNECTION
+        default=str(CVL_CORPUS.path)
     )]
 
 class LanggraphOptions(Protocol):

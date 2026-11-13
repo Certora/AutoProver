@@ -27,7 +27,7 @@ from composer.input.parsing import Arg, add_extra_context_args, add_protocol_arg
 from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions, PropertySetOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
-from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, parse_rag_location, rag_context
+from composer.rag.db import FOUNDRY_CORPUS, parse_rag_location, rag_context
 from composer.spec.context import SourceFields
 
 from composer.foundry.artifacts import FoundryArtifactStore
@@ -56,7 +56,7 @@ class FoundryRAGDBOptions(RAGDBOptions, Protocol):
     ``--rag-db`` flag rather than introducing a separate one."""
     rag_db: Annotated[str, Arg(
         help="Foundry cheatcodes corpus: a PostgreSQL connection URI or a corpus file path",
-        default=FOUNDRY_DEFAULT_CONNECTION,
+        default=str(FOUNDRY_CORPUS.path),
     )]
 
 
