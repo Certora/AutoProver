@@ -21,7 +21,7 @@ from composer.input.types import ModelOptions, RAGDBOptions, DEFAULT_RECURSION_L
 from composer.input.parsing import add_protocol_args
 from composer.io.thread_logging import thread_logger, default_logging_ns
 from composer.spec.agent_index import agent_index_config_from_env
-from composer.rag.db import PostgreSQLRAGDatabase
+from composer.rag.db import parse_rag_location, rag_context
 from composer.rag.models import get_model
 from composer.workflow.services import standard_connections
 from composer.spec.service_host import ModelProvider
@@ -142,7 +142,7 @@ async def _main() -> int:
 
     async with (
         standard_connections(provider=llm_provider.provider, embedder=DefaultEmbedder(model)) as conn,
-        PostgreSQLRAGDatabase.rag_context(model, args.rag_db) as rag,
+        rag_context(parse_rag_location(args.rag_db), model) as rag,
         async_tool_context(),
     ):
         content = await conn.uploader.get_document(input_path)

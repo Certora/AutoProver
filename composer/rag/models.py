@@ -11,6 +11,10 @@ from langchain_core.embeddings import Embeddings
 # paths cannot race each other on the same model instance either.
 ENCODE_LOCK = threading.Lock()
 
+#: The sentence-transformer every corpus is embedded with and every query is encoded with. A
+#: corpus embedded by one model is meaningless to another, so a corpus file records this id.
+EMBEDDING_MODEL = "nomic-ai/nomic-embed-text-v1.5"
+
 # claim we always import ST
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -25,7 +29,7 @@ else:
             # cache is not thread-safe under concurrent encodes (SIGSEGV on Apple
             # Silicon), so mac hosts should set it to "cpu".
             return SentenceTransformer(
-                'nomic-ai/nomic-embed-text-v1.5',
+                EMBEDDING_MODEL,
                 trust_remote_code=True,
                 device=os.environ.get("COMPOSER_EMBED_DEVICE"),
             )

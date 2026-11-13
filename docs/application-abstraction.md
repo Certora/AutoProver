@@ -223,7 +223,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
                 design_doc_phase=FoundryPhase.DISCOVER_DESIGN_DOC,
                 at_exit=_usage_exit_logger(summary), workflow="foundry",
             ) as (staged, cont),
-            PostgreSQLRAGDatabase.rag_context(staged.embed_model, args.rag_db) as rag,
+            rag_context(parse_rag_location(args.rag_db), staged.embed_model) as rag,
         ):
             env = build_foundry_env(model_provider=staged.llm_models, rag_db=rag, ...)
             return await cont(env, backend(source_input=staged.source, ...), EVM)

@@ -25,6 +25,7 @@ from composer.rag.import_format import (  # noqa: E402
     ManualSection,
     RagManifest,
 )
+from composer.rag.db import PostgresRag, SqliteRag  # noqa: E402
 from composer.scripts import rag_import  # noqa: E402
 
 
@@ -212,4 +213,10 @@ def test_an_unregistered_knowledge_base_says_where_to_register_it():
 def test_output_overrides_the_registry_lookup():
     # …which is what makes the importer usable before a corpus is registered at all.
     conn = "postgresql://elsewhere/rag_db"
-    assert rag_import._resolve_output(_manifest(kb="no_such_kb"), conn) == conn
+    assert rag_import._resolve_output(_manifest(kb="no_such_kb"), conn) == PostgresRag(conn)
+
+
+def test_an_output_path_is_a_corpus_file():
+    assert rag_import._resolve_output(_manifest(kb="no_such_kb"), "out/kb.sqlite") == SqliteRag(
+        pathlib.Path("out/kb.sqlite")
+    )

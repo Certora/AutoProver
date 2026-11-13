@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from composer.input.parsing import add_protocol_args
 from composer.input.types import ModelOptions, WorkflowOptions
-from composer.rag.db import SANITY_DEFAULT_CONNECTION, get_rag_db
+from composer.rag.db import EXTENDED_CORPUS, get_rag_db, parse_rag_location
 from composer.rag.models import get_model
 from composer.tools.search import cvl_manual_search
 from composer.templates.loader import load_jinja_template
@@ -144,7 +144,7 @@ Examples:
 
     add_protocol_args(parser, ModelOptions)
     add_protocol_args(parser, WorkflowOptions)
-    parser.set_defaults(rag_db=SANITY_DEFAULT_CONNECTION, model="claude-sonnet-5-5", interleaved_thinking=True)
+    parser.set_defaults(rag_db=str(EXTENDED_CORPUS.path), model="claude-sonnet-5-5", interleaved_thinking=True)
 
     args = parser.parse_args()
     details = analyze(cast(SanityAnalysisArgs, args))
@@ -249,7 +249,7 @@ async def async_analyze(args: SanityAnalysisArgs) -> SanityAnalysisResult | None
         print(f"Chose thread id: {tid}")
 
     provider = get_provider_for(model_name=args.model, options=args)
-    rag_db = await get_rag_db(args.rag_db, model=get_model())
+    rag_db = await get_rag_db(parse_rag_location(args.rag_db), model=get_model())
     tools = [cvl_manual_search(rag_db), sanity_analysis_output_tool, *get_rough_draft_tools(SanityState), *v_tools]
     if args.memory_tool:
         mem_factory = provider.provider.select_memory_tool

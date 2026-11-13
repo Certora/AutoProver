@@ -16,8 +16,8 @@ export ANTHROPIC_API_KEY=sk-... CERTORAKEY=...
 # A ready-to-run example project (public).
 git clone https://github.com/Certora/AutoProverExamples.git
 
-# Builds the image (first time), starts Postgres, runs one-time DB/RAG setup,
-# then runs the pipeline. The project root is mounted into the container; the
+# Builds the image (first time; it carries the RAG knowledge base), starts
+# Postgres, then runs the pipeline. The project root is mounted into the container; the
 # contract and design-doc paths are relative to it.
 scripts/autoprove AutoProverExamples/SmokeTest src/Answer.sol:Answer design.md
 
@@ -27,7 +27,7 @@ scripts/autoprove AutoProverExamples/SmokeTest src/Answer.sol:Answer
 
 The prover runs in the Certora cloud. Add `--tui` for the interactive UI, `--rebuild` to force an image rebuild. Pass extra autoprove options after `--` (e.g. `-- --max-concurrent 2`). Under the hood this is just `scripts/docker-compose.yml` (a profile-gated `autoprove` service next to `postgres`); see the header of that file to drive it with raw `docker compose` commands instead.
 
-> **Apple Silicon:** the image is `linux/amd64` (the Solidity compiler binaries are only published for amd64). Enable **Docker Desktop → Settings → General → "Use Rosetta for x86/amd64 emulation"** — it runs the amd64 image ~near-native; without it, qemu makes the build and the one-time RAG embedding *dramatically* slower.
+> **Apple Silicon:** the image is `linux/amd64` (the Solidity compiler binaries are only published for amd64). Enable **Docker Desktop → Settings → General → "Use Rosetta for x86/amd64 emulation"** — it runs the amd64 image ~near-native; without it, qemu makes the build (including its RAG embedding) *dramatically* slower.
 
 The rest of this document covers the **host `uv` flow** for development.
 
@@ -39,7 +39,7 @@ You need everything from the [AIComposer infrastructure setup](AICOMPOSER_INFRA.
 - `rustup` — a default `uv sync` builds the `rust/` crates (see below)
 - `ANTHROPIC_API_KEY` in your environment
 - PostgreSQL databases running (see below)
-- RAG database populated
+- RAG corpora built (see below)
 - Solidity compiler(s) on `$PATH` (naming convention `solcX.Y`, e.g. `solc8.29`)
 
 ### Rust toolchain
@@ -79,7 +79,6 @@ This launches a `pgvector/pgvector:pg16` container with all databases pre-initia
 
 | Database | Purpose |
 |---|---|
-| `rag_db` | CVL manual search (pgvector embeddings) |
 | `langgraph_store_db` | LangGraph document/index store |
 | `langgraph_checkpoint_db` | Workflow checkpoints for resumption |
 | `memory_tool_db` | LLM context memory (hierarchical filesystem) |
@@ -92,21 +91,27 @@ export CERTORA_AI_COMPOSER_PGHOST=myhost
 export CERTORA_AI_COMPOSER_PGPORT=5433
 ```
 
-Note: the RAG database has its own connection string (default `postgresql://rag_user:rag_password@localhost:5432/rag_db`), overridable via `--rag-db`.
+### 2. Build the RAG Knowledge Base
 
-### 2. Populate the RAG Knowledge Base
+The RAG corpora are not in Postgres: each is a single SQLite file under `$CERTORA_AI_COMPOSER_RAG_DIR` (default `~/.local/share/autoprover/rag`), which the Docker image carries prebuilt. On a dev host, the quickest way to get them is to copy them out of that image:
 
-The RAG database must be populated before running auto-prove. This is a two-step process:
+```bash
+# Builds the image first if you have never run scripts/autoprove:
+#   docker compose -f scripts/docker-compose.yml --profile autoprove build autoprove
+./scripts/fetch_rag.sh
+```
+
+Or build them from the docs (needed when you change the corpus-building code):
 
 ```bash
 # Build the Certora documentation HTML
 ./scripts/gen_docs.sh
 
-# Populate the RAG DB from the CVL documentation
+# Build cvl.sqlite from the CVL documentation
 ./scripts/populate_rag.sh
 ```
 
-`gen_docs.sh` clones the [Certora Documentation](https://github.com/Certora/Documentation) repo and builds single-page HTML files via Sphinx. `populate_rag.sh` then chunks and indexes the CVL documentation into `rag_db`.
+`gen_docs.sh` clones the [Certora Documentation](https://github.com/Certora/Documentation) repo and builds single-page HTML files via Sphinx. `populate_rag.sh` then chunks and embeds the CVL documentation into `cvl.sqlite`. `populate_extended_rag.sh` (sanity analyzer) and `populate_foundry_rag.sh` (foundry mode) build the other two. `--rag-db` points a run at another corpus file, or at a PostgreSQL connection URI.
 
 ## Installation
 
@@ -165,7 +170,7 @@ You will likely want to install the tool using the `--editable` flag. You'll als
 | `--model` | `claude-opus-4-6` | Anthropic model to use |
 | `--tokens` | 10000 | Token budget for LLM responses |
 | `--thinking-tokens` | 16384 | Thinking token budget (OpenAI models: `high` reasoning effort) |
-| `--rag-db` | `postgresql://rag_user:rag_password@localhost:5432/rag_db` | RAG database connection string |
+| `--rag-db` | `$CERTORA_AI_COMPOSER_RAG_DIR/cvl.sqlite` | CVL manual corpus: a corpus file path or a PostgreSQL connection URI |
 
 ### Example
 
