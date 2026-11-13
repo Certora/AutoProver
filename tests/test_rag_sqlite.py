@@ -22,23 +22,31 @@ if TYPE_CHECKING:
 
 @pytest.mark.parametrize(("query", "expected"), [
     ("invariant", '("invariant")'),
-    ("how are invariants checked", '("invariants") AND ("checked")'),
+    ("how are invariants checked", '("invariants" AND "checked")'),
     ('"the old value"', '("the old value")'),
-    ("ghost or hook", '("ghost" OR "hook")'),
-    ("ghost or hook sstore", '("ghost" OR "hook") AND ("sstore")'),
+    ("ghost or hook", '(("ghost")) OR (("hook"))'),
+    ("ghost OR hook sstore", '(("ghost")) OR (("hook" AND "sstore"))'),
     ("ghost -hook", '("ghost") NOT "hook"'),
     ('ghost -"old value"', '("ghost") NOT "old value"'),
+    # The tools' own example: the phrase, or storage without mapping.
+    ('"ghost variable" OR storage -mapping', '(("ghost variable")) OR (("storage") NOT "mapping")'),
+    ("ghost -hook or storage", '(("ghost") NOT "hook") OR (("storage"))'),
     ("require_invariant", '("require invariant")'),
-    ("Rule.sanity: x", '("rule sanity") AND ("x")'),
+    ("Rule.sanity: x", '("rule sanity" AND "x")'),
     ('"unbalanced quote', '("unbalanced quote")'),
     ("or ghost", '("ghost")'),
     ("ghost or", '("ghost")'),
+    ("ghost or or hook", '(("ghost")) OR (("hook"))'),
+    # `-or` is an excluded stop word, not a separator.
+    ("ghost -or hook", '("ghost" AND "hook")'),
+    # An alternative of only exclusions has no FTS5 spelling; it is dropped (see the module doc).
+    ("storage or -hook", '("storage")'),
 ])
 def test_to_fts5_query(query: str, expected: str) -> None:
     assert to_fts5_query(query) == expected
 
 
-@pytest.mark.parametrize("query", ["", "   ", "the of and", "-ghost", '"" -', "() : ."])
+@pytest.mark.parametrize("query", ["", "   ", "the of and", "-ghost", '"" -', "() : .", '"the of"', "or"])
 def test_nothing_searchable(query: str) -> None:
     assert to_fts5_query(query) is None
 
@@ -51,6 +59,39 @@ def test_every_translation_is_valid_fts5(query: str) -> None:
     conn = sqlite3.connect(":memory:")
     conn.execute("CREATE VIRTUAL TABLE t USING fts5(content)")
     conn.execute("SELECT * FROM t WHERE t MATCH ?", (match,)).fetchall()
+
+
+_DOCS = {
+    "d1": "ghost variable declared in a mapping",
+    "d2": "storage layout and mapping",
+    "d3": "storage slots",
+    "d4": "ghost hook on storage",
+    "d5": "hook syntax",
+}
+
+
+#: The matches Postgres gives for each query over _DOCS (to_tsvector('english', body) @@
+#: websearch_to_tsquery('english', query)), except where noted.
+@pytest.mark.parametrize(("query", "matches"), [
+    ("ghost", {"d1", "d4"}),
+    ("ghost or hook storage", {"d1", "d4"}),
+    ("-ghost storage", {"d2", "d3"}),
+    ('"ghost variable" OR storage -mapping', {"d1", "d3", "d4"}),
+    ("ghost -hook or storage", {"d1", "d2", "d3", "d4"}),
+    ("storage -mapping or ghost", {"d1", "d3", "d4"}),
+    ("mapping storage or hook", {"d2", "d4", "d5"}),
+    ('"variable declared" -slots', {"d1"}),
+    # Postgres also matches d1 here, through the dropped `!hook` alternative.
+    ("storage or -hook", {"d2", "d3", "d4"}),
+])
+def test_matches_follow_postgres(query: str, matches: set[str]) -> None:
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE VIRTUAL TABLE t USING fts5(id UNINDEXED, body, tokenize='porter unicode61')")
+    conn.executemany("INSERT INTO t (id, body) VALUES (?, ?)", _DOCS.items())
+    match = to_fts5_query(query)
+    assert match is not None
+    found = {row[0] for row in conn.execute("SELECT id FROM t WHERE t MATCH ?", (match,))}
+    assert found == matches
 
 
 def test_parse_rag_location() -> None:

@@ -33,20 +33,17 @@ if [[ "${1:-}" == "setup-db" ]]; then
   PGHOST="${CERTORA_AI_COMPOSER_PGHOST:-postgres}"
   PGPORT="${CERTORA_AI_COMPOSER_PGPORT:-5432}"
   export PGPASSWORD=postgres_admin_password
-  # Skip schema init if it is already there (init-db.sql is plain CREATE
-  # USER/DATABASE, not idempotent).
-  if psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres -tAc \
-      "SELECT 1 FROM pg_user WHERE usename='langgraph_checkpoint_user'" | grep -q 1; then
-    echo "[autoprove] schema already initialized, skipping init-db.sql"
-  else
-    # composer ships init-db.sql as package-data of composer.scripts, so it's at
-    # site-packages/composer/scripts/init-db.sql in this image. It contains psql
-    # \c meta-commands and must go through psql.
-    init_sql=$(python -c "import importlib.resources; print(importlib.resources.files('composer.scripts').joinpath('init-db.sql'))")
-    echo "[autoprove] applying schema from ${init_sql} ..."
-    psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres \
-        -v ON_ERROR_STOP=1 -f "$init_sql"
-  fi
+  # Always applied: every statement in init-db.sql is guarded (IF NOT EXISTS / \gexec), so a
+  # re-run changes nothing that is there and creates what a cluster provisioned by an older
+  # init-db.sql is missing.
+  #
+  # composer ships init-db.sql as package-data of composer.scripts, so it's at
+  # site-packages/composer/scripts/init-db.sql in this image. It contains psql
+  # \c meta-commands and must go through psql.
+  init_sql=$(python -c "import importlib.resources; print(importlib.resources.files('composer.scripts').joinpath('init-db.sql'))")
+  echo "[autoprove] applying schema from ${init_sql} ..."
+  psql -h "$PGHOST" -p "$PGPORT" -U postgres -d postgres \
+      -v ON_ERROR_STOP=1 -f "$init_sql"
   echo "[autoprove] setup-db done."
   exit 0
 fi

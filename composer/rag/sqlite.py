@@ -29,7 +29,7 @@ from composer.rag.base import ComposerRAGDB
 from composer.rag.fts_query import to_fts5_query
 from composer.rag.models import EMBEDDING_MODEL
 from composer.rag.text import code_ref_tag
-from composer.rag.types import BlockChunk, ManualRef, ManualSectionHit
+from composer.rag.types import BlockChunk, HeaderColumns, ManualRef, ManualSectionHit, header_columns
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -75,16 +75,10 @@ CREATE TABLE manual_section_code_refs (
 );
 """
 
-type _Headers = tuple[str | None, str | None, str | None, str | None, str | None, str | None]
 
 
 class CorpusFileError(Exception):
     """The corpus file is missing, or was built for a different schema or embedding model."""
-
-
-def _padded_headers(headers: Sequence[str]) -> _Headers:
-    padded = [h or None for h in headers[:6]] + [None] * (6 - min(len(headers), 6))
-    return (padded[0], padded[1], padded[2], padded[3], padded[4], padded[5])
 
 
 def _leading_headers(row: Sequence[str | None]) -> list[str]:
@@ -107,7 +101,7 @@ class _VectorIndex:
     #: One unit-norm row per document.
     matrix: ndarray
     contents: list[str]
-    headers: list[_Headers]
+    headers: list[HeaderColumns]
 
 
 def _open_reader(path: pathlib.Path) -> sqlite3.Connection:
@@ -115,7 +109,7 @@ def _open_reader(path: pathlib.Path) -> sqlite3.Connection:
         raise CorpusFileError(
             f"RAG corpus file {path} does not exist. To get the built-in corpora, copy them out of "
             "the AutoProver Docker image with scripts/fetch_rag.sh, or build them from the docs "
-            "with scripts/refresh_rag.sh (see AICOMPOSER_INFRA.md)."
+            "with scripts/refresh_rag.sh."
         )
     conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, check_same_thread=False)
     try:
@@ -223,7 +217,7 @@ class SqliteRAGDatabase(ComposerRAGDB):
             (
                 _expand_code_refs(chunk.chunk, chunk.code_refs),
                 np.asarray(embedding, dtype=np.float32).tobytes(),
-                *_padded_headers(chunk.headers),
+                *header_columns(chunk.headers),
             )
             for chunk, embedding in zip(chunks, embeddings)
         ]
@@ -243,7 +237,7 @@ class SqliteRAGDatabase(ComposerRAGDB):
             cur = conn.execute(
                 f"INSERT INTO manual_sections (content, {_HEADER_COLUMNS}, part) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (ch.chunk, *_padded_headers(ch.headers), ch.part),
+                (ch.chunk, *header_columns(ch.headers), ch.part),
             )
             section_id = cur.lastrowid
             conn.execute(
@@ -270,13 +264,13 @@ class SqliteRAGDatabase(ComposerRAGDB):
             self._index = _VectorIndex(
                 matrix=matrix,
                 contents=[r[0] for r in rows],
-                headers=[cast(_Headers, tuple(r[2:8])) for r in rows],
+                headers=[cast(HeaderColumns, tuple(r[2:8])) for r in rows],
             )
         return self._index
 
     @override
     async def find_refs(self, query: str, similarity_cutoff: float = 0.5,
-                        top_k: int = 10, manual_section: list[str] = []) -> list[ManualRef]:
+                        top_k: int = 10, manual_section: Sequence[str] | None = None) -> list[ManualRef]:
         query_vec = np.asarray(await self.embed_query(query), dtype=np.float32)
         norm = np.linalg.norm(query_vec)
         if norm != 0:
@@ -339,7 +333,7 @@ class SqliteRAGDatabase(ComposerRAGDB):
 
     @override
     async def get_manual_section(self, headers: list[str]) -> str | None:
-        padded = _padded_headers(headers)
+        padded = header_columns(headers)
 
         def lookup(conn: sqlite3.Connection) -> str | None:
             sections = conn.execute(

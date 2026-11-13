@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, Any, LiteralString, cast, override, TYPE_CHECKING
 from dataclasses import dataclass
@@ -17,7 +18,7 @@ else:
 
 from composer.rag.base import ComposerRAGDB
 from composer.rag.sqlite import SqliteRAGDatabase
-from composer.rag.types import ManualRef, BlockChunk, ManualSectionHit
+from composer.rag.types import ManualRef, BlockChunk, ManualSectionHit, header_columns
 from composer.rag.text import code_ref_tag
 
 __all__ = [
@@ -92,8 +93,6 @@ CVLR_CORPUS = SqliteRag(RAG_CORPUS_DIR / "cvlr.sqlite")
 KNOWLEDGE_BASES: dict[str, RagLocation] = {}
 
 
-type _RagHeader = str | None
-type _ContentHeaders = tuple[_RagHeader, _RagHeader, _RagHeader, _RagHeader, _RagHeader, _RagHeader]
 
 type RagConnection = str | AsyncConnectionPool[AsyncConnection[TupleRow]]
 
@@ -234,18 +233,11 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
 
         logger.info("✅ Database schema created successfully")
 
-    def _normalize_head(self, l: list[str]) -> _ContentHeaders:
-        headers : list[str | None] = [None] * 6
-        for (ind, h) in enumerate(l):
-            if h:
-                headers[ind] = h
-        return tuple(headers) #type: ignore[trust me bro]
-
     @override
     async def add_manual_section(self, ch: BlockChunk):
         async with self._get_connection() as conn:
             async with conn.transaction():
-                headers = self._normalize_head(ch.headers)
+                headers = header_columns(ch.headers)
                 data = (ch.chunk,) + headers + (ch.part,)
                 cur = await conn.execute("""
                     INSERT INTO manual_sections(
@@ -280,7 +272,7 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
         async with self._get_connection() as conn, conn.transaction(), conn.cursor() as cur:
             for chunk, embedding in zip(chunks, embeddings):
                 try:
-                    headers = self._normalize_head(chunk.headers)
+                    headers = header_columns(chunk.headers)
                     to_store_text = chunk.chunk
                     for (i, cr) in enumerate(chunk.code_refs):
                         to_store_text = to_store_text.replace(code_ref_tag(i), cr)
@@ -299,14 +291,14 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
                     continue
 
     @override
-    async def find_refs(self, query: str, similarity_cutoff: float = 0.5, top_k: int = 10, manual_section : list[str] = []) -> list[ManualRef]:
+    async def find_refs(self, query: str, similarity_cutoff: float = 0.5, top_k: int = 10, manual_section: Sequence[str] | None = None) -> list[ManualRef]:
         # SentenceTransformer.encode_query is CPU-bound (runs the embedding model);
         # offload to a thread to avoid blocking the event loop.
         question_embedding = await self.embed_query(query)
 
         params: tuple[Any, ...] = (question_embedding.tolist(),)
         where_clause = ""
-        if len(manual_section) > 0:
+        if manual_section:
             clauses = []
             for i in range(1, 7):
                 params = params + (list(manual_section),)
@@ -373,8 +365,6 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
 
     @override
     async def get_manual_section(self, headers: list[str]) -> str | None:
-        padded: list[str | None] = list(headers) + [None] * (6 - len(headers))
-        padded = padded[:6]
         async with self._get_connection() as conn:
             cur = await conn.execute("""
                 SELECT id, content, part
@@ -386,7 +376,7 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
                     AND h5 IS NOT DISTINCT FROM %s
                     AND h6 IS NOT DISTINCT FROM %s
                 ORDER BY part ASC
-            """, tuple(padded))
+            """, header_columns(headers))
             rows = await cur.fetchall()
             if not rows:
                 return None

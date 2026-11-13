@@ -1,5 +1,6 @@
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, cast
 
 from numpy import ndarray
@@ -30,8 +31,9 @@ class ComposerRAGDB(ABC):
 
     @abstractmethod
     async def find_refs(self, query: str, similarity_cutoff: float = 0.5,
-                  top_k: int = 10, manual_section: list[str] = []) -> list[ManualRef]:
-        """Search for similar documents using semantic similarity."""
+                  top_k: int = 10, manual_section: Sequence[str] | None = None) -> list[ManualRef]:
+        """Search for similar documents using semantic similarity. With ``manual_section``, only
+        documents with at least one of those headers on their path."""
         ...
 
     @abstractmethod

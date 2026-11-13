@@ -160,6 +160,11 @@ class TestManualSections:
         assert result is not None
         assert "Invariants must hold across all transactions" in result
 
+    async def test_an_empty_header_is_absent(self, rag_db: ComposerRAGDB) -> None:
+        # Stored paths never hold "" (it is stored as absent), so a lookup must read it the same way.
+        assert await rag_db.get_manual_section(["CVL", "Invariants", ""]) == \
+            await rag_db.get_manual_section(["CVL", "Invariants"])
+
     async def test_retrieve_nonexistent(self, rag_db: ComposerRAGDB) -> None:
         result = await rag_db.get_manual_section(["Nonexistent", "Section"])
         assert result is None
@@ -240,6 +245,18 @@ class TestKeywordQueryLanguage:
         hits = await rag_db.search_manual_keywords("ghost or hooks")
         found = {tuple(h.headers) for h in hits}
         assert ("CVL", "Ghosts") in found and ("CVL", "Hooks") in found
+
+    async def test_an_exclusion_stays_in_its_alternative(self, rag_db: ComposerRAGDB) -> None:
+        # (ghost AND NOT contract) OR rules: the Rules section mentions "contract", but its
+        # alternative excludes nothing.
+        hits = await rag_db.search_manual_keywords("ghost -contract or rules")
+        assert ["CVL", "Rules"] in [h.headers for h in hits]
+        assert ["CVL", "Ghosts"] not in [h.headers for h in hits]
+
+    async def test_and_binds_tighter_than_or(self, rag_db: ComposerRAGDB) -> None:
+        # (invariants AND transactions) OR ghost: Ghosts matches without "invariants".
+        hits = await rag_db.search_manual_keywords("invariants transactions or ghost")
+        assert ["CVL", "Ghosts"] in [h.headers for h in hits]
 
     async def test_stray_punctuation_is_not_an_error(self, rag_db: ComposerRAGDB) -> None:
         hits = await rag_db.search_manual_keywords('invariants: "unbalanced (quote')
