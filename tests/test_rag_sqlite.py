@@ -77,9 +77,11 @@ async def _build(location: SqliteRag, model: "SentenceTransformer", *texts: str)
 
 @pytest.mark.asyncio
 async def test_a_missing_file_fails_on_open(tmp_path: pathlib.Path, model: "SentenceTransformer") -> None:
-    with pytest.raises(CorpusFileError, match="does not exist"):
+    with pytest.raises(CorpusFileError, match="does not exist") as e:
         async with rag_context(SqliteRag(tmp_path / "absent.sqlite"), model):
             pass
+    # The message says how to get one: a missing corpus is the first thing a fresh dev host hits.
+    assert "scripts/fetch_rag.sh" in str(e.value) and "scripts/refresh_rag.sh" in str(e.value)
     # Opening for search must not leave an empty corpus behind for the next open to "succeed" on.
     assert not (tmp_path / "absent.sqlite").exists()
 

@@ -24,7 +24,10 @@ NB: You will need to restart this docker image each time your host computer rest
 ## One-time RAG Setup
 
 The LLM's documentation searches read RAG corpora: one SQLite file each, under `$CERTORA_AI_COMPOSER_RAG_DIR`
-(default `~/.local/share/autoprover/rag`). The Docker images carry them prebuilt; on a dev host, build them:
+(default `~/.local/share/autoprover/rag`). The Docker images carry them prebuilt, and `./fetch_rag.sh` copies them out
+of the image (`autoprover-local:latest` by default; `--image` picks another) — the quickest setup for a dev host.
+
+To build them from the docs instead, which you need when changing the corpus-building code:
 
 1. Run `./gen_docs.sh` to build the HTML documentation into `prover-docs/`
 2. Run `./populate_rag.sh` to build `cvl.sqlite` (CVL manual; AI Composer and cex-analyzer)

@@ -93,7 +93,15 @@ export CERTORA_AI_COMPOSER_PGPORT=5433
 
 ### 2. Build the RAG Knowledge Base
 
-The RAG corpora are not in Postgres: each is a single SQLite file under `$CERTORA_AI_COMPOSER_RAG_DIR` (default `~/.local/share/autoprover/rag`), which the Docker image carries prebuilt. On a dev host, build the CVL one before running auto-prove:
+The RAG corpora are not in Postgres: each is a single SQLite file under `$CERTORA_AI_COMPOSER_RAG_DIR` (default `~/.local/share/autoprover/rag`), which the Docker image carries prebuilt. On a dev host, the quickest way to get them is to copy them out of that image:
+
+```bash
+# Builds the image first if you have never run scripts/autoprove:
+#   docker compose -f scripts/docker-compose.yml --profile autoprove build autoprove
+./scripts/fetch_rag.sh
+```
+
+Or build them from the docs (needed when you change the corpus-building code):
 
 ```bash
 # Build the Certora documentation HTML

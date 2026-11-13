@@ -112,7 +112,11 @@ class _VectorIndex:
 
 def _open_reader(path: pathlib.Path) -> sqlite3.Connection:
     if not path.is_file():
-        raise CorpusFileError(f"RAG corpus file {path} does not exist")
+        raise CorpusFileError(
+            f"RAG corpus file {path} does not exist. To get the built-in corpora, copy them out of "
+            "the AutoProver Docker image with scripts/fetch_rag.sh, or build them from the docs "
+            "with scripts/refresh_rag.sh (see AICOMPOSER_INFRA.md)."
+        )
     conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True, check_same_thread=False)
     try:
         meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
