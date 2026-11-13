@@ -73,6 +73,7 @@ from composer.spec.cvlr.conf import tunable_conf
 from composer.spec.cvlr.editor import EditingJudgeHost, ProgramEditing, editor_tools
 from composer.spec.cvlr.example import WorkedExample, worked_example
 from composer.spec.cvlr.harness import GeneratedHarness
+from composer.spec.cvlr.reference import HarnessShim
 from composer.spec.cvlr.state import (
     CVLR_JUDGE_KEY,
     FEEDBACK,
@@ -349,6 +350,10 @@ class CvlrAuthorSystemParams(CvlrVersionParams):
     module: str
     example: WorkedExample | None
     conf: dict
+    #: The run's harness module for a framework no CVLR chain crate covers
+    #: (:attr:`~composer.spec.cvlr.reference.ChainReference.shim`). Its section replaces the
+    #: Anchor-only parts of "Reaching a handler".
+    shim: HarnessShim | None
 
 
 _JudgeTemplate = TypedTemplate[_CvlrJudgeParams]("cvlr_feedback_prompt.j2")
@@ -701,6 +706,7 @@ async def batch_cvlr_generation(
     module: str,
     cvlr_versions: str,
     caveats: Sequence[str],
+    shim: HarnessShim | None,
     target: HarnessTarget,
     verify: VerifyDeps,
     editing: ProgramEditing,
@@ -721,6 +727,10 @@ async def batch_cvlr_generation(
 
     ``focus`` is a prioritized run's: the properties ``record_skip`` refuses until the budget orders
     a wrap-up, and the ``verify_rules`` floor under an ``exhausted`` give-up.
+
+    ``shim`` is the run's harness module for a framework with no CVLR chain crate. Such a program
+    gets no worked example: the example is an Anchor handler's, and its names would be read off a
+    program that has no accounts struct or ``Context``.
 
     CVLR itself is not mounted here. The author and the judge both reach it through
     ``cvlr_research`` in ``env.rag_tools`` (``docs/cvlr-api-docs-plan.md`` §5), which is the one
@@ -759,10 +769,11 @@ async def batch_cvlr_generation(
                 "caveats": list(caveats),
                 "example": (
                     worked_example(component, props, read_surface(target.package_root))
-                    if component
+                    if component and shim is None
                     else None
                 ),
                 "conf": tunable_conf(verify.submission.settings),
+                "shim": shim,
             }
         ).render_to
     ]

@@ -35,8 +35,18 @@ the tuning files.
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from enum import StrEnum
 
+from composer.cargo.features import CargoFeature
 from composer.spec.cvlr.forks import ANCHOR_FORK, FIXED_FORK, ForkOverride
+
+
+#: What keeps the Solana SDK's ``entrypoint!`` from installing its global allocator. The macro's
+#: ``custom_heap_default!`` checks the *calling* crate's ``custom-heap`` feature, in ``solana-program``
+#: 2.x and ``solana-program-entrypoint`` 3.x alike. The program's bump allocator writes the heap at a
+#: fixed address, and a rule that also allocates through ``__rust_alloc`` fails with Prover error
+#: 3309, "Conflicting allocation/usage of heap memory".
+CUSTOM_HEAP_FEATURE = CargoFeature("custom-heap")
 
 
 @dataclass(frozen=True)
@@ -158,6 +168,11 @@ class PlatformGeneration:
     #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
     #: is already the one the starting layers use, which is the monolith's.
     path_aliases: tuple[PathAlias, ...] = ()
+    #: The feature of the *calling* crate that keeps this generation's ``entrypoint!`` macro from
+    #: installing its global allocator, or ``None`` when the macro has no such switch. The scaffold
+    #: turns it on for a program that calls the macro and has no ``no-entrypoint`` feature
+    #: (:func:`composer.spec.cvlr.scaffold._entrypoint_switch`).
+    heap_opt_out: CargoFeature | None = None
 
 
 @dataclass(frozen=True)
@@ -197,19 +212,56 @@ class ProgramModel:
     program: str
 
 
+class AuthorSection(StrEnum):
+    """A section of the author's system prompt that says how a rule reaches one framework's
+    handlers, by the template that holds it. Each defines the macros the prompt's "Reaching a
+    handler" section calls in place of its Anchor-only parts."""
+
+    JIMINY = "cvlr_reaching_jiminy_handler.j2"
+
+
+@dataclass(frozen=True)
+class HarnessShim:
+    """A module of the harness that binds the CVLR core to a framework's account type, written by
+    the scaffold because no CVLR chain crate is published for the framework.
+
+    The scaffold writes it from ``harness_files/<module>.template.rs`` into ``src/certora/``, beside
+    ``specs``. It compiles against the program's own copy of the framework, so it follows whatever
+    release the program resolves, which a published crate could not do for a framework that is
+    distributed as git dependencies.
+    """
+
+    #: The module's name under ``src/certora/``, and its template's stem.
+    module: str
+    #: The crate the module's ``use`` lines name. The program must depend on it directly: a crate
+    #: can only name its own dependencies.
+    requires: str
+    #: How a rule reaches one of this framework's handlers, in the author's system prompt.
+    author_section: AuthorSection
+
+    def describe(self) -> str:
+        return f"the scaffold's {self.module} harness module"
+
+
+#: What binds the CVLR core to a platform's account type: a published chain crate, or a module the
+#: scaffold writes.
+type ChainBinding = CrateRelease | HarnessShim
+
+
 @dataclass(frozen=True)
 class ChainReference:
     """What current CVLR means for one chain."""
 
     core: CrateRelease
-    #: The cvlr chain crate every project on this chain declares.
-    chain_crate: CrateRelease
+    #: The cvlr chain crate every project on this generation declares, or the harness module that
+    #: stands in for one.
+    binding: ChainBinding
     platform: PlatformGeneration
     #: Certora's forks of crates this chain's programs depend on, which a target is redirected at
     #: when it resolves them (:mod:`composer.spec.cvlr.forks`). Empty for a chain with none.
     forks: tuple[ForkOverride, ...]
     #: Chain crates that model one on-chain program rather than the chain itself: the SPL token
-    #: account model, the stake program's state. Narrower than :attr:`chain_crate`, and still
+    #: account model, the stake program's state. Narrower than :attr:`binding`, and still
     #: declared. :meth:`scaffold_crates` includes them unless :attr:`withheld` names them.
     #:
     #: They are optional crates behind the ``certora`` feature, so a project that never calls them
@@ -239,10 +291,24 @@ class ChainReference:
 
     def line(self) -> str:
         """The supported line as a refusal names it to a project author: core and chain crate."""
-        return (
-            f"{self.core.name} {self.core.version} with "
-            f"{self.chain_crate.name} {self.chain_crate.version}"
-        )
+        match self.binding:
+            case CrateRelease(name=name, version=version):
+                bound = f"{name} {version}"
+            case HarnessShim() as shim:
+                bound = shim.describe()
+        return f"{self.core.name} {self.core.version} with {bound}"
+
+    def _binding_name(self) -> str:
+        match self.binding:
+            case CrateRelease(name=name):
+                return name
+            case HarnessShim() as shim:
+                return shim.describe()
+
+    @property
+    def shim(self) -> HarnessShim | None:
+        """The harness module the scaffold writes for this generation, if its binding is one."""
+        return self.binding if isinstance(self.binding, HarnessShim) else None
 
     def crates(self) -> tuple[CrateRelease, ...]:
         """Every CVLR crate in the reference set: the line this build supports.
@@ -253,7 +319,8 @@ class ChainReference:
         :func:`composer.spec.cvlr.scaffold._check_pins` — noticing a real version disagreement on
         a crate the project declares for itself.
         """
-        return (self.core, self.chain_crate, *(m.release for m in self.models), *self.companions)
+        chain = (self.binding,) if isinstance(self.binding, CrateRelease) else ()
+        return (self.core, *chain, *(m.release for m in self.models), *self.companions)
 
     def scaffold_crates(self) -> tuple[CrateRelease, ...]:
         """What a fresh project declares in its ``Cargo.toml``.
@@ -283,7 +350,7 @@ class ChainReference:
         if unknown := set(names) - set(known):
             offered = ", ".join(f"{n} ({p})" for n, p in sorted(known.items())) or "none"
             raise ValueError(
-                f"not program models of {self.chain_crate.name}: {', '.join(sorted(unknown))}. "
+                f"not program models of {self._binding_name()}: {', '.join(sorted(unknown))}. "
                 f"Withholding is only for a target that *is* the modelled program; this chain "
                 f"models: {offered}"
             )
@@ -314,7 +381,7 @@ _CORE = CrateRelease("cvlr", "0.6.2")
 #: three crates of that repository are released together, at one version.
 SOLANA_V2 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.5.2"),
+    binding=CrateRelease("cvlr-solana", "0.5.2"),
     models=(
         ProgramModel(
             CrateRelease("cvlr-solana-stake", "0.5.2"), "the stake program"
@@ -337,6 +404,7 @@ SOLANA_V2 = ChainReference(
             CrateRequirement("solana-account-info", "2.3"),
             CrateRequirement("solana-program", "2.2"),
         ),
+        heap_opt_out=CUSTOM_HEAP_FEATURE,
         # Checked against a demangled symbol table. ``solana-program`` is a partial facade, so
         # which side of the split a symbol lives on is per symbol, not per module.
         path_aliases=(
@@ -382,7 +450,7 @@ SOLANA_V2 = ChainReference(
 #: both program models.
 SOLANA_V3 = replace(
     SOLANA_V2,
-    chain_crate=CrateRelease("cvlr-solana", "0.6.1"),
+    binding=CrateRelease("cvlr-solana", "0.6.1"),
     models=(
         ProgramModel(CrateRelease("cvlr-solana-stake", "0.6.1"), "the stake program"),
         ProgramModel(CrateRelease("cvlr-spl-token", "0.6.1"), "the SPL token program"),
@@ -392,6 +460,7 @@ SOLANA_V3 = replace(
         label="solana-* 3.x",
         sdk_crates=(CrateRequirement("solana-account-info", "3"),),
         witnesses=(CrateRequirement("solana-account-info", "3.0"),),
+        heap_opt_out=CUSTOM_HEAP_FEATURE,
         # Read off a stake `main` build's demangled symbols (`docs/cvlr-sdk3-support.md`, A2).
         # Most are the 2.x spellings. Three are not:
         path_aliases=(
@@ -444,7 +513,7 @@ SOLANA_V3 = replace(
 #: so it resolves onto the shared 0.6.2 core with one copy of each core crate.
 SOLANA_V1_18 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.4.7"),
+    binding=CrateRelease("cvlr-solana", "0.4.7"),
     # None. The 0.4 line has no stake model, and its token helpers are in the chain crate. It has
     # no SPL Token CPI model either: a token CPI reaches ``invoke_signed_unchecked``, which the
     # core summaries make opaque.
@@ -467,13 +536,55 @@ SOLANA_V1_18 = ChainReference(
         label="solana-program 1.18",
         sdk_crates=(CrateRequirement("solana-program", "1.18"),),
         witnesses=(CrateRequirement("solana-program", "1.18"),),
+        heap_opt_out=CUSTOM_HEAP_FEATURE,
         # No aliases: the monolith's spelling is the one the starting tuning files use.
+    ),
+)
+
+#: Programs written on igneous-labs' jiminy (https://github.com/igneous-labs/jiminy), a framework
+#: that replaces the SDK: its own entrypoint, its own account type (``AccountHandle``, read through
+#: the ``Abr`` borrow registry) and its own syscall bindings. It is distributed as git dependencies
+#: only, and the ``jiminy`` crates on crates.io are an unrelated project. A published chain crate
+#: could not name its types, so the account helpers are a module the scaffold writes against the
+#: program's own copy, reached through ``jiminy-entrypoint``'s re-export of ``jiminy-account``.
+SOLANA_JIMINY = ChainReference(
+    core=_CORE,
+    binding=HarnessShim(
+        module="jiminy",
+        requires="jiminy-entrypoint",
+        author_section=AuthorSection.JIMINY,
+    ),
+    models=(),
+    forks=(FIXED_FORK,),
+    caveats=(
+        "This program is written on jiminy, not on the Solana SDK, so this build gives it the "
+        "`cvlr` core and no chain crate. Nothing in `cvlr_solana`, `cvlr_spl_token` or "
+        "`cvlr_solana_stake` applies: their helpers take and return the SDK's `AccountInfo`, which "
+        "a jiminy handler cannot take. Where the CVLR manual reaches for them, use the "
+        "`crate::certora::jiminy` module the harness already has: `cvlr_jiminy_abr()`, "
+        "`cvlr_jiminy_account()` and `cvlr_jiminy_accounts()`.",
+        "A jiminy account is an `AccountHandle`, read and written through the `Abr`, never "
+        "directly. Handles are `Copy` and own nothing, so the advice about putting an "
+        "`AccountInfo` array in a `Box` and ending with `core::mem::forget` does not apply.",
+        "A CPI through `jiminy_cpi` reaches the `sol_invoke_signed_c` syscall, which the prover "
+        "models as returning an arbitrary status and writing nothing. No token model applies: "
+        "`cvlr_spl_token`'s summaries replace the SDK's invoke functions, which a jiminy program "
+        "never calls.",
+    ),
+    platform=PlatformGeneration(
+        label="jiminy",
+        # jiminy is not published, so there is no requirement a probe crate could declare.
+        sdk_crates=(),
+        # Every jiminy program declares its entrypoint crate, which links `jiminy-account`.
+        witnesses=(CrateRequirement("jiminy-entrypoint", "0.1"),),
+        # jiminy's `entrypoint!` installs its allocator unconditionally.
+        heap_opt_out=None,
     ),
 )
 
 SOROBAN = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-soroban", "0.4.0"),
+    binding=CrateRelease("cvlr-soroban", "0.4.0"),
     # The derive crate is a companion of the chain crate. A target uses it when it writes the
     # attribute macros. It is declared and pinned like a model's release, and models no program,
     # so it is not withholdable.
@@ -495,14 +606,19 @@ SOROBAN = ChainReference(
 #: One reference set per platform generation, newest first. A chain crate works only with its own
 #: generation's ``AccountInfo``, so a target is set up with the generation it is on
 #: (:func:`composer.spec.cvlr.scaffold.select_generation`).
+#:
+#: A framework's generation comes before the SDK's. A program that links a framework's entrypoint
+#: takes that framework's account type in its handlers, whatever SDK crates its dependencies also
+#: link.
 REFERENCE_SET: dict[str, tuple[ChainReference, ...]] = {
-    "solana": (SOLANA_V3, SOLANA_V2, SOLANA_V1_18),
+    "solana": (SOLANA_JIMINY, SOLANA_V3, SOLANA_V2, SOLANA_V1_18),
     "soroban": (SOROBAN,),
 }
 
 
 def generations(chain: str) -> tuple[ChainReference, ...]:
-    """The reference sets for ``chain``, one per supported platform generation, newest first.
+    """The reference sets for ``chain``, one per supported platform generation, in the order
+    :data:`REFERENCE_SET` gives.
 
     Raises when ``chain`` has none. Callers need an answer to proceed, and a missing chain is a
     registration bug. The error names the chains that have a set. CVLR has no EVM line."""

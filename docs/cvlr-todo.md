@@ -919,7 +919,20 @@ it too:
   be resubmitted unchanged.
 - Cancel a job the poll gives up on, if the cloud API allows it.
 
-**U58. Programs on a zero-dependency framework (Pinocchio, jiminy) are refused in preflight.** A
+**U58. Programs on a zero-dependency framework (Pinocchio, jiminy) are refused in preflight.**
+*jiminy done 2026-11-13; Pinocchio still open.* jiminy is its own platform generation,
+`SOLANA_JIMINY`, witnessed by `jiminy-entrypoint` and ordered ahead of the SDK generations. Its
+binding is a `HarnessShim`, not a chain crate: jiminy is published only as git dependencies, so no
+CVLR crate can name its types. The scaffold writes `src/certora/jiminy.rs` from
+`harness_files/jiminy.template.rs`. It builds `AccountHandle`s by casting a
+`CVT_nondet_solana_account_space` region, as the P-Token specs do for Pinocchio, and gets the `Abr`
+from a zero-account `deser_accounts`. The author prompt swaps the Anchor-only parts of "Reaching a
+handler" for `cvlr_reaching_jiminy_handler.j2`. Checked on inf-1.5's controller: two `set_admin`
+rules verified with their vacuity checks passing, and a planted violation came back violated.
+Pinocchio would take the same shape: a second `HarnessShim` and its own `AuthorSection`. Original
+text:
+
+A
 platform generation is recognised by a witness crate the package links, `solana-program` or
 `solana-account-info` ([reference.py](../composer/spec/cvlr/reference.py)). A program written on
 Pinocchio or jiminy links neither. Each framework brings its own entrypoint, account type and

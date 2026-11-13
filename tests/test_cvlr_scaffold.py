@@ -38,7 +38,14 @@ from composer.spec.cvlr.scaffold import (
     plan_scaffold,
 )
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
-from composer.spec.cvlr.reference import SOLANA_V1_18, SOLANA_V2, SOLANA_V3, SOROBAN, generations
+from composer.spec.cvlr.reference import (
+    SOLANA_JIMINY,
+    SOLANA_V1_18,
+    SOLANA_V2,
+    SOLANA_V3,
+    SOROBAN,
+    generations,
+)
 from composer.sandbox.config import SandboxConfig
 from tests.conftest import CVLR_SOLANA_0_5_1_COMMIT, read_from_commit
 
@@ -596,7 +603,7 @@ def test_a_reference_set_crate_the_project_does_not_name_is_not_a_refusal(tmp_pa
     # pinned core and chain crate and names neither specialization; the scaffold adds them. A gate
     # that read "not in the graph" as a disagreement would refuse every project it is meant to set
     # up, starting with the fresh one.
-    chain = SOLANA_V2.chain_crate.version
+    chain = SOLANA_V2.binding.version
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
         f'[dependencies]\ncvlr = "=0.6.2"\ncvlr-solana = "={chain}"\nsolana-program',
@@ -1110,6 +1117,7 @@ def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
         ("solana-program", "2.2.1", "solana-program 2.x"),
         ("solana-program", "1.18.26", "solana-program 1.18"),
         ("solana-program", "1.17.18", None),
+        ("jiminy-entrypoint", "0.1.0", "jiminy"),
     ],
 )
 def test_a_project_is_set_up_with_the_generation_it_is_on(
@@ -1156,3 +1164,113 @@ def test_a_1_18_project_scaffolds_without_program_models(tmp_path):
     plan = plan_scaffold(workspace, package, SOLANA_V1_18)
     assert not plan.blocked
     assert not any("cvlr-spl-token" in str(c) or "cvlr-solana-stake" in str(c) for c in plan.changes)
+
+
+# ---------------------------------------------------------------------------------------------
+# jiminy
+
+
+JIMINY_MANIFEST = """\
+[package]
+name = "prog"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+jiminy-entrypoint = { git = "https://github.com/igneous-labs/jiminy.git", branch = "master" }
+"""
+
+JIMINY_PROGRAM = """\
+use jiminy_entrypoint::{account::{Abr, AccountHandle}, program_error::ProgramError};
+
+jiminy_entrypoint::entrypoint!(process_ix);
+
+fn process_ix(
+    _abr: &mut Abr,
+    _accounts: &[AccountHandle<'_>],
+    _data: &[u8],
+    _prog_id: &[u8; 32],
+) -> Result<(), ProgramError> {
+    Ok(())
+}
+"""
+
+
+def _jiminy_project(root: Path, *, manifest: str = JIMINY_MANIFEST, **kwargs):
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "lib.rs").write_text(JIMINY_PROGRAM)
+    return _project(
+        root,
+        manifest=manifest,
+        workspace_manifest=manifest,
+        platform="0.1.0",
+        platform_crate="jiminy-entrypoint",
+        **kwargs,
+    )
+
+
+def test_a_jiminy_program_that_also_links_the_sdk_is_on_jiminy(tmp_path):
+    """Its handlers take jiminy's account type whatever a dependency links, so an SDK crate in its
+    graph must not put it on the SDK's generation, where the scaffold would give it
+    `cvlr-solana`'s `AccountInfo` helpers."""
+    workspace, package = _jiminy_project(
+        tmp_path, cvlr_resolved={"solana-account-info": "3.1.1"}
+    )
+    chosen = scaffold.select_generation(workspace, package, generations("solana"))
+    assert chosen == SOLANA_JIMINY
+
+
+def test_a_jiminy_program_gets_the_core_and_the_account_helpers(tmp_path):
+    workspace, package = _jiminy_project(tmp_path)
+    plan = plan_scaffold(workspace, package, SOLANA_JIMINY)
+    assert not plan.blocked
+
+    writes = {c.path: c.contents for c in plan.changes if isinstance(c, Write)}
+    assert "use jiminy_entrypoint::account::" in writes[HARNESS_DIR / "jiminy.rs"]
+    assert "pub fn cvlr_jiminy_accounts()" in writes[HARNESS_DIR / "jiminy.rs"]
+    assert "pub mod jiminy;" in writes[HARNESS_DIR / "mod.rs"]
+    assert "pub mod specs;" in writes[HARNESS_DIR / "mod.rs"]
+
+    added = [a for a in _additions(plan) if a.table == ("dependencies",)]
+    (deps,) = added
+    assert isinstance(deps, AddEntries)
+    assert [name for name, _ in deps.entries] == ["cvlr"]
+
+
+def test_a_jiminy_program_that_calls_entrypoint_gets_no_sdk_heap_switch(tmp_path):
+    """jiminy's `entrypoint!` matches the SDK macro's spelling, but installs its allocator
+    unconditionally. `custom-heap` would be a feature that switches nothing off."""
+    workspace, package = _jiminy_project(tmp_path)
+    plan = plan_scaffold(workspace, package, SOLANA_JIMINY)
+    features = _features(plan)
+    assert features == {"certora": ["dep:cvlr"]}
+
+
+def test_a_jiminy_program_scaffolds_once(tmp_path):
+    workspace, package = _jiminy_project(tmp_path)
+    apply(plan_scaffold(workspace, package, SOLANA_JIMINY), workspace.root)
+    manifest = tomllib.loads((tmp_path / "Cargo.toml").read_text())
+    assert manifest["features"]["certora"] == ["dep:cvlr"]
+    assert (tmp_path / HARNESS_DIR / "jiminy.rs").is_file()
+
+    again = plan_scaffold(workspace, package, SOLANA_JIMINY)
+    assert again.changes == ()
+
+
+def test_a_jiminy_program_that_does_not_declare_the_entrypoint_crate_is_refused(tmp_path):
+    """The helpers name `jiminy_entrypoint`, and a crate can only name its own dependencies."""
+    manifest = JIMINY_MANIFEST.replace("jiminy-entrypoint", "jiminy-cpi")
+    workspace, package = _jiminy_project(tmp_path, manifest=manifest)
+    (blocked,) = plan_scaffold(workspace, package, SOLANA_JIMINY).blocked
+    assert "jiminy-entrypoint" in blocked.problem
+    assert blocked.resolution.startswith("add jiminy-entrypoint to prog's [dependencies]")
+
+
+def test_an_sdk_program_gets_no_jiminy_module(tmp_path):
+    plan, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    writes = {c.path: c.contents for c in plan.changes if isinstance(c, Write)}
+    assert HARNESS_DIR / "jiminy.rs" not in writes
+    assert "jiminy" not in writes[HARNESS_DIR / "mod.rs"]
