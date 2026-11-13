@@ -313,8 +313,8 @@ What an adopting application adds, in one go: its committed `<kb>.rag.json`, bot
 corpus file it builds into the image beside the others (see `scripts/Dockerfile`'s `rag-builder`
 stage).
 
-**Untouched:** `foundry_ragbuild.py`, `ragbuild.py` (CVL), their wrappers, and `refresh_rag.sh`.
-No runtime code changes — the search tools, `rag_env.py`, and the DB API are the same.
+The CVL and Foundry builders (`ragbuild.py`, `foundry_ragbuild.py`) still produce their own corpora
+directly rather than through a manifest.
 
 ---
 

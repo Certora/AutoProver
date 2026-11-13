@@ -3,7 +3,8 @@
 The tools describe their query language as Postgres's ``websearch_to_tsquery``, whose grammar is: a
 query is a list of alternatives separated by ``or``; an alternative is a list of terms, all
 required; a term is a word or a ``"quoted phrase"``, and a leading ``-`` makes it excluded instead
-of required. So ``and`` binds tighter than ``or``: ``a b or c -d`` is ``(a AND b) OR (c AND NOT d)``.
+of required. So ``and`` binds tighter than ``or``: ``ghost hook or storage -mapping`` is
+``(ghost AND hook) OR (storage AND NOT mapping)``.
 
 Raw FTS5 syntax is far stricter — an unbalanced quote, a bare ``-``, a ``.`` or a ``:`` in an
 LLM-written query is a syntax error — so a query is never passed through as-is. Every term is

@@ -33,9 +33,8 @@ if [[ "${1:-}" == "setup-db" ]]; then
   PGHOST="${CERTORA_AI_COMPOSER_PGHOST:-postgres}"
   PGPORT="${CERTORA_AI_COMPOSER_PGPORT:-5432}"
   export PGPASSWORD=postgres_admin_password
-  # Always applied: every statement in init-db.sql is guarded (IF NOT EXISTS / \gexec), so a
-  # re-run changes nothing that is there and creates what a cluster provisioned by an older
-  # init-db.sql is missing.
+  # Always applied: init-db.sql is safe to run again, and re-running it creates what a cluster
+  # provisioned by an older init-db.sql is missing.
   #
   # composer ships init-db.sql as package-data of composer.scripts, so it's at
   # site-packages/composer/scripts/init-db.sql in this image. It contains psql
