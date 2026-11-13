@@ -13,15 +13,14 @@ the chain's own SDK that a chain crate is built against, such as ``solana-progra
 
 Exact versions, not ranges. The core and the chain crates are versioned separately, so "latest"
 can pair a new core with an old chain crate. A bump is an edit here, and it moves every project
-this build sets up: what is named here is the one CVLR line supported at a time, the way a Prover
-release ships one CVL. That is why :mod:`composer.spec.cvlr.scaffold` refuses a project already on
-a different line rather than deferring to it.
+this build sets up. Each platform generation has one CVLR line.
+:mod:`composer.spec.cvlr.scaffold` refuses a project that is already on a different line.
 
 A chain crate is bound to one platform generation, and each generation has its own ``AccountInfo``.
-``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.0 with 2.2, and the unreleased 0.6
-line with the ``solana-*`` v3 crates. A helper from one generation cannot be passed an account
-from another, so :attr:`ChainReference.platform` is part of the reference, not a detail of one
-target.
+``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.x with 2.2, and 0.6.x with the
+``solana-*`` v3 crates. A helper from one generation cannot be passed an account from another, so
+:attr:`ChainReference.platform` is part of the reference, not a detail of one target, and a chain
+has one reference set per generation it supports (:data:`REFERENCE_SET`).
 
 ``solana-program`` stopped defining the platform types at 2.2, not at 3.0. 1.17 and 1.18 have a
 real ``account_info`` module. 2.2.1, 2.3.0, and 3.0.0 re-export ``solana-account-info``. A path
@@ -30,17 +29,38 @@ symbol carries is ``solana_account_info::AccountInfo``. :class:`PathAlias` is th
 the tuning files.
 """
 
-from dataclasses import dataclass
+from collections.abc import Iterable
+from dataclasses import dataclass, replace
 
 from composer.spec.cvlr.forks import ANCHOR_FORK, FIXED_FORK, ForkOverride
 
 
 @dataclass(frozen=True)
-class CrateRelease:
-    """One crate at one published version."""
+class GitCommit:
+    """A commit cargo fetches in place of a crates.io release.
 
+    The project still declares the crates.io requirement (``=version``). A ``[patch.crates-io]``
+    entry points the fetch at this commit. Cargo applies the patch only when the commit's crate
+    version meets that requirement. The revision is a commit hash, because a tag or a branch can
+    move.
+    """
+
+    repo: str
+    rev: str
+
+    def patch_body(self) -> tuple[tuple[str, str], ...]:
+        return (("git", self.repo), ("rev", self.rev))
+
+    def patch_line(self, crate: str) -> str:
+        return f'{crate} = {{ git = "{self.repo}", rev = "{self.rev}" }}'
+
+
+@dataclass(frozen=True)
+class CrateRelease:
     name: str
     version: str
+    #: ``None`` when the release is on crates.io. Otherwise the commit cargo fetches.
+    commit: GitCommit | None = None
 
     def dependency_line(self) -> str:
         """A ``Cargo.toml`` dependency line. Exact (``=version``), not a caret range.
@@ -48,6 +68,24 @@ class CrateRelease:
         The reference set says what was compiled, not which later releases are compatible.
         """
         return f'{self.name} = "={self.version}"'
+
+
+@dataclass(frozen=True)
+class CommitPatch:
+    """One ``[patch.crates-io]`` entry."""
+
+    name: str
+    version: str
+    commit: GitCommit
+
+
+def commit_patches(crates: Iterable[CrateRelease]) -> tuple[CommitPatch, ...]:
+    """Patches for the releases that name a commit. Empty when every release is on crates.io."""
+    return tuple(
+        CommitPatch(crate.name, crate.version, crate.commit)
+        for crate in crates
+        if crate.commit is not None
+    )
 
 
 @dataclass(frozen=True)
@@ -83,32 +121,6 @@ class PathAlias:
 
 
 @dataclass(frozen=True)
-class NamespacePattern:
-    """A blanket over one crate's whole namespace, widened to the family that replaced that crate.
-
-    The canonical spelling is ``<crate>::.*``, the pattern the starting layers use for a whole
-    layer, as in ``#[inline(never)] ^solana_program::.*$``. After the monolith split, that layer
-    lives in ``solana_account_info``, ``solana_pubkey``, ``solana_cpi``, and others, so the blanket
-    matches almost nothing and the default stops applying.
-
-    This is not a :class:`PathAlias`, for two reasons.
-
-    It must not rewrite a path that merely starts with the crate.
-    ``solana_program::instruction::get_stack_height`` is still a function in the monolith, and
-    rewriting it would name a symbol that does not exist. The literal ``.*`` is what marks a
-    blanket.
-
-    It is also unconditional. A :class:`PathAlias` is dropped unless the target resolves the crate
-    it names. This replacement matches crate names, so it covers the canonical spelling and stays
-    correct on a target that predates the split, and it does not go stale when another crate is
-    split out.
-    """
-
-    canonical: str
-    actual: str
-
-
-@dataclass(frozen=True)
 class PlatformGeneration:
     """The chain-platform release line a CVLR chain crate is bound to.
 
@@ -132,7 +144,7 @@ class PlatformGeneration:
     #: How this generation spells the paths in the starting tuning files.
     #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
     #: is already the one the starting layers use, which is the monolith's.
-    path_aliases: tuple[PathAlias | NamespacePattern, ...] = ()
+    path_aliases: tuple[PathAlias, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -205,29 +217,33 @@ class ChainReference:
         lines += [c.dependency_line() for c in self.platform.sdk_crates]
         return "\n".join(lines)
 
+    def from_commits(self) -> tuple[CommitPatch, ...]:
+        return commit_patches(self.crates())
+
 
 #: The core line, shared by every chain. ``cvlr-spec`` (``cvlr_spec!``, ``cvlr_rules!``,
 #: ``cvlr_lemma!``) is a dependency of ``cvlr``, so a target names one crate and gets the
 #: parametric-rule layer with it.
-_CORE = CrateRelease("cvlr", "0.6.1")
+_CORE = CrateRelease("cvlr", "0.6.2")
 
-SOLANA = ChainReference(
+#: ``cvlr-solana`` 0.5.1. The three crates of that repository are released together, at one version.
+SOLANA_V2 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.5.0"),
+    chain_crate=CrateRelease("cvlr-solana", "0.5.1"),
     specializations=(
-        CrateRelease("cvlr-solana-stake", "0.5.0"),
+        CrateRelease("cvlr-solana-stake", "0.5.1"),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
-        # summaries. On crates.io at 0.5.0, the same version as the chain crate it was split from.
-        CrateRelease("cvlr-spl-token", "0.5.0"),
+        # summaries.
+        CrateRelease("cvlr-spl-token", "0.5.1"),
     ),
     forks=(ANCHOR_FORK, FIXED_FORK),
     platform=PlatformGeneration(
         # The last line published as one ``solana-program`` crate. v3 is only the split crates.
         label="solana-program 2.x",
         sdk_crates=(CrateRequirement("solana-program", "2.2"),),
-        # ``solana-account-info`` first: it defines ``AccountInfo`` and exists on both 2.x and 3.x.
-        # ``solana-program`` is the fallback for 1.18, which predates the split and defines the
-        # type inside the monolith.
+        # ``solana-account-info`` comes first: it defines ``AccountInfo``, and both 2.x and 3.x have
+        # the crate. ``solana-program`` covers a target that still defines the type in the monolith.
+        # A 1.x copy is another generation of that witness, so the platform gate refuses the 2.x line.
         witnesses=(
             CrateRequirement("solana-account-info", "2.3"),
             CrateRequirement("solana-program", "2.2"),
@@ -259,14 +275,88 @@ SOLANA = ChainReference(
                     "solana_cpi::invoke_signed_unchecked",
                 ),
             ),
-            # Not aliased: `solana_program::instruction::get_stack_height` is still a function in
-            # the monolith on this generation, and `solana_program::poseidon` does not exist here
-            # under any spelling. Rewriting either would hide a directive that does not apply.
+            # `solana_program::instruction::get_stack_height` stays in the monolith on this
+            # generation, and `solana_program::poseidon` does not exist here, so neither is aliased.
+            # Rewriting either would point a directive at a symbol that is not there.
             #
-            # The blanket that sets the platform layer's never-inline default. ``solana_program::.*``
-            # only matches what stayed in the monolith. The replacement covers the split crates too.
-            NamespacePattern("solana_program::.*", "solana_[a-z0-9_]*::.*"),
+            # The never-inline blanket `solana_program::.*` matches only what stayed in the
+            # monolith, so the split crates are analyzed. A non-inlined function is external: an
+            # arbitrary return value, and no writes. Widening the blanket made
+            # `Sysvar::from_account_info` never return `Ok`, and made `solana_stake_interface`
+            # an oracle.
         ),
+    ),
+)
+
+#: ``cvlr-solana`` 0.6.0, for the split ``solana-*`` 3.x crates.
+SOLANA_V3 = replace(
+    SOLANA_V2,
+    chain_crate=CrateRelease("cvlr-solana", "0.6.0"),
+    specializations=(
+        CrateRelease("cvlr-solana-stake", "0.6.0"),
+        CrateRelease("cvlr-spl-token", "0.6.0"),
+    ),
+    platform=PlatformGeneration(
+        # Every platform type lives in its own crate.
+        label="solana-* 3.x",
+        sdk_crates=(CrateRequirement("solana-account-info", "3"),),
+        witnesses=(CrateRequirement("solana-account-info", "3.0"),),
+        path_aliases=(
+            PathAlias("solana_program::account_info", ("solana_account_info",)),
+            # `Pubkey` is `solana-address`'s `Address`, which `solana-pubkey` re-exports. The
+            # symbol alias first: the module alias it sits inside would otherwise rewrite it to a
+            # type that does not exist.
+            PathAlias("solana_program::pubkey::Pubkey", ("solana_address::Address",)),
+            PathAlias("solana_program::pubkey", ("solana_address",)),
+            PathAlias("solana_program::program_error", ("solana_program_error",)),
+            PathAlias("solana_program::program_pack", ("solana_program_pack",)),
+            PathAlias("solana_program::rent", ("solana_rent",)),
+            PathAlias("solana_program::clock", ("solana_clock",)),
+            PathAlias("solana_program::sysvar", ("solana_sysvar",)),
+            PathAlias("solana_program::hash", ("solana_hash",)),
+            PathAlias("solana_program::system_program", ("solana_sdk_ids::system_program",)),
+            PathAlias("solana_program::incinerator", ("solana_sdk_ids::incinerator",)),
+            # Only `solana_cpi::invoke_signed_unchecked` exists.
+            PathAlias(
+                "solana_program::program::invoke_signed_unchecked",
+                ("solana_cpi::invoke_signed_unchecked",),
+            ),
+            # `invoke`, `invoke_signed`, and `set_return_data` live in `solana-cpi`.
+            PathAlias("solana_program::program", ("solana_cpi",)),
+            PathAlias(
+                "solana_program::instruction::get_stack_height",
+                ("solana_instruction::syscalls::get_stack_height",),
+            ),
+            PathAlias("solana_program::poseidon", ("solana_poseidon",)),
+            # The never-inline blanket `solana_program::.*` is left as written. It matches nothing
+            # on this generation, so the split crates are analyzed. `solana_get_sysvar::get_sysvar`,
+            # which `StakeHistorySysvar` calls, needs no alias: the syscall under it is modelled.
+            #
+            # Anchor 1.1.0 moved `anchor_lang::error` into the `anchor-lang-error` crate. The
+            # anchor blanket `^.*anchor_lang.*$` still matches that crate, so the `Error`
+            # conversions stay opaque without this alias. An opaque conversion on a constructor's
+            # error path leaves the `Ok` payload's pointers without provenance, and the first
+            # dereference fails with [3003]. Anchor 1.0.x has no `anchor-lang-error` crate, so the
+            # canonical spelling stays.
+            PathAlias("anchor_lang::error::", ("anchor_lang_error::",)),
+        ),
+    ),
+)
+
+#: ``cvlr-solana`` 0.4.6, for ``solana-program`` 1.18. It requires ``cvlr-*`` ``>=0.4, <1``, so
+#: cargo resolves it onto the shared 0.6.2 core, one copy of each core crate.
+SOLANA_V1_18 = ChainReference(
+    core=_CORE,
+    chain_crate=CrateRelease("cvlr-solana", "0.4.6"),
+    # No specializations. The 0.4 line has no stake model, and its token helpers are in the chain
+    # crate. It has no SPL Token CPI model either: a token CPI reaches ``invoke_signed_unchecked``,
+    # which the core summaries make opaque.
+    forks=(ANCHOR_FORK, FIXED_FORK),
+    platform=PlatformGeneration(
+        label="solana-program 1.18",
+        sdk_crates=(CrateRequirement("solana-program", "1.18"),),
+        witnesses=(CrateRequirement("solana-program", "1.18"),),
+        # No aliases: the monolith's spelling is the one the starting tuning files use.
     ),
 )
 
@@ -280,20 +370,25 @@ SOROBAN = ChainReference(
     platform=PlatformGeneration(
         label="soroban-sdk 22.x",
         sdk_crates=(CrateRequirement("soroban-sdk", "22"),),
-        # Soroban has one SDK crate, so the declared crate and the witness are the same. Spelled
-        # out because that is a fact about this platform. On Solana the witness list names a crate
-        # this generation does not declare.
+        # One SDK crate, so the declared crate and the witness are the same.
         witnesses=(CrateRequirement("soroban-sdk", "22"),),
     ),
 )
 
 #: Keyed by ``composer.pipeline.ecosystem.ChainTag``, minus ``evm``. CVLR is the Rust-side
 #: specification language and has no EVM line.
-REFERENCE_SET: dict[str, ChainReference] = {"solana": SOLANA, "soroban": SOROBAN}
+#:
+#: One reference set per platform generation, newest first. A chain crate works only with its own
+#: generation's ``AccountInfo``, so a target is set up with the generation it is on
+#: (:func:`composer.spec.cvlr.scaffold.select_generation`).
+REFERENCE_SET: dict[str, tuple[ChainReference, ...]] = {
+    "solana": (SOLANA_V3, SOLANA_V2, SOLANA_V1_18),
+    "soroban": (SOROBAN,),
+}
 
 
-def reference_for(chain: str) -> ChainReference:
-    """The reference set for ``chain``.
+def generations(chain: str) -> tuple[ChainReference, ...]:
+    """The reference sets for ``chain``, one per supported platform generation, newest first.
 
     Raises when ``chain`` has none. Callers need an answer to proceed, and a missing chain is a
     registration bug. The error names the chains that have a set. CVLR has no EVM line."""

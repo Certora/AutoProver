@@ -20,7 +20,9 @@ from composer.cargo.metadata import (
     CargoFailed,
     CargoMetadataJson,
     CratePackage,
+    GitSource,
     LibTarget,
+    PackageSource,
     MetadataFailure,
     RegistrySource,
     Workspace,
@@ -36,13 +38,17 @@ from composer.spec.cvlr.scaffold import (
     plan_scaffold,
 )
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
-from composer.spec.cvlr.reference import SOLANA, SOROBAN
+from composer.spec.cvlr.reference import SOLANA_V1_18, SOLANA_V2, SOLANA_V3, SOROBAN, generations
+from composer.sandbox.config import SandboxConfig
+from tests.conftest import CVLR_SOLANA_0_5_1_COMMIT, read_from_commit
 
 PROGRAM = """\
 use solana_program::account_info::AccountInfo;
 
 pub fn process(_accounts: &[AccountInfo]) {}
 """
+
+_UNCONFINED = SandboxConfig(provider="none")
 
 
 def _project(
@@ -55,11 +61,14 @@ def _project(
     platform: str | None = "2.2.1",
     platform_crate: str = "solana-program",
     cvlr_resolved: dict[str, str] | None = None,
+    sources: dict[str, PackageSource | None] | None = None,
 ) -> tuple[Workspace, CratePackage]:
     """A project on disk plus the ``Workspace`` cargo would report for it.
 
     ``platform`` and ``cvlr_resolved`` stand in for the resolved graph, which is what the platform
     gate and the version-gap report read; the manifests on disk are what the planner parses.
+    ``sources`` gives a crate in ``cvlr_resolved`` a source other than crates.io; ``None`` is a
+    path in the workspace, as cargo reports one.
 
     ``platform_crate`` is a parameter because which crate carries ``AccountInfo`` is itself a fact
     about the generation: Solana's v3 split moved it out of ``solana-program`` and stopped
@@ -109,7 +118,9 @@ def _project(
                 manifest_path=root / "vendor" / name / "Cargo.toml",
                 lib=None,
                 features=(),
-                source=RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
+                source=(sources or {})[name]
+                if name in (sources or {})
+                else RegistrySource("registry+https://github.com/rust-lang/crates.io-index"),
             )
         )
     workspace = Workspace(
@@ -117,6 +128,7 @@ def _project(
         target_directory=root / "target",
         members=(package,),
         packages=tuple(resolved),
+        links={package: tuple(resolved[1:])},
     )
     return workspace, package
 
@@ -162,7 +174,7 @@ solana-program = "2.2"
 
 def _plan(root: Path, **kwargs):
     workspace, package = _project(root, **kwargs)
-    return plan_scaffold(workspace, package, SOLANA), workspace
+    return plan_scaffold(workspace, package, SOLANA_V2), workspace
 
 
 def _additions(plan, path: Path = Path("Cargo.toml")) -> list[ManifestAddition]:
@@ -188,6 +200,29 @@ def test_a_fresh_project_gets_the_whole_shape_and_a_second_run_gets_nothing(tmp_
     assert again.satisfied
 
 
+#: ``[package]`` split by another table, as the stake program's manifest has it. tomlkit reads that
+#: table back as a proxy over its fragments.
+SPLIT_PACKAGE = STANDALONE + """
+[lints]
+workspace = true
+
+[package.metadata.solana]
+program-id = "Prog111111111111111111111111111111111111111"
+"""
+
+
+def test_a_package_table_split_by_another_table_is_scaffolded_and_idempotent(tmp_path):
+    plan, workspace = _plan(tmp_path, manifest=SPLIT_PACKAGE, workspace_manifest=SPLIT_PACKAGE)
+    assert not plan.blocked
+    apply(plan, workspace.root)
+    parsed = tomllib.loads((tmp_path / "Cargo.toml").read_text())
+    assert "certora" in parsed["package"]["metadata"]
+    assert parsed["package"]["metadata"]["solana"]["program-id"].startswith("Prog")
+
+    again, _ = _plan(tmp_path, manifest=SPLIT_PACKAGE, workspace_manifest=SPLIT_PACKAGE)
+    assert again.changes == ()
+
+
 def test_the_manifest_a_fresh_project_ends_up_with_still_parses(tmp_path):
     plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     apply(plan, workspace.root)
@@ -197,7 +232,7 @@ def test_the_manifest_a_fresh_project_ends_up_with_still_parses(tmp_path):
         "dep:cvlr", "dep:cvlr-solana", "dep:cvlr-solana-stake", "dep:cvlr-spl-token",
     ]
     # Optional is what keeps CVLR out of a release build, and what makes `dep:` legal above.
-    assert parsed["dependencies"]["cvlr"] == {"version": "=0.6.1", "optional": True}
+    assert parsed["dependencies"]["cvlr"] == {"version": "=0.6.2", "optional": True}
     metadata = parsed["package"]["metadata"]["certora"]
     assert metadata["sources"] == ["Cargo.toml", "src/**/*.rs"]
     assert metadata["solana_inlining"] == ["src/certora/envs/cvlr_inlining.txt"]
@@ -239,6 +274,75 @@ def test_a_package_with_no_entrypoint_feature_does_not_get_one_invented(tmp_path
     (features,) = [a for a in _additions(plan) if a.table == ("features",)]
     assert isinstance(features, AddEntries)
     assert "no-entrypoint" not in dict(features.entries)["certora"]
+    # This crate calls no entrypoint, so it gets no custom-heap either.
+    assert "custom-heap" not in dict(features.entries)
+
+
+ENTRYPOINT = """\
+use solana_program_entrypoint::{entrypoint, ProgramResult};
+
+entrypoint!(process_instruction);
+"""
+
+
+def _features(plan) -> dict:
+    (features,) = [a for a in _additions(plan) if a.table == ("features",)]
+    assert isinstance(features, AddEntries)
+    return dict(features.entries)
+
+
+def test_a_program_that_cannot_turn_its_entrypoint_off_turns_its_allocator_off(tmp_path):
+    """Stake's program calls `entrypoint!` unconditionally and declares no features. Its bump
+    allocator then shares the heap with the harness's `Box`, and every rule that allocates fails
+    with Prover error 3309."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "entrypoint.rs").write_text(ENTRYPOINT)
+    plan, workspace = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    features = _features(plan)
+    assert features["custom-heap"] == []
+    assert features["certora"][0] == "custom-heap"
+
+    apply(plan, workspace.root)
+    manifest = tomllib.loads((tmp_path / "Cargo.toml").read_text())
+    assert "custom-heap" in manifest["features"]["certora"]
+    again, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    assert again.changes == ()
+
+
+@pytest.mark.parametrize(
+    ("source", "calls"),
+    [
+        ("entrypoint!\n    (process_instruction);\n", True),
+        ("// entrypoint!(process_instruction);\n", False),
+        ("/* entrypoint!(process_instruction); */\n", False),
+    ],
+)
+def test_the_entrypoint_call_is_found_across_lines_and_not_in_comments(tmp_path, source, calls):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "entrypoint.rs").write_text(source)
+    plan, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    assert ("custom-heap" in _features(plan)) is calls
+
+
+def test_a_heap_switch_the_package_already_declares_is_enabled_not_redeclared(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "entrypoint.rs").write_text(ENTRYPOINT)
+    manifest = STANDALONE + "\n[features]\ncustom-heap = []\n"
+    plan, _ = _plan(tmp_path, manifest=manifest, workspace_manifest=manifest)
+    features = _features(plan)
+    assert "custom-heap" not in features
+    assert features["certora"][0] == "custom-heap"
+
+
+def test_no_entrypoint_is_the_switch_when_the_package_has_it(tmp_path):
+    """It removes the entrypoint and its allocator both, and it is the convention the program's
+    authors chose."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "entrypoint.rs").write_text(ENTRYPOINT)
+    plan, _ = _plan(tmp_path, manifest=WITH_FEATURES, workspace_manifest=WITH_FEATURES)
+    features = _features(plan)
+    assert features["certora"][0] == "no-entrypoint"
+    assert "custom-heap" not in features["certora"]
 
 
 def test_a_workspace_gets_the_pins_and_its_member_inherits_them(tmp_path):
@@ -251,7 +355,7 @@ def test_a_workspace_gets_the_pins_and_its_member_inherits_them(tmp_path):
     apply(plan, workspace.root)
 
     root = tomllib.loads((tmp_path / "Cargo.toml").read_text())
-    assert root["workspace"]["dependencies"]["cvlr"] == {"version": "=0.6.1"}
+    assert root["workspace"]["dependencies"]["cvlr"] == {"version": "=0.6.2"}
     member = tomllib.loads((tmp_path / "programs" / "prog" / "Cargo.toml").read_text())
     assert member["dependencies"]["cvlr"] == {"workspace": True, "optional": True}
 
@@ -276,7 +380,7 @@ def test_a_library_source_that_does_not_exist_is_refused_rather_than_created(tmp
     workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     assert package.lib is not None
     missing = replace(package, lib=replace(package.lib, src_path=tmp_path / "src" / "missing.rs"))
-    plan = plan_scaffold(workspace, missing, SOLANA)
+    plan = plan_scaffold(workspace, missing, SOLANA_V2)
     assert [b.problem for b in plan.blocked] == [
         "prog's library source, src/missing.rs, does not exist, so there is no crate to add the "
         "harness to"
@@ -301,7 +405,7 @@ def test_a_project_already_set_up_is_read_rather_than_refused(tmp_path):
     # "nothing to do" rather than a refusal.
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
-        '[features]\ncertora = ["dep:cvlr"]\n\n[dependencies]\ncvlr = "0.6.1"\nsolana-program',
+        '[features]\ncertora = ["dep:cvlr"]\n\n[dependencies]\ncvlr = "0.6.2"\nsolana-program',
     )
     plan, _ = _plan(tmp_path, manifest=manifest, workspace_manifest=manifest)
     assert not plan.blocked
@@ -351,9 +455,37 @@ def test_an_older_platform_copy_beside_the_reference_one_is_refused(tmp_path):
     workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
     (current,) = workspace.resolved("solana-program")
     older = replace(current, version="1.18.26")
-    workspace = replace(workspace, packages=(*workspace.packages, older))
-    plan = plan_scaffold(workspace, package, SOLANA)
+    workspace = replace(
+        workspace,
+        packages=(*workspace.packages, older),
+        links={package: (*workspace.links[package], older)},
+    )
+    plan = plan_scaffold(workspace, package, SOLANA_V2)
     assert any("1.18.26" in b.problem for b in plan.blocked)
+
+
+def test_a_platform_copy_the_program_does_not_link_is_not_refused(tmp_path):
+    # solana-program-stake: the program is on 2.x, and a sibling `interface` member on 3.x pulls
+    # solana-account-info 3.0.0 into the lockfile through its dev-dependencies. That copy is never
+    # compiled with the harness.
+    workspace, package = _project(
+        tmp_path,
+        manifest=STANDALONE,
+        workspace_manifest=STANDALONE,
+        platform="2.2.1",
+        platform_crate="solana-account-info",
+    )
+    (current,) = workspace.resolved("solana-account-info")
+    sibling = replace(package, name="interface", manifest_path=tmp_path / "interface" / "Cargo.toml")
+    newer = replace(current, version="3.0.0")
+    workspace = replace(
+        workspace,
+        members=(package, sibling),
+        packages=(*workspace.packages, sibling, newer),
+        links={**workspace.links, sibling: (newer,)},
+    )
+    plan = plan_scaffold(workspace, package, SOLANA_V2)
+    assert not plan.blocked
 
 
 ON_AN_OLDER_LINE = STANDALONE.replace(
@@ -449,17 +581,17 @@ def test_a_line_refusal_is_put_in_terms_the_project_author_can_act_on(
     for b in plan.blocked:
         text = f"{b.problem} {b.resolution}"
         assert "composer/" not in text and "reference set" not in text, text
-        names_a_release = any(f"{c.name} {c.version}" in b.resolution for c in SOLANA.crates())
+        names_a_release = any(f"{c.name} {c.version}" in b.resolution for c in SOLANA_V2.crates())
         names_a_platform = any(
-            f"{w.name} {w.line}" in b.resolution for w in SOLANA.platform.witnesses
+            f"{w.name} {w.line}" in b.resolution for w in SOLANA_V2.platform.witnesses
         )
         assert names_a_release or names_a_platform, b.resolution
 
 
 def test_a_project_already_on_the_pinned_release_is_not_refused(tmp_path):
-    # The idempotence case, and the one the gate must not catch: `=0.6.1` is what the scaffold
-    # itself writes, and a bare `0.6.1` is the same release written by hand.
-    for requirement in ("=0.6.1", "0.6.1"):
+    # `=0.6.2` is the requirement the scaffold writes. A bare `0.6.2` is the same release written
+    # by hand. Neither is a refusal.
+    for requirement in ("=0.6.2", "0.6.2"):
         root = tmp_path / requirement
         manifest = STANDALONE.replace(
             "[dependencies]\nsolana-program",
@@ -469,7 +601,7 @@ def test_a_project_already_on_the_pinned_release_is_not_refused(tmp_path):
             root,
             manifest=manifest,
             workspace_manifest=manifest,
-            cvlr_resolved={"cvlr": "0.6.1"},
+            cvlr_resolved={"cvlr": "0.6.2"},
         )
         assert not plan.blocked, requirement
 
@@ -481,13 +613,13 @@ def test_a_reference_set_crate_the_project_does_not_name_is_not_a_refusal(tmp_pa
     # up, starting with the fresh one.
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
-        '[dependencies]\ncvlr = "=0.6.1"\ncvlr-solana = "=0.5.0"\nsolana-program',
+        '[dependencies]\ncvlr = "=0.6.2"\ncvlr-solana = "=0.5.1"\nsolana-program',
     )
     plan, _ = _plan(
         tmp_path,
         manifest=manifest,
         workspace_manifest=manifest,
-        cvlr_resolved={"cvlr": "0.6.1", "cvlr-solana": "0.5.0"},
+        cvlr_resolved={"cvlr": "0.6.2", "cvlr-solana": "0.5.1"},
     )
     assert not plan.blocked
     (dependencies,) = [a for a in _additions(plan) if a.table == ("dependencies",)]
@@ -518,7 +650,7 @@ def test_an_existing_harness_declaration_is_not_added_twice(tmp_path):
     )
     assert package.lib is not None
     package.lib.src_path.write_text(PROGRAM + "\npub mod certora;\n")
-    plan = plan_scaffold(workspace, package, SOLANA)
+    plan = plan_scaffold(workspace, package, SOLANA_V2)
 
     assert not any(c.path.name == "lib.rs" for c in plan.changes)
     assert any("already declares the harness module" in note for note in plan.satisfied)
@@ -672,9 +804,15 @@ class _FakeCargo:
     def __init__(self, workspace: Workspace | MetadataFailure) -> None:
         self.workspace = workspace
         self.calls: list[tuple[Path, tuple[str, ...]]] = []
+        self.toolchains: list[str | None] = []
+        self.cargo_homes: list[Path | None] = []
 
-    async def __call__(self, root, *, offline=False, features=(), timeout_s=0):
+    async def __call__(
+        self, root, *, offline=False, features=(), toolchain=None, cargo_home=None, timeout_s=0
+    ):
         self.calls.append((Path(root), tuple(features)))
+        self.toolchains.append(toolchain)
+        self.cargo_homes.append(cargo_home)
         return self.workspace
 
 
@@ -700,11 +838,51 @@ async def test_preflight_resolves_the_verification_graph_from_the_packages_own_d
     )
     fake = fake_cargo(workspace)
 
-    result = await preflight.prepare_workspace(tmp_path, reference=SOLANA, package="prog")
+    result = await preflight.prepare_workspace(
+        tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
+    )
 
     assert fake.calls[0] == (tmp_path, ())
     assert fake.calls[-1] == (package.root, ("certora",))
     assert result.artifact_stem == "prog"
+
+
+@pytest.mark.asyncio
+async def test_preflight_asks_cargo_for_the_host_toolchain(tmp_path, fake_cargo):
+    """Every metadata read passes the host toolchain. Left unset, rustup would follow the
+    project's rust-toolchain.toml, which a Solana image may not be able to install. An unconfined
+    read does not redirect the cargo home."""
+    from composer.spec.cvlr.conf import HOST_RUST_TOOLCHAIN
+
+    workspace, _ = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, package_dir="programs/prog"
+    )
+    fake = fake_cargo(workspace)
+    await preflight.prepare_workspace(
+        tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
+    )
+    assert fake.toolchains and set(fake.toolchains) == {HOST_RUST_TOOLCHAIN}
+    assert set(fake.cargo_homes) == {None}
+
+
+@pytest.mark.asyncio
+async def test_a_confined_preflight_fetches_into_the_cargo_home_the_gate_warms(
+    tmp_path, fake_cargo
+):
+    """The reads fetch into the cargo home the gate's session warms. A confined install's shared
+    cargo home is not the runtime user's to write."""
+    from composer.cargo.session import CargoSession
+
+    workspace, _ = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, package_dir="programs/prog"
+    )
+    fake = fake_cargo(workspace)
+    sandbox = SandboxConfig(provider="launcher")
+    await preflight.prepare_workspace(
+        tmp_path, reference=SOLANA_V2, sandbox=sandbox, package="prog"
+    )
+    session = CargoSession(workdir=tmp_path, sandbox=sandbox)
+    assert fake.cargo_homes and set(fake.cargo_homes) == {session.cargo_home}
 
 
 @pytest.mark.asyncio
@@ -713,7 +891,7 @@ async def test_preflight_reports_what_cargo_said_when_the_project_cannot_be_read
 ):
     fake_cargo(CargoFailed("error: failed to parse manifest at `Cargo.toml`\n"))
     with pytest.raises(preflight.PreflightFailed, match="failed to parse manifest") as caught:
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA)
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED)
     assert str(caught.value).startswith(f"Could not read the Cargo project at {tmp_path}:")
 
 
@@ -725,7 +903,7 @@ async def test_preflight_refuses_to_choose_between_verifiable_packages(tmp_path,
     fake_cargo(replace(workspace, members=(package, second)))
 
     with pytest.raises(preflight.PreflightFailed, match="name the one to verify"):
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA)
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED)
 
 
 @pytest.mark.asyncio
@@ -736,7 +914,9 @@ async def test_preflight_names_the_members_when_asked_for_one_that_is_not_there(
     fake_cargo(workspace)
 
     with pytest.raises(preflight.PreflightFailed, match="members: prog"):
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA, package="nope")
+        await preflight.prepare_workspace(
+            tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="nope"
+        )
 
 
 @pytest.mark.asyncio
@@ -751,7 +931,9 @@ async def test_a_blocked_plan_stops_preflight_with_the_resolution_in_the_message
     fake_cargo(workspace)
 
     with pytest.raises(preflight.PreflightFailed, match="crate-type"):
-        await preflight.prepare_workspace(tmp_path, reference=SOLANA, package="prog")
+        await preflight.prepare_workspace(
+            tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED, package="prog"
+        )
     assert not (tmp_path / "src" / "certora").exists()
 
 
@@ -782,7 +964,7 @@ def test_an_anchor_target_is_redirected_at_the_verification_fork(tmp_path):
         workspace_manifest='[workspace]\nmembers = ["."]\n',
         cvlr_resolved={"anchor-lang": "0.31.1"},
     )
-    plan = plan_scaffold(workspace, package, SOLANA)
+    plan = plan_scaffold(workspace, package, SOLANA_V2)
     assert plan.blocked == ()
     tables = {a.table: a for a in _additions(plan) if isinstance(a, AddTable)}
     patch = tables[("patch", "crates-io", "anchor-lang")]
@@ -799,10 +981,10 @@ def test_redirecting_twice_is_a_no_op(tmp_path):
         cvlr_resolved={"anchor-lang": "0.31.1"},
     )
     workspace, package = _project(tmp_path, **kwargs)
-    apply(plan_scaffold(workspace, package, SOLANA), tmp_path)
+    apply(plan_scaffold(workspace, package, SOLANA_V2), tmp_path)
 
     workspace, package = _project(tmp_path, **kwargs)
-    again = plan_scaffold(workspace, package, SOLANA)
+    again = plan_scaffold(workspace, package, SOLANA_V2)
     assert not [a for a in _additions(again) if a.table[0] == "patch"]
     assert any("already redirected" in note for note in again.satisfied)
     assert (tmp_path / "Cargo.toml").read_text().count("[patch.crates-io.anchor-lang]") == 1
@@ -810,28 +992,29 @@ def test_redirecting_twice_is_a_no_op(tmp_path):
 
 
 def test_an_anchor_version_the_fork_does_not_cover_blocks_the_whole_plan(tmp_path):
-    """The fork has a branch for 0.30.1 and not 0.30.0. The plan blocks instead of scaffolding a
+    """The fork has a branch for 0.26.0 and not 0.25.0. The plan blocks instead of scaffolding a
     project that builds and then reports a pointer-analysis error with nothing about Anchor."""
     workspace, package = _project(
         tmp_path,
-        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.30.0"),
+        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.25.0"),
         workspace_manifest='[workspace]\nmembers = ["."]\n',
-        cvlr_resolved={"anchor-lang": "0.30.0"},
+        cvlr_resolved={"anchor-lang": "0.25.0"},
     )
-    plan = plan_scaffold(workspace, package, SOLANA)
-    assert any("0.30.0" in b.problem for b in plan.blocked), plan.blocked
+    plan = plan_scaffold(workspace, package, SOLANA_V2)
+    assert any("0.25.0" in b.problem for b in plan.blocked), plan.blocked
     with pytest.raises(ScaffoldBlocked):
         apply(plan, tmp_path)
     # A blocked plan applies nothing at all, including the parts that were fine.
     assert not (tmp_path / "src" / "certora").exists()
 
 
-def test_a_non_anchor_target_gets_no_patch_section(tmp_path):
+def test_a_non_anchor_target_gets_no_fork_patch(tmp_path):
     workspace, package = _project(
         tmp_path, manifest=STANDALONE, workspace_manifest='[workspace]\nmembers = ["."]\n'
     )
-    plan = plan_scaffold(workspace, package, SOLANA)
-    assert not [a for a in _additions(plan) if a.table[0] == "patch"]
+    plan = plan_scaffold(workspace, package, SOLANA_V2)
+    patched = {a.table[-1] for a in _additions(plan) if a.table[0] == "patch"}
+    assert not patched & {"anchor-lang", "anchor-spl"}
     assert any("anchor-lang is not a dependency" in note for note in plan.satisfied)
 
 
@@ -840,13 +1023,144 @@ def test_the_forks_planned_are_the_reference_chains_own(tmp_path):
     even one the Anchor fork does not cover."""
     workspace, package = _project(
         tmp_path,
-        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.30.0"),
+        manifest=ANCHOR_MANIFEST.replace("0.31.1", "0.25.0"),
         workspace_manifest='[workspace]\nmembers = ["."]\n',
         platform="22.0.0",
         platform_crate="soroban-sdk",
-        cvlr_resolved={"anchor-lang": "0.30.0"},
+        cvlr_resolved={"anchor-lang": "0.25.0"},
     )
     plan = plan_scaffold(workspace, package, SOROBAN)
-    assert not [a for a in _additions(plan) if a.table[0] == "patch"]
+    core_commits = {p.name for p in SOROBAN.from_commits()}
+    assert not [
+        a for a in _additions(plan) if a.table[0] == "patch" and a.table[-1] not in core_commits
+    ]
     assert not [b for b in plan.blocked if "anchor-lang" in b.problem], plan.blocked
     assert not [note for note in plan.satisfied if "anchor" in note]
+
+
+# ---------------------------------------------------------------------------------------------
+# unpublished CVLR releases
+
+_UNPUBLISHED = read_from_commit(SOLANA_V2, CVLR_SOLANA_0_5_1_COMMIT)
+
+
+def _commit_patches(plan) -> dict[str, AddTable]:
+    return {
+        a.table[-1]: a
+        for a in _additions(plan)
+        if isinstance(a, AddTable) and a.table[:2] == ("patch", "crates-io")
+        and a.table[-1].startswith("cvlr")
+    }
+
+
+def test_an_unpublished_release_is_read_from_its_commit(tmp_path):
+    """The project declares the crates.io spelling, so the pin gate reads it like any release, and
+    the patch is what sends cargo to the commit."""
+    workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    plan = plan_scaffold(workspace, package, _UNPUBLISHED)
+    assert not plan.blocked
+    patches = _commit_patches(plan)
+    assert set(patches) == {p.name for p in _UNPUBLISHED.from_commits()}
+    for patch in _UNPUBLISHED.from_commits():
+        body = patches[patch.name].body
+        assert ("git", patch.commit.repo) in body and ("rev", patch.commit.rev) in body
+    tomllib.loads(apply_and_read(plan, tmp_path))
+
+
+def apply_and_read(plan, root: Path) -> str:
+    apply(plan, root)
+    return (root / "Cargo.toml").read_text()
+
+
+def test_a_project_already_reading_the_commit_is_left_as_it_is(tmp_path):
+    kwargs = dict(manifest=STANDALONE, workspace_manifest=STANDALONE)
+    workspace, package = _project(tmp_path, **kwargs)
+    apply(plan_scaffold(workspace, package, _UNPUBLISHED), tmp_path)
+
+    crate = next(p for p in _UNPUBLISHED.from_commits() if p.name == "cvlr-solana")
+    commit = crate.commit
+    at_commit = GitSource.parse(f"git+{commit.repo}?rev={commit.rev}#{commit.rev}")
+    workspace, package = _project(
+        tmp_path, **kwargs,
+        cvlr_resolved={crate.name: crate.version}, sources={crate.name: at_commit},
+    )
+    again = plan_scaffold(workspace, package, _UNPUBLISHED)
+    assert not again.blocked
+    assert not _commit_patches(again)
+    assert any(f"already read from {commit.repo}" in note for note in again.satisfied)
+    assert (tmp_path / "Cargo.toml").read_text().count(f"[patch.crates-io.{crate.name}]") == 1
+
+
+def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
+    """The project's patch points somewhere else. Replacing it would verify a release this build
+    does not pin."""
+    crate = next(p for p in _UNPUBLISHED.from_commits() if p.name == "cvlr-solana")
+    commit = crate.commit
+    manifest = STANDALONE + f'\n[patch.crates-io]\n{crate.name} = {{ path = "../cvlr-solana" }}\n'
+    workspace, package = _project(
+        tmp_path, manifest=manifest, workspace_manifest=manifest,
+        cvlr_resolved={crate.name: crate.version}, sources={crate.name: None},
+    )
+    plan = plan_scaffold(workspace, package, _UNPUBLISHED)
+    (blocked,) = [b for b in plan.blocked if crate.name in b.problem]
+    assert "a path in this workspace" in blocked.problem and commit.rev in blocked.problem
+
+
+# ---------------------------------------------------------------------------------------------
+# platform generations
+
+
+@pytest.mark.parametrize(
+    "platform_crate, version, expected",
+    [
+        ("solana-account-info", "3.1.1", "solana-* 3.x"),
+        ("solana-account-info", "2.3.0", "solana-program 2.x"),
+        ("solana-program", "2.2.1", "solana-program 2.x"),
+        ("solana-program", "1.18.26", "solana-program 1.18"),
+        ("solana-program", "1.17.18", None),
+    ],
+)
+def test_a_project_is_set_up_with_the_generation_it_is_on(
+    tmp_path, platform_crate, version, expected
+):
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, platform=version, platform_crate=platform_crate
+    )
+    chosen = scaffold.select_generation(workspace, package, generations("solana"))
+    assert (chosen.platform.label if chosen is not None else None) == expected
+
+
+def test_a_project_with_no_platform_crate_is_on_no_generation(tmp_path):
+    """A package that links no witness is on no generation."""
+    workspace, package = _project(tmp_path, manifest=STANDALONE, platform=None)
+    assert scaffold.select_generation(workspace, package, generations("solana")) is None
+
+
+def test_an_sdk3_project_scaffolds_on_its_generation_and_is_refused_by_the_other(tmp_path):
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE,
+        platform="3.1.1", platform_crate="solana-account-info",
+    )
+    assert not plan_scaffold(workspace, package, SOLANA_V3).blocked
+    refused = plan_scaffold(workspace, package, SOLANA_V2).blocked
+    assert any("solana-account-info 3.1.1" in b.problem for b in refused)
+
+
+def test_a_1_17_project_is_refused_by_the_1_18_generation(tmp_path):
+    """Before 2.0 a minor release is its own generation. `cvlr-solana` 0.4 requires `^1.18`, so a
+    1.17 target is refused here."""
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, platform="1.17.18"
+    )
+    (blocked,) = plan_scaffold(workspace, package, SOLANA_V1_18).blocked
+    assert "solana-program 1.17.18" in blocked.problem
+    assert blocked.resolution == "move the project to solana-program 1.18"
+
+
+def test_a_1_18_project_scaffolds_without_specializations(tmp_path):
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE, platform="1.18.26"
+    )
+    plan = plan_scaffold(workspace, package, SOLANA_V1_18)
+    assert not plan.blocked
+    assert not any("cvlr-spl-token" in str(c) or "cvlr-solana-stake" in str(c) for c in plan.changes)

@@ -62,12 +62,12 @@ from composer.cargo.manifest import (
     TomlValue,
     read_manifest,
 )
-from composer.cargo.metadata import CratePackage, Workspace
+from composer.cargo.metadata import CratePackage, GitSource, Workspace
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
-from composer.spec.cvlr.reference import ChainReference
+from composer.spec.cvlr.reference import ChainReference, CrateRequirement, commit_patches
 
 #: Where the harness module goes in the target package.
 HARNESS_DIR = Path("src") / "certora"
@@ -90,6 +90,23 @@ SHARED_OBJECT_TYPE = "cdylib"
 #: when it does not: a package with no entrypoint to suppress does not need one. The examples'
 #: ``first_example`` has ``certora = []``.
 NO_ENTRYPOINT_FEATURE = CargoFeature("no-entrypoint")
+
+#: Keeps the SDK's ``entrypoint!`` from installing its global allocator. The macro's
+#: ``custom_heap_default!`` checks the calling crate's ``custom-heap`` feature, in ``solana-program``
+#: 2.x and in ``solana-program-entrypoint`` 3.x. ``certora`` enables it when the package calls the
+#: macro and does not declare ``no-entrypoint``. The stake program calls ``entrypoint!`` with no
+#: feature gate. The bump allocator writes the heap at a fixed address. A rule that also allocates
+#: through ``__rust_alloc`` then fails with Prover error 3309, "Conflicting allocation/usage of heap
+#: memory".
+CUSTOM_HEAP_FEATURE = CargoFeature("custom-heap")
+
+#: An invocation of the SDK's ``entrypoint!`` or ``entrypoint_no_alloc!``, which both install the
+#: allocator. Searched with comments removed (:data:`_COMMENT`).
+_ENTRYPOINT_MACRO = re.compile(r"\bentrypoint(?:_no_alloc)?!\s*[(\[{]")
+
+#: A Rust line or block comment. Block comments nest in Rust; a nested one leaves its tail behind,
+#: which only matters if that tail spells a macro call.
+_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -347,48 +364,98 @@ class _PlanBuilder:
 
 
 def _generation(version: str) -> str:
-    """The platform generation a version belongs to: its major component.
+    """The platform generation a version belongs to: its major component, or major.minor below 2.
 
     ``solana-program`` 2.2 and 2.3 are the same generation. 1.18 and 2.2 are not, and each
-    generation has its own ``AccountInfo`` type."""
-    return version.split(".", maxsplit=1)[0]
+    generation has its own ``AccountInfo`` type. Before 2.0, Solana's minor releases broke
+    compatibility: ``cvlr-solana`` 0.4 requires ``^1.18``, and 1.17's ``solana-frozen-abi`` pins an
+    ``ahash`` the current platform tools cannot compile."""
+    major, _, rest = version.partition(".")
+    if major in ("0", "1"):
+        return f"{major}.{rest.split('.', maxsplit=1)[0]}"
+    return major
 
 
-def _check_platform(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
-    """Refuse to pin a CVLR release the project's platform generation cannot use.
+@dataclass(frozen=True)
+class _OnGeneration:
+    """The package links the reference's generation of its platform crates."""
 
-    A target on ``solana-program`` 1.18 given ``cvlr-solana`` 0.5.0 does not warn. It fails to
-    compile, because the two generations have different ``AccountInfo`` types and the chain
-    crate's helpers return the other one. The reference set already records which generation a
-    chain crate requires (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This is
-    where a project that is on a different one is caught, and it has to be caught before the pin
-    is written.
 
-    The first witness the project resolves decides. Later ones are not consulted. The list is
-    most-specific first because a target on a newer generation resolves only the specific crate.
-    Falling through to a broader witness after a specific one has answered would undo that order.
-    Every copy of that witness has to be on the generation: one that is not still meets CVLR's
-    types wherever its dependents hand an account to a helper.
+@dataclass(frozen=True)
+class _OffGeneration:
+    """The package links a copy of ``witness`` from another generation."""
+
+    witness: CrateRequirement
+    builds: tuple[str, ...]
+
+
+def _read_platform(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> _OnGeneration | _OffGeneration | None:
+    """Which generation ``package`` is on, as far as ``reference`` can tell. ``None`` when it links
+    none of the reference's witnesses.
+
+    The first witness the package resolves decides, and later witnesses are not consulted. The list
+    is most-specific first, because a newer generation resolves only the specific crate. Every copy
+    of that witness linked into ``package`` has to be on the generation. A copy from another
+    generation still meets CVLR's types when a dependent passes an account to a helper. A copy that
+    only another member links, or that only a dev-dependency pulls in, is not compiled with the
+    harness.
     """
+    linked = workspace.linked_into(package)
     for witness in reference.platform.witnesses:
-        copies = workspace.resolved(witness.name)
+        copies = [c for c in linked if c.name == witness.name]
         if not copies:
             continue
-        off = [c.version for c in copies if _generation(c.version) != _generation(witness.line)]
-        if off:
-            builds = ", ".join(off)
+        off = tuple(c.version for c in copies if _generation(c.version) != _generation(witness.line))
+        return _OffGeneration(witness, off) if off else _OnGeneration()
+    return None
+
+
+def select_generation(
+    workspace: Workspace, package: CratePackage, candidates: Sequence[ChainReference]
+) -> ChainReference | None:
+    """The reference set in ``candidates`` for the platform generation ``package`` is on.
+
+    ``None`` when the package links none of their witnesses. ``candidates`` are newest first
+    (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`), and the first match wins.
+    """
+    return next(
+        (
+            reference
+            for reference in candidates
+            if isinstance(_read_platform(workspace, package, reference), _OnGeneration)
+        ),
+        None,
+    )
+
+
+def _check_platform(
+    workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
+) -> None:
+    """Refuse to pin a CVLR release the project's platform generation cannot use.
+
+    ``solana-program`` 1.18 and ``cvlr-solana`` 0.5.x have different ``AccountInfo`` types, and the
+    chain crate's helpers return the other generation's type, so that combination does not compile.
+    The reference records the generation a chain crate requires
+    (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This check runs before the pin is
+    written. :func:`_read_platform` reads the generation.
+    """
+    match _read_platform(workspace, package, reference):
+        case _OffGeneration(witness=witness, builds=builds):
             plan.add_blocked(
                 Blocked(
                     path=Path("Cargo.toml"),
                     problem=(
-                        f"this project builds {witness.name} {builds}, and the CVLR line this "
-                        f"build supports ({reference.line()}) requires "
+                        f"this project builds {witness.name} {', '.join(builds)}, and the CVLR "
+                        f"line this build supports ({reference.line()}) requires "
                         f"{reference.platform.label}"
                     ),
                     resolution=f"move the project to {witness.name} {witness.line}",
                 )
             )
-        return
+        case _OnGeneration() | None:
+            pass
 
 
 @dataclass(frozen=True)
@@ -441,13 +508,12 @@ def _check_pins(
 ) -> None:
     """Refuse a project that is on a CVLR release other than the one this build is pinned to.
 
-    One line is supported at a time — the one :mod:`composer.spec.cvlr.reference` names — and
-    everything this scaffold writes belongs to it: the pins, the specializations added beside
-    them, and the env files :mod:`composer.spec.cvlr.tuning` composes. A project already on
-    another line cannot be given those without putting two CVLR generations in one graph, which
-    does not compile. This scaffold used to resolve that by deferring to the project's pin and
-    withholding the specializations; a run set up that way is on a configuration nothing else
-    here is built for, so it is refused instead.
+    One line is supported per platform generation, and ``reference`` is the set
+    :func:`select_generation` picked for this project. Everything this scaffold writes belongs to
+    it: the pins, the specializations added beside them, and the env files
+    :mod:`composer.spec.cvlr.tuning` composes. A project already on another line cannot be given
+    those without putting two CVLR generations in one graph, which does not compile, so it is
+    refused.
 
     Two readings, because neither alone covers the project. The resolved graph is exact and
     settles a crate some member already depends on. The manifests settle a crate declared in
@@ -539,12 +605,34 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
     )
 
 
+def _calls_entrypoint(package: CratePackage) -> bool:
+    """Whether ``package``'s sources call ``entrypoint!`` or ``entrypoint_no_alloc!``.
+
+    ``src/certora`` is the harness, so those files are skipped.
+    """
+    source = package.root / "src"
+    return any(
+        _ENTRYPOINT_MACRO.search(_COMMENT.sub(" ", path.read_text(errors="replace")))
+        for path in source.rglob("*.rs")
+        if not path.is_relative_to(source / "certora")
+    )
+
+
+def _entrypoint_switch(package: CratePackage) -> CargoFeature | None:
+    """The feature that keeps this package's entrypoint allocator out of a verification build."""
+    if NO_ENTRYPOINT_FEATURE in package.features:
+        return NO_ENTRYPOINT_FEATURE
+    if _calls_entrypoint(package):
+        return CUSTOM_HEAP_FEATURE
+    return None
+
+
 def _certora_feature(package: CratePackage, reference: ChainReference) -> list[str]:
     """What ``package``'s ``certora`` feature turns on within ``package`` itself: the CVLR
-    crates, and ``no-entrypoint`` when the package declares it."""
+    crates, and the entrypoint switch (:func:`_entrypoint_switch`)."""
     enables = [f"dep:{c.name}" for c in reference.scaffold_crates()]
-    if NO_ENTRYPOINT_FEATURE in package.features:
-        enables.insert(0, NO_ENTRYPOINT_FEATURE)
+    if (switch := _entrypoint_switch(package)) is not None:
+        enables.insert(0, switch)
     return enables
 
 
@@ -613,8 +701,8 @@ def _plan_package_manifest(
     Three things go there, each skipped when the manifest already has it:
 
     - the CVLR crates, as optional dependencies, so a release build does not compile them;
-    - the ``certora`` feature, which turns those dependencies on, along with ``no-entrypoint``
-      when the package declares it and every local dependency's own ``certora`` feature
+    - the ``certora`` feature, which turns those dependencies on, along with the entrypoint switch
+      (:func:`_entrypoint_switch`) and every local dependency's own ``certora`` feature
       (:func:`_plan_feature_forwarding`);
     - ``[package.metadata.certora]``, which tells the prover where the sources and tuning files
       are.
@@ -674,9 +762,16 @@ def _plan_package_manifest(
         enables = _certora_feature(package, reference) + [
             f"{dep.name}/{DEFAULT_FEATURE}" for dep in local_dependencies(workspace, package)
         ]
+        # A feature cargo does not know cannot be enabled, so `custom-heap` is declared when the
+        # package has not declared it.
+        declared: tuple[tuple[str, TomlValue], ...] = (
+            ((CUSTOM_HEAP_FEATURE, []),)
+            if CUSTOM_HEAP_FEATURE in enables and CUSTOM_HEAP_FEATURE not in features
+            else ()
+        )
         plan.add_manifest_edit(
             manifest_rel,
-            AddEntries(("features",), ((DEFAULT_FEATURE, enables),)),
+            AddEntries(("features",), (*declared, (DEFAULT_FEATURE, enables))),
             f"the feature that compiles the harness in ({', '.join(enables)})",
         )
 
@@ -777,6 +872,65 @@ def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuil
                 plan.add_satisfied(note)
 
 
+def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
+    """Add ``[patch.crates-io]`` entries for releases cargo reads from a commit
+    (:class:`~composer.spec.cvlr.reference.GitCommit`).
+
+    The patches are the crates :meth:`~composer.spec.cvlr.reference.ChainReference.scaffold_crates`
+    gives the project. A patch for a crate nothing depends on makes cargo warn on every build.
+
+    A crate the project's patch table already names is checked against the resolved graph. Cargo
+    refuses a second entry for one crate. The pinned commit is recorded as satisfied. So is a crate
+    the graph does not resolve yet, because the graph can be older than the table. Any other source
+    blocks: replacing the project's entry would verify a release this build does not pin.
+    """
+    path = Path("Cargo.toml")
+    patched = forks.already_patched(plan.read(path))
+    preamble: tuple[TableItem, ...] = (
+        Comment("Unreleased CVLR crates, read from the commit each release was cut from until"),
+        Comment("crates.io has it."),
+    )
+    for patch in commit_patches(reference.scaffold_crates()):
+        commit = patch.commit
+        if patch.name not in patched:
+            plan.add_manifest_edit(
+                path,
+                AddTable(("patch", "crates-io", patch.name), (*preamble, *commit.patch_body())),
+                f"read {patch.name} {patch.version} from {commit.repo} at {commit.rev} "
+                f"until it is on crates.io",
+            )
+            preamble = ()
+            continue
+        sources = [c.source for c in workspace.resolved(patch.name)]
+        if not sources:
+            plan.add_satisfied(
+                f"{patch.name} is already redirected in this workspace's [patch.crates-io] table"
+            )
+        elif all(
+            isinstance(s, GitSource) and s.is_from(commit.repo) and s.commit == commit.rev
+            for s in sources
+        ):
+            plan.add_satisfied(
+                f"{patch.name} {patch.version} is already read from {commit.repo} at "
+                f"{commit.rev}"
+            )
+        else:
+            elsewhere = ", ".join(
+                s.spelling if s is not None else "a path in this workspace" for s in sources
+            )
+            plan.add_blocked(
+                Blocked(
+                    path=path,
+                    problem=(
+                        f"this project's [patch.crates-io] table reads {patch.name} from "
+                        f"{elsewhere}, and this build pins {patch.name} {patch.version} at "
+                        f"{commit.repo} {commit.rev}"
+                    ),
+                    resolution=f"remove the [patch.crates-io] entry for {patch.name}",
+                )
+            )
+
+
 def _plan_gitignore(workspace: Workspace, plan: _PlanBuilder) -> None:
     path = workspace.root / ".gitignore"
     existing = path.read_text() if path.is_file() else None
@@ -806,18 +960,19 @@ def plan_scaffold(
     relative = _project_relative(package.root, workspace.root)
     plan = _PlanBuilder(workspace.root)
     inherit = plan.read(Path("Cargo.toml")).workspace is not None
-    dialect = dialect_for(workspace, reference)
+    dialect = dialect_for(workspace, package, reference)
 
     _plan_workspace_manifest(reference, plan)
     _plan_harness(package, relative, dialect, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, plan)
     _plan_forks(workspace, reference, plan)
+    _plan_unpublished(workspace, reference, plan)
     _plan_package_manifest(workspace, package, relative, reference, plan, inherit=inherit)
     # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the
     # reference set's platform generation always describes what will be built.
     _check_pins(workspace, package, reference, plan)
-    _check_platform(workspace, reference, plan)
+    _check_platform(workspace, package, reference, plan)
     return plan.build(package.name, dialect)
 
 

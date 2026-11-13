@@ -1,0 +1,28 @@
+# Demangled symbols from a crate on solana-program 1.18.26 with cvlr-solana 0.4.5, built for SBF
+# with platform-tools v1.53, whose one rule calls each platform function the tuning files address:
+# sysvar reads, PDAs, AccountInfo accessors, an SPL token CPI through invoke and invoke_signed,
+# set_return_data and get_stack_height. Filtered to the platform crate. Regenerate with:
+#   cargo certora-sbf --tools-version v1.53 --features certora
+#   llvm-nm --defined-only target/sbpf-solana-solana/release/<crate>.so \
+#     | awk '{ $1=""; $2=""; sub(/^[ \t]+/,""); print }' | rustfilt | sort -u
+solana_program::account_info::AccountInfo::assign
+solana_program::account_info::AccountInfo::data_is_empty
+solana_program::account_info::AccountInfo::data_len
+solana_program::account_info::AccountInfo::lamports
+solana_program::account_info::AccountInfo::realloc
+solana_program::account_info::AccountInfo::try_data_len
+solana_program::incinerator::check_id
+solana_program::instruction::get_stack_height
+<solana_program::program_error::ProgramError as core::convert::From<u64>>::from
+<solana_program::program_error::ProgramError as core::fmt::Debug>::fmt
+solana_program::program::invoke
+solana_program::program::invoke_signed
+solana_program::program::invoke_signed_unchecked
+solana_program::program::set_return_data
+solana_program::pubkey::Pubkey::create_program_address
+<solana_program::pubkey::PubkeyError as core::fmt::Debug>::fmt
+solana_program::pubkey::Pubkey::find_program_address
+solana_program::rent::Rent::minimum_balance
+solana_program::system_program::check_id
+solana_program::sysvar::clock::<impl solana_program::sysvar::Sysvar for solana_program::clock::Clock>::get
+solana_program::sysvar::rent::<impl solana_program::sysvar::Sysvar for solana_program::rent::Rent>::get
