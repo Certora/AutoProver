@@ -5,9 +5,14 @@ and the /output/[NUMBER/]HASH link otherwise. Both name the same job, so both mu
 the same HASH. All ids here are made up.
 """
 
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 
 from certora_autosetup.utils.certora_wget import to_outputs_url
+from certora_autosetup.utils.cloud_runner import _conf_has_split_rules
 from certora_autosetup.utils.job_utils import (
     extract_group_id_from_text,
     extract_job_hash_from_url,
@@ -129,3 +134,25 @@ def test_group_id_parses_from_split_rules_output() -> None:
 
 def test_no_group_id_for_an_unsplit_run() -> None:
     assert extract_group_id_from_text(f"Follow your job at {LEGACY_LINK}") is None
+
+
+def _spec_for(conf_path: Path) -> SimpleNamespace:
+    return SimpleNamespace(config_file=SimpleNamespace(path=conf_path))
+
+
+def test_split_rules_gate_reads_the_conf(tmp_path: Path) -> None:
+    """The group handling keys off the conf's split_rules, not a groupIds link (which can also
+    appear for unrelated execution-level grouping)."""
+    split = tmp_path / "split.conf"
+    split.write_text(json.dumps({"split_rules": ["ruleA", "ruleB"], "files": ["A.sol"]}))
+    assert _conf_has_split_rules(_spec_for(split)) is True
+
+    plain = tmp_path / "plain.conf"
+    plain.write_text(json.dumps({"files": ["A.sol"]}))
+    assert _conf_has_split_rules(_spec_for(plain)) is False
+
+    empty = tmp_path / "empty.conf"
+    empty.write_text(json.dumps({"split_rules": []}))
+    assert _conf_has_split_rules(_spec_for(empty)) is False
+
+    assert _conf_has_split_rules(_spec_for(tmp_path / "missing.conf")) is False

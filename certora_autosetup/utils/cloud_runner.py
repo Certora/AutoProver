@@ -49,6 +49,16 @@ def extract_job_url(output: str) -> Optional[str]:
     return extract_job_url_from_text(output)
 
 
+def _conf_has_split_rules(job_spec: ProverJobSpec) -> bool:
+    """True when the conf enables per-rule job splitting — its ``split_rules`` key is non-empty.
+    Splitting, not the mere presence of a group link, is what makes a run a job group."""
+    try:
+        data = json.loads(Path(job_spec.config_file.path).read_text())
+    except (OSError, ValueError):
+        return False
+    return bool(data.get("split_rules"))
+
+
 class CloudProverRunner(ProverRunner):
     """
     Cloud job manager for prover execution.
@@ -754,9 +764,15 @@ class CloudProverRunner(ProverRunner):
 
             # For cloud jobs, always try to extract job URL regardless of return code
             job_url = extract_job_url(output)
-            # A --split_rules run submits one job per rule as a group; job_url is then only one
-            # member of it. Capture the group id so the wait and read-back cover every sibling.
-            group_id = extract_group_id_from_text(output)
+            # Only a --split_rules conf makes certoraRun submit one job per rule as a group where
+            # job_url is just one member; capture that group's id so the wait and read-back cover
+            # every sibling. A groupIds link can also appear for unrelated execution-level
+            # grouping, so key off the conf's split_rules, not the link's mere presence.
+            group_id = (
+                extract_group_id_from_text(output)
+                if _conf_has_split_rules(job_spec)
+                else None
+            )
 
             if return_code == 0 or has_symlink_error or job_url:
                 if has_symlink_error:
