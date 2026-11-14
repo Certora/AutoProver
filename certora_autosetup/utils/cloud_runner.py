@@ -14,10 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, cast
 
 from prover_output_utility import ProverOutputAPI, cloud_server_for_env # type: ignore[import-untyped]
-from prover_output_utility.models import (  # type: ignore[import-untyped]
-    JobStatus as ProverJobStatus,
-    convert_job_status,
-)
+from prover_output_utility.models import JobStatus as ProverJobStatus # type: ignore[import-untyped]
 
 from certora_autosetup.cache.cache_fs import cache_path, get_fs
 from .constants import DIR_CERTORA_INTERNAL, DIR_JOB_RESULT_CACHE
@@ -28,7 +25,7 @@ from .early_stop import (
     FirstViolationCheck,
     PreprocessingCheck,
 )
-from .job_utils import extract_group_id_from_text, extract_job_url_from_text
+from .job_utils import extract_job_url_from_text, extract_job_urls_from_text
 from .prover_runner import (
     EarlyTerminationCallback,
     ProverRunner,
@@ -764,12 +761,12 @@ class CloudProverRunner(ProverRunner):
 
             # For cloud jobs, always try to extract job URL regardless of return code
             job_url = extract_job_url(output)
-            # Only a --split_rules conf makes certoraRun submit one job per rule as a group where
-            # job_url is just one member; capture that group's id so the wait and read-back cover
-            # every sibling. A groupIds link can also appear for unrelated execution-level
-            # grouping, so key off the conf's split_rules, not the link's mere presence.
-            group_id = (
-                extract_group_id_from_text(output)
+            # A --split_rules conf makes certoraRun submit one job per rule and print each URL;
+            # job_url is then just one of them. Capture the whole set so the wait and read-back
+            # cover every sibling. Only split runs are multi-job, so key off the conf's split_rules
+            # (a job can also belong to an unrelated execution-level group, which is not this).
+            job_urls = (
+                extract_job_urls_from_text(output)
                 if _conf_has_split_rules(job_spec)
                 else None
             )
@@ -794,19 +791,20 @@ class CloudProverRunner(ProverRunner):
                         f"Cloud job submitted successfully in {duration:.1f}s - {job_url}",
                     )
 
-                    if group_id:
+                    if job_urls and len(job_urls) > 1:
                         log_with_contract(
                             self.component,
                             "info",
                             job_spec.contract_name,
-                            f"Run split into rule group {group_id} (representative job {job_url})",
+                            f"Run split into {len(job_urls)} per-rule jobs "
+                            f"(representative {job_url})",
                         )
 
                     return SubmissionResult(
                         job_url=job_url,
                         output=output,
                         return_code=return_code,
-                        group_id=group_id,
+                        job_urls=job_urls,
                     )
                 else:
                     self.log(
@@ -867,13 +865,13 @@ class CloudProverRunner(ProverRunner):
             status=JobStatus.RUNNING,
         )
 
-        # A --split_rules run is a group of per-rule jobs; job_url is only one member. Wait for the
-        # whole group and hand its id to the caller through output_data for group-aware read-back.
-        # The single-job parse/early-stop path below runs only for an ordinary (ungrouped) run.
-        group_id = submission_result.group_id if submission_result else None
-        if group_id:
-            return await self._wait_and_record_group(
-                group_id, job_url, job_handle, job_spec, submission_result, start_time
+        # A --split_rules run is several per-rule jobs; job_url is only one of them. Wait for every
+        # one and hand the whole list to the caller through output_data for its own read-back. The
+        # single-job parse/early-stop path below runs only for an ordinary (single-job) run.
+        job_urls = submission_result.job_urls if submission_result else None
+        if job_urls:
+            return await self._wait_and_record_split(
+                job_urls, job_url, job_handle, job_spec, submission_result, start_time
             )
 
         try:
@@ -1111,11 +1109,10 @@ class CloudProverRunner(ProverRunner):
                 return decision
         return None
 
-    #: Terminal job-lifecycle statuses for a rule-split group member — the same set the single-job
-    #: wait treats as done (SUCCEEDED/HALTED/FAILED/CANCELED/SERVICE_UNAVAILABLE/UPLOAD_FAILED). A
-    #: member with any other status (including an unrecognized one, which maps to UNKNOWN) is still
-    #: considered pending, so the group wait runs to its timeout rather than finishing early.
-    _GROUP_TERMINAL_STATUSES = frozenset(
+    #: Terminal job-lifecycle statuses — the same set the single-job wait treats as done. A job in
+    #: any other status (including an unrecognized one) counts as pending, so the split wait runs to
+    #: its timeout rather than finishing early on a job that has not really completed.
+    _TERMINAL_JOB_STATUSES = frozenset(
         {
             ProverJobStatus.SUCCEEDED,
             ProverJobStatus.HALTED,
@@ -1126,45 +1123,52 @@ class CloudProverRunner(ProverRunner):
         }
     )
 
-    async def _wait_and_record_group(
+    @staticmethod
+    def _job_is_terminal(job_info: Any) -> bool:
+        """True when a job's info reports a terminal status — the single-job wait's completion
+        test (a known terminal status, or the job otherwise reporting itself completed)."""
+        if getattr(job_info, "status", None) in CloudProverRunner._TERMINAL_JOB_STATUSES:
+            return True
+        return bool(getattr(job_info, "is_completed", False))
+
+    async def _wait_and_record_split(
         self,
-        group_id: str,
+        job_urls: List[str],
         job_url: Optional[str],
         job_handle: JobHandle,
         job_spec: ProverJobSpec,
         submission_result: Optional[SubmissionResult],
         start_time: float,
     ) -> ProverResult:
-        """Wait for every job in a --split_rules group to finish, and return a result that carries
-        the group id in ``output_data`` for the caller's group-aware read-back.
+        """Wait for every job of a --split_rules run to finish, and return a result carrying the
+        full URL list in ``output_data`` for the caller's own read-back.
 
-        The per-rule jobs do not all surface as one job URL and each checks only a subset of the
-        rules, so this does not parse rules here — it only establishes that the group is complete
-        and records its id (the caller reads every member back itself)."""
+        Each per-rule job checks only a subset of the rules, so this does not parse rules here — it
+        establishes that all jobs are done and records their URLs (the caller reads each back)."""
         prover_api = ProverOutputAPI(use_local=False)
         log_with_contract(
             self.component,
             "info",
             job_spec.contract_name,
-            f"Waiting for rule-split group completion: {group_id}",
+            f"Waiting for {len(job_urls)} per-rule split jobs to finish",
         )
-        all_terminal = await self._wait_for_group_completion(
-            prover_api, group_id, self.job_wait_timeout
+        all_terminal = await self._wait_for_urls_completion(
+            prover_api, job_urls, self.job_wait_timeout
         )
         duration = time.time() - start_time
 
-        # Best-effort: record the group's total prover runtime for the usage ledger.
+        # Best-effort: record the split's total prover runtime for the usage ledger.
         try:
-            runtime = self._group_runtime_seconds(prover_api, group_id)
+            runtime = self._urls_runtime_seconds(prover_api, job_urls)
             if runtime is not None:
                 self._record_prover_runtime_seconds(runtime)
         except Exception as e:  # noqa: BLE001 - usage accounting must not fail the run
-            self.log(f"Could not record group runtime for {group_id}: {e}", "DEBUG")
+            self.log(f"Could not record split-run runtime: {e}", "DEBUG")
 
         job_handle.status = JobStatus.COMPLETED if all_terminal else JobStatus.FAILED
         output_data = {
             "job_url": job_url,
-            "group_id": group_id,
+            "job_urls": job_urls,
             "output": submission_result.output if submission_result else "",
             "return_code": submission_result.return_code if submission_result else 0,
         }
@@ -1173,7 +1177,7 @@ class CloudProverRunner(ProverRunner):
                 self.component,
                 "info",
                 job_spec.contract_name,
-                f"Rule-split group {group_id} completed in {duration:.1f}s",
+                f"All {len(job_urls)} split jobs completed in {duration:.1f}s",
             )
             return ProverResult(
                 job_handle=job_handle,
@@ -1182,72 +1186,59 @@ class CloudProverRunner(ProverRunner):
                 output_data=output_data,
                 job_spec=job_spec,
             )
-        self.log(
-            f"Rule-split group {group_id} did not finish within {self.job_wait_timeout}s",
-            "WARNING",
-        )
+        self.log(f"Split run did not finish within {self.job_wait_timeout}s", "WARNING")
         return ProverResult(
             job_handle=job_handle,
             success=False,
             report_path=None,
             output_data=output_data,
             job_spec=job_spec,
-            error_message=f"rule-split group {group_id} did not complete within the wait timeout",
+            error_message="a --split_rules job did not complete within the wait timeout",
         )
 
-    @staticmethod
-    def _group_job_rows(prover_api: ProverOutputAPI, group_id: str) -> List[Dict[str, Any]]:
-        """The raw job rows in a group, via POU's data API (which needs a created-at window)."""
-        from datetime import datetime, timedelta, timezone
-
-        from prover_output_utility.group_summary import fetch_group_jobs
-
-        now = datetime.now(timezone.utc)
-        created_after = (now - timedelta(days=365)).isoformat()
-        created_before = now.isoformat()
-        return fetch_group_jobs(prover_api, group_id, created_after, created_before)
-
-    async def _wait_for_group_completion(
-        self, prover_api: ProverOutputAPI, group_id: str, timeout_seconds: int
+    async def _wait_for_urls_completion(
+        self, prover_api: ProverOutputAPI, job_urls: List[str], timeout_seconds: int
     ) -> bool:
-        """Poll a rule-split group until none of its jobs are in a non-terminal state. Returns
-        True when the group is complete, False on timeout. certoraRun returns only after every
-        member is submitted, so the member count is stable by the time this polls."""
+        """Poll each job URL until all have reached a terminal status. Returns True when every job
+        is done, False on timeout. Jobs already terminal drop out so only the rest are re-polled."""
         import asyncio
 
         start = time.time()
         poll_interval = 10
+        remaining = list(job_urls)
         while time.time() - start < timeout_seconds:
-            try:
-                rows = await asyncio.get_event_loop().run_in_executor(
-                    None, self._group_job_rows, prover_api, group_id
-                )
-            except Exception as e:  # noqa: BLE001 - a transient poll error must not end the wait
-                self.log(f"Group status poll failed for {group_id}: {e}", "DEBUG")
-                rows = []
-            if rows:
-                pending = [
-                    r
-                    for r in rows
-                    if convert_job_status(str(r.get("job_status", "UNKNOWN")))
-                    not in self._GROUP_TERMINAL_STATUSES
-                ]
-                if not pending:
-                    return True
-                self.log(
-                    f"Rule-split group {group_id}: {len(pending)}/{len(rows)} jobs still running",
-                    "DEBUG",
-                )
+            still_pending: List[str] = []
+            for url in remaining:
+                try:
+                    job_info = await asyncio.get_event_loop().run_in_executor(
+                        None, prover_api.get_job_info, url
+                    )
+                except Exception as e:  # noqa: BLE001 - a transient poll error keeps it pending
+                    self.log(f"Status poll failed for {url}: {e}", "DEBUG")
+                    still_pending.append(url)
+                    continue
+                if not (job_info and self._job_is_terminal(job_info)):
+                    still_pending.append(url)
+            if not still_pending:
+                return True
+            self.log(
+                f"Split jobs: {len(still_pending)}/{len(job_urls)} still running", "DEBUG"
+            )
+            remaining = still_pending
             await asyncio.sleep(poll_interval)
         return False
 
-    def _group_runtime_seconds(
-        self, prover_api: ProverOutputAPI, group_id: str
+    def _urls_runtime_seconds(
+        self, prover_api: ProverOutputAPI, job_urls: List[str]
     ) -> Optional[float]:
-        """Sum of the group members' prover runtimes in seconds, or None when unavailable."""
+        """Sum of the split jobs' prover runtimes in seconds, or None when none is available."""
         runtimes: List[float] = []
-        for row in self._group_job_rows(prover_api, group_id):
-            value = row.get("runtime")
+        for url in job_urls:
+            try:
+                job_info = prover_api.get_job_info(url)
+            except Exception:  # noqa: BLE001 - best-effort accounting
+                continue
+            value = getattr(job_info, "runtime", None)
             if isinstance(value, (int, float)):
                 runtimes.append(float(value))
         return sum(runtimes) if runtimes else None

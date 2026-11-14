@@ -65,9 +65,9 @@ class SubmissionResult:
     output: str  # Full stdout/stderr from certoraRun
     return_code: int  # Process return code
     error_message: Optional[str] = None  # Extracted error message if failed
-    # Set when certoraRun split the run into a per-rule job group (--split_rules). The job_url is
-    # then only one representative member; the group id identifies the whole set.
-    group_id: Optional[str] = None
+    # Every job URL certoraRun submitted, set only for a --split_rules run (one job per rule).
+    # job_url is one representative of these; job_urls is the whole set.
+    job_urls: Optional[List[str]] = None
     
     @property
     def success(self) -> bool:

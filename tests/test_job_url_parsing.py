@@ -14,10 +14,10 @@ import pytest
 from certora_autosetup.utils.certora_wget import to_outputs_url
 from certora_autosetup.utils.cloud_runner import _conf_has_split_rules
 from certora_autosetup.utils.job_utils import (
-    extract_group_id_from_text,
     extract_job_hash_from_url,
     extract_job_id_from_url,
     extract_job_url_from_text,
+    extract_job_urls_from_text,
 )
 
 JOB_HASH = "0123abcd4567ef0089ab4cde0123f456"
@@ -120,20 +120,29 @@ def test_outputs_url_rejects_other_links() -> None:
         to_outputs_url("https://app.certora.com/orgs/some-org/jobs")
 
 
-def test_group_id_parses_from_split_rules_output() -> None:
-    """A --split_rules run prints the group link; extract_group_id_from_text finds its id even
-    with the per-rule output links also present in the stdout."""
-    group = "49d3e90d-d61b-4f29-bc11-63a9b50ea692"
+def test_all_job_urls_parse_from_a_split_run() -> None:
+    """A --split_rules run prints one job URL per rule; extract_job_urls_from_text returns them all
+    in order (the groupIds link it also prints is not a job URL and is ignored)."""
     out = (
         "See all jobs generated from splitting the rules at "
-        f"https://vaas-dev.certora.com/?groupIds={group}\n"
-        f"Follow your job at https://vaas-dev.certora.com/output/22224/{JOB_HASH}\n"
+        "https://vaas-dev.certora.com/?groupIds=49d3e90d-d61b-4f29-bc11-63a9b50ea692\n"
+        "job buy at https://vaas-dev.certora.com/output/22224/aaaa0000bbbb1111cccc2222dddd3333\n"
+        "job sell at https://vaas-dev.certora.com/output/22224/eeee4444ffff5555aaaa6666bbbb7777\n"
     )
-    assert extract_group_id_from_text(out) == group
+    assert extract_job_urls_from_text(out) == [
+        "https://vaas-dev.certora.com/output/22224/aaaa0000bbbb1111cccc2222dddd3333",
+        "https://vaas-dev.certora.com/output/22224/eeee4444ffff5555aaaa6666bbbb7777",
+    ]
 
 
-def test_no_group_id_for_an_unsplit_run() -> None:
-    assert extract_group_id_from_text(f"Follow your job at {LEGACY_LINK}") is None
+def test_job_urls_dedupe_by_job_id() -> None:
+    """The output and app-report links of the same job collapse to the first one seen."""
+    out = f"{LEGACY_LINK}\n{APP_LINK}\n"  # both name JOB_HASH
+    assert extract_job_urls_from_text(out) == [LEGACY_LINK]
+
+
+def test_job_urls_empty_when_no_links() -> None:
+    assert extract_job_urls_from_text("no links here") == []
 
 
 def _spec_for(conf_path: Path) -> SimpleNamespace:
