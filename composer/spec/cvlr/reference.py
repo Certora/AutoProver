@@ -163,6 +163,8 @@ class PlatformGeneration:
     #:
     #: These are read from a target's resolved graph, never declared. The scaffold's platform gate
     #: takes the first one the target resolves and compares its version against this generation.
+    #: A crate listed at several lines is on the generation at any of them: a framework whose
+    #: account type kept its shape across releases is one generation over all of them.
     witnesses: tuple[CrateRequirement, ...]
     #: How this generation spells the paths in the starting tuning files.
     #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
@@ -218,6 +220,8 @@ class AuthorSection(StrEnum):
     handler" section calls in place of its Anchor-only parts."""
 
     JIMINY = "cvlr_reaching_jiminy_handler.j2"
+    PINOCCHIO_ACCOUNT_VIEW = "cvlr_reaching_pinocchio_view_handler.j2"
+    PINOCCHIO_ACCOUNT_INFO = "cvlr_reaching_pinocchio_info_handler.j2"
 
 
 @dataclass(frozen=True)
@@ -225,14 +229,17 @@ class HarnessShim:
     """A module of the harness that binds the CVLR core to a framework's account type, written by
     the scaffold because no CVLR chain crate is published for the framework.
 
-    The scaffold writes it from ``harness_files/<module>.template.rs`` into ``src/certora/``, beside
-    ``specs``. It compiles against the program's own copy of the framework, so it follows whatever
+    The scaffold writes it from ``harness_files/<template>.template.rs`` into
+    ``src/certora/<module>.rs``, beside ``specs``. It compiles against the program's own copy of the framework, so it follows whatever
     release the program resolves, which a published crate could not do for a framework that is
     distributed as git dependencies.
     """
 
-    #: The module's name under ``src/certora/``, and its template's stem.
+    #: The module's name under ``src/certora/``: what a rule's ``use`` line names.
     module: str
+    #: The stem of the module's template under ``harness_files/``. Generations of one framework
+    #: share a module name and differ in what the module assumes of an account's header.
+    template: str
     #: The crate the module's ``use`` lines name. The program must depend on it directly: a crate
     #: can only name its own dependencies.
     requires: str
@@ -551,6 +558,7 @@ SOLANA_JIMINY = ChainReference(
     core=_CORE,
     binding=HarnessShim(
         module="jiminy",
+        template="jiminy",
         requires="jiminy-entrypoint",
         author_section=AuthorSection.JIMINY,
     ),
@@ -578,6 +586,94 @@ SOLANA_JIMINY = ChainReference(
         # Every jiminy program declares its entrypoint crate, which links `jiminy-account`.
         witnesses=(CrateRequirement("jiminy-entrypoint", "0.1"),),
         # jiminy's `entrypoint!` installs its allocator unconditionally.
+        heap_opt_out=None,
+    ),
+)
+
+def _pinocchio_caveats(account_type: str) -> tuple[str, ...]:
+    return (
+        "This program is written on Pinocchio, not on the Solana SDK, so this build gives it the "
+        "`cvlr` core and no chain crate. Nothing in `cvlr_solana`, `cvlr_spl_token` or "
+        "`cvlr_solana_stake` applies: their helpers take and return the SDK's `AccountInfo`, which "
+        f"a Pinocchio handler cannot take. Pinocchio's account type is `{account_type}`. Where the "
+        "CVLR manual reaches for those crates, use the `crate::certora::pinocchio` module the "
+        "harness already has: `cvlr_pinocchio_account()` and `cvlr_pinocchio_accounts()`.",
+        f"A Pinocchio `{account_type}` is `Copy` and owns nothing, so the advice about putting an "
+        "`AccountInfo` array in a `Box` and ending with `core::mem::forget` does not apply.",
+        "A CPI through `pinocchio::cpi` (and so through `pinocchio-token` or `pinocchio-system`) "
+        "reaches the `sol_invoke_signed_c` syscall, which the prover models as returning an "
+        "arbitrary status and writing nothing. No token model applies: `cvlr_spl_token`'s summaries "
+        "replace the SDK's invoke functions, which a Pinocchio program never calls.",
+    )
+
+
+#: Programs written on Pinocchio (https://github.com/anza-xyz/pinocchio), a framework that replaces
+#: the SDK: its own entrypoint, account type and syscall bindings. It is on crates.io, but its
+#: account type has changed shape across 0.x releases, so the account helpers are a module the
+#: scaffold writes against the program's own copy rather than a chain crate pinned to one release.
+#: Each generation below is a shape of the account header the module has to describe: the type,
+#: and what the entrypoint leaves in the four bytes after the flags.
+#:
+#: 0.11 onwards: ``AccountView`` (``solana-account-view``). Under the ``account-resize`` feature the
+#: entrypoint stores the original data length in those bytes, and nothing reads them otherwise.
+SOLANA_PINOCCHIO_0_11 = ChainReference(
+    core=_CORE,
+    binding=HarnessShim(
+        module="pinocchio",
+        template="pinocchio_0_11",
+        requires="pinocchio",
+        author_section=AuthorSection.PINOCCHIO_ACCOUNT_VIEW,
+    ),
+    models=(),
+    forks=(FIXED_FORK,),
+    caveats=_pinocchio_caveats("AccountView"),
+    platform=PlatformGeneration(
+        label="pinocchio 0.11+",
+        sdk_crates=(),
+        witnesses=(CrateRequirement("pinocchio", "0.12"), CrateRequirement("pinocchio", "0.11")),
+        # Pinocchio's `entrypoint!` installs its allocator unconditionally.
+        heap_opt_out=None,
+    ),
+)
+
+#: 0.10: ``AccountView`` with a ``resize_delta`` the runtime hands over at zero.
+SOLANA_PINOCCHIO_0_10 = ChainReference(
+    core=_CORE,
+    binding=HarnessShim(
+        module="pinocchio",
+        template="pinocchio_0_10",
+        requires="pinocchio",
+        author_section=AuthorSection.PINOCCHIO_ACCOUNT_VIEW,
+    ),
+    models=(),
+    forks=(FIXED_FORK,),
+    caveats=_pinocchio_caveats("AccountView"),
+    platform=PlatformGeneration(
+        label="pinocchio 0.10",
+        sdk_crates=(),
+        witnesses=(CrateRequirement("pinocchio", "0.10"),),
+        heap_opt_out=None,
+    ),
+)
+
+#: 0.8 and 0.9: ``pinocchio::account_info::AccountInfo``, whose header is private to Pinocchio, so
+#: the module builds it by layout. The four bytes are zero at entry: 0.8 reads them as an unset
+#: original length, 0.9 as a resize delta.
+SOLANA_PINOCCHIO_0_8 = ChainReference(
+    core=_CORE,
+    binding=HarnessShim(
+        module="pinocchio",
+        template="pinocchio_0_8",
+        requires="pinocchio",
+        author_section=AuthorSection.PINOCCHIO_ACCOUNT_INFO,
+    ),
+    models=(),
+    forks=(FIXED_FORK,),
+    caveats=_pinocchio_caveats("AccountInfo"),
+    platform=PlatformGeneration(
+        label="pinocchio 0.8-0.9",
+        sdk_crates=(),
+        witnesses=(CrateRequirement("pinocchio", "0.9"), CrateRequirement("pinocchio", "0.8")),
         heap_opt_out=None,
     ),
 )
@@ -611,7 +707,15 @@ SOROBAN = ChainReference(
 #: takes that framework's account type in its handlers, whatever SDK crates its dependencies also
 #: link.
 REFERENCE_SET: dict[str, tuple[ChainReference, ...]] = {
-    "solana": (SOLANA_JIMINY, SOLANA_V3, SOLANA_V2, SOLANA_V1_18),
+    "solana": (
+        SOLANA_JIMINY,
+        SOLANA_PINOCCHIO_0_11,
+        SOLANA_PINOCCHIO_0_10,
+        SOLANA_PINOCCHIO_0_8,
+        SOLANA_V3,
+        SOLANA_V2,
+        SOLANA_V1_18,
+    ),
     "soroban": (SOROBAN,),
 }
 

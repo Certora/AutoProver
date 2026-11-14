@@ -15,6 +15,8 @@ No toolchain, no network, no LLM.
 """
 from typing import get_args
 
+import pytest
+
 from composer.pipeline.ecosystem import SOLANA, SOLANA_PROPERTY_SYSTEM_TEMPLATE
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.author import CvlrVersionParams, Rebuttal
@@ -344,6 +346,33 @@ def test_a_jiminy_run_is_told_how_to_reach_a_jiminy_handler_instead_of_an_anchor
     anchor = _flat(_author_system_prompt())
     assert "Reaching a handler on an Anchor program" in anchor
     assert "jiminy" not in anchor
+
+
+@pytest.mark.parametrize(
+    "generation, account, key, other_account",
+    [
+        ("SOLANA_PINOCCHIO_0_11", "AccountView", "address()", "AccountInfo; 16"),
+        ("SOLANA_PINOCCHIO_0_10", "AccountView", "address()", "AccountInfo; 16"),
+        ("SOLANA_PINOCCHIO_0_8", "AccountInfo", "key()", "AccountView"),
+    ],
+)
+def test_a_pinocchio_run_is_told_its_own_account_type(generation, account, key, other_account):
+    """Pinocchio's account type changed name and accessors at 0.10, so each line is told the
+    spellings its program compiles with, and none of the Anchor mechanics."""
+    from composer.spec.cvlr import reference
+
+    ref = getattr(reference, generation)
+    prompt = _flat(_author_system_prompt(ref.caveats, ref.shim))
+    assert "Reaching a handler on a Pinocchio program" in prompt
+    assert "cvlr_pinocchio_accounts()" in prompt
+    assert f"[{account}; 16]" in prompt
+    assert f"a.{key} != b.{key}" in prompt
+    assert other_account not in prompt
+    assert "Reaching a handler on an Anchor program" not in prompt
+    assert "Context::new" not in prompt
+    assert "Token movements are the exception" not in prompt
+    assert "What a CPI does is not modelled" in prompt
+    assert "pinocchio" not in _flat(_author_system_prompt()).lower()
 
 
 def test_the_author_is_told_the_subject_of_a_rule_is_the_programs_code():

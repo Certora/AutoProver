@@ -1,0 +1,25 @@
+{#- "Reaching a handler" for Pinocchio 0.10 onwards, whose account type is `AccountView`. -#}
+{% import "cvlr_reaching_pinocchio_handler.j2" as pinocchio %}
+
+{% macro opening() -%}
+{{ pinocchio.opening(
+    account="AccountView",
+    key="address()",
+    signature="fn process_instruction(program_id: &Address, accounts: &mut [AccountView], data: &[u8])
+    -> ProgramResult",
+    note="Before 0.11 the slice is `&[AccountView]`. Passing `&mut accounts[..n]` works for both.",
+) }}
+{%- endmacro %}
+
+{% macro building_accounts() -%}
+{{ pinocchio.building_accounts(account="AccountView", key="address()") }}
+{%- endmacro %}
+
+{% macro observing_state() -%}
+{{ pinocchio.observing_state(
+    account="AccountView",
+    key="address()",
+    read_data="`try_borrow()` (`try_borrow_mut()` to write)",
+    write_lamports="`set_lamports`",
+) }}
+{%- endmacro %}

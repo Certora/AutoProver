@@ -160,6 +160,9 @@ def test_a_commit_is_pinned_by_hash_and_never_by_a_name_that_can_move():
 def test_solana_has_one_reference_set_per_generation_framework_first_then_newest_first():
     assert ref.generations("solana") == (
         ref.SOLANA_JIMINY,
+        ref.SOLANA_PINOCCHIO_0_11,
+        ref.SOLANA_PINOCCHIO_0_10,
+        ref.SOLANA_PINOCCHIO_0_8,
         ref.SOLANA_V3,
         ref.SOLANA_V2,
         ref.SOLANA_V1_18,
@@ -184,10 +187,40 @@ def test_every_harness_module_has_its_template():
             continue
         template = (
             REPO_ROOT / "composer" / "spec" / "cvlr" / "harness_files"
-            / f"{r.shim.module}.template.rs"
+            / f"{r.shim.template}.template.rs"
         )
         assert template.is_file(), template
         assert (REPO_ROOT / "composer" / "templates" / r.shim.author_section).is_file()
+
+
+def test_the_pinocchio_lines_share_a_module_and_differ_in_its_template():
+    """A rule names `crate::certora::pinocchio` whatever the release. What changes between lines is
+    the account header the module describes, and the account type the author is told about."""
+    lines = (ref.SOLANA_PINOCCHIO_0_11, ref.SOLANA_PINOCCHIO_0_10, ref.SOLANA_PINOCCHIO_0_8)
+    shims = [r.shim for r in lines]
+    assert all(s is not None and s.module == "pinocchio" and s.requires == "pinocchio" for s in shims)
+    assert len({s.template for s in shims if s is not None}) == 3
+    assert [s.author_section for s in shims if s is not None] == [
+        ref.AuthorSection.PINOCCHIO_ACCOUNT_VIEW,
+        ref.AuthorSection.PINOCCHIO_ACCOUNT_VIEW,
+        ref.AuthorSection.PINOCCHIO_ACCOUNT_INFO,
+    ]
+    for r in lines:
+        assert r.crates() == (r.core,)
+        assert {w.name for w in r.platform.witnesses} == {"pinocchio"}
+        assert r.platform.heap_opt_out is None
+
+
+def test_no_pinocchio_release_is_claimed_by_two_lines():
+    """The scaffold takes the first line that claims a target's release, so a release listed twice
+    would silently never reach the second."""
+    claimed = [
+        w.line
+        for r in ref.generations("solana")
+        for w in r.platform.witnesses
+        if w.name == "pinocchio"
+    ]
+    assert sorted(claimed) == ["0.10", "0.11", "0.12", "0.8", "0.9"]
 
 
 def test_the_sdk_generations_switch_off_the_sdk_allocator():

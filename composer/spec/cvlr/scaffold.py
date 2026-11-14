@@ -129,6 +129,20 @@ class AppendSection:
 
 
 @dataclass(frozen=True)
+class SourceEdit:
+    """One of the project's own source files, rewritten.
+
+    The whole file is recorded as planned and as it will be, so :func:`apply` writes ``after`` only
+    over the text that was planned against and is :class:`ScaffoldStale` otherwise.
+    """
+
+    path: Path
+    before: str
+    after: str
+    why: str
+
+
+@dataclass(frozen=True)
 class Addition:
     """One thing the plan adds to a manifest, and why."""
 
@@ -148,7 +162,7 @@ class EditManifest:
     additions: tuple[Addition, ...]
 
 
-type Change = Write | AppendSection | EditManifest
+type Change = Write | AppendSection | SourceEdit | EditManifest
 
 
 @dataclass(frozen=True)
@@ -185,6 +199,8 @@ class ScaffoldPlan:
                     lines.append(f"  write {path} — {why}")
                 case AppendSection(path=path, why=why):
                     lines.append(f"  extend {path} — {why}")
+                case SourceEdit(path=path, why=why):
+                    lines.append(f"  rewrite {path} — {why}")
                 case EditManifest(path=path, additions=additions):
                     lines += [f"  edit {path} {a.edit.describe()} — {a.why}" for a in additions]
         lines += [f"  ok {note}" for note in self.satisfied]
@@ -193,7 +209,8 @@ class ScaffoldPlan:
 
 
 class ScaffoldStale(RuntimeError):
-    """A manifest the plan edits gained, after planning, something the plan adds."""
+    """A file the plan edits changed after planning: a manifest gained something the plan adds,
+    or a source file the plan rewrites is no longer the text it was planned against."""
 
 
 class ScaffoldBlocked(RuntimeError):
@@ -244,7 +261,7 @@ def _harness_files(dialect: PathDialect, shim: HarnessShim | None) -> tuple[Writ
         shim_files = (
             Write(
                 path=HARNESS_DIR / f"{shim.module}.rs",
-                contents=_harness_source(Path(f"{shim.module}.rs")),
+                contents=_harness_source(Path(f"{shim.template}.rs")),
                 why=f"the {shim.module} account helpers, which no published CVLR crate provides",
             ),
         )
@@ -269,6 +286,42 @@ def _harness_files(dialect: PathDialect, shim: HarnessShim | None) -> tuple[Writ
             for family in ENV_FAMILIES
         ),
     )
+
+
+_CERTORA_OFF = f'not(feature = "{DEFAULT_FEATURE}")'
+
+_NO_STD = re.compile(r"^#!\[no_std\]", re.MULTILINE)
+_NO_STD_WHEN = re.compile(r"^#!\[cfg_attr\((?P<cond>.+), no_std\)\]", re.MULTILINE)
+#: A panic handler of the crate's own: the `#[panic_handler]` attribute, or Pinocchio's macro that
+#: defines one. Not matched when the line before already gates it on the feature.
+_PANIC_HANDLER = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<item>#\[panic_handler\]|(?:pinocchio::)?nostd_panic_handler!)",
+    re.MULTILINE,
+)
+_GATE = f"#[cfg({_CERTORA_OFF})]"
+
+
+def _with_std(source: str) -> str:
+    """``source`` as it has to be to compile with the harness, which links ``std`` through cvlr.
+
+    ``std`` brings its own panic handler, so a handler the crate defines is a duplicate of it and is
+    gated off. ``no_std`` is gated off too, so a rule can use what ``std`` has.
+    """
+    source = _NO_STD.sub(f"#![cfg_attr({_CERTORA_OFF}, no_std)]", source)
+    source = _NO_STD_WHEN.sub(
+        lambda m: m.group(0)
+        if _CERTORA_OFF in m.group("cond")
+        else f"#![cfg_attr(all({m.group('cond')}, {_CERTORA_OFF}), no_std)]",
+        source,
+    )
+
+    def gate(match: re.Match[str]) -> str:
+        preceding = source[: match.start()].rstrip("\n").rsplit("\n", 1)[-1].strip()
+        if preceding == _GATE:
+            return match.group(0)
+        return f"{match.group('indent')}{_GATE}\n{match.group(0)}"
+
+    return _PANIC_HANDLER.sub(gate, source)
 
 
 def _lib_declaration() -> str:
@@ -405,17 +458,21 @@ def _read_platform(
     The first witness the project resolves decides. Later ones are not consulted. The list is
     most-specific first because a target on a newer generation resolves only the specific crate.
     Falling through to a broader witness after a specific one has answered would undo that order.
-    Every copy of that witness linked into ``package`` has to be on the generation: one that is not
-    still meets CVLR's types wherever its dependents hand an account to a helper. A copy only
-    another member links, or only a dev-dependency pulls in, is never compiled with the harness.
+    A crate listed at several lines is one witness, on the generation at any of them. Every copy of
+    that witness linked into ``package`` has to be on the generation: one that is not still meets
+    CVLR's types wherever its dependents hand an account to a helper. A copy only another member
+    links, or only a dev-dependency pulls in, is never compiled with the harness.
     """
     linked = workspace.linked_into(package)
-    for witness in reference.platform.witnesses:
-        copies = [c for c in linked if c.name == witness.name]
+    witnesses = reference.platform.witnesses
+    for name in dict.fromkeys(w.name for w in witnesses):
+        copies = [c for c in linked if c.name == name]
         if not copies:
             continue
-        off = tuple(c.version for c in copies if _generation(c.version) != _generation(witness.line))
-        return _OffGeneration(witness, off) if off else _OnGeneration()
+        lines = [w for w in witnesses if w.name == name]
+        on = {_generation(w.line) for w in lines}
+        off = tuple(c.version for c in copies if _generation(c.version) not in on)
+        return _OffGeneration(lines[0], off) if off else _OnGeneration()
     return None
 
 
@@ -859,6 +916,28 @@ def _plan_harness(
             )
 
 
+def _plan_std(package: CratePackage, relative: Path, plan: _PlanBuilder) -> None:
+    """Make a ``no_std`` crate build with ``std`` under the feature, as hand-written Pinocchio
+    verification projects do. Every file of the library is read: a program may install its panic
+    handler beside its entrypoint rather than in ``lib.rs``."""
+    if package.lib is None or not package.lib.src_path.is_file():
+        return
+    for source in sorted(package.lib.src_path.parent.rglob("*.rs")):
+        if HARNESS_DIR in source.relative_to(package.root).parents:
+            continue
+        before = source.read_text()
+        after = _with_std(before)
+        if after != before:
+            plan.add_change(
+                SourceEdit(
+                    path=relative / _project_relative(source, package.root),
+                    before=before,
+                    after=after,
+                    why="build with std under the feature: cvlr links it, and its panic handler",
+                )
+            )
+
+
 def _check_shim_dependency(
     package: CratePackage, relative: Path, shim: HarnessShim, plan: _PlanBuilder
 ) -> None:
@@ -1011,6 +1090,9 @@ def plan_scaffold(
     dialect = dialect_for(workspace, reference)
 
     _plan_workspace_manifest(reference, plan)
+    # Before the harness: a source edit is checked against the file as planned, and the harness
+    # appends its declaration to `lib.rs`.
+    _plan_std(package, relative, plan)
     _plan_harness(package, relative, dialect, reference.shim, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, plan)
@@ -1081,6 +1163,10 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
                 existing = target.read_text() if target.is_file() else ""
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(existing + contents)
+            case SourceEdit(before=before, after=after):
+                if target.read_text() != before:
+                    raise ScaffoldStale(f"{change.path} changed after the scaffold was planned")
+                target.write_text(after)
             case EditManifest(additions=additions):
                 edited = ManifestEditor.read(target)
                 for addition in additions:

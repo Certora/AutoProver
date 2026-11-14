@@ -374,10 +374,12 @@ def test_which_releases_a_pin_admits(row, pin, admitted):
 
 
 def test_the_answer_cache_is_kept_apart_per_platform_generation():
+    """Generations that pin different releases get different caches. The framework lines all pin
+    the core alone, so the research agent reads the same corpus for each and they share one."""
     from composer.spec.cvlr.reference import generations
 
     keys = {cvlr_research.research_cache_ns(g.crates()) for g in generations("solana")}
-    assert len(keys) == len(generations("solana"))
+    assert len(keys) == len({g.crates() for g in generations("solana")})
     for ns in keys:
         assert ns[: len(cvlr_research.DEFAULT_CVLR_AGENT_INDEX_NS)] == cvlr_research.DEFAULT_CVLR_AGENT_INDEX_NS
         assert "user_data" not in ns

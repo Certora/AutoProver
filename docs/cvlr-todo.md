@@ -920,7 +920,7 @@ it too:
 - Cancel a job the poll gives up on, if the cloud API allows it.
 
 **U58. Programs on a zero-dependency framework (Pinocchio, jiminy) are refused in preflight.**
-*jiminy done 2026-11-13; Pinocchio still open.* jiminy is its own platform generation,
+*jiminy done 2026-11-13; Pinocchio done 2026-11-14.* jiminy is its own platform generation,
 `SOLANA_JIMINY`, witnessed by `jiminy-entrypoint` and ordered ahead of the SDK generations. Its
 binding is a `HarnessShim`, not a chain crate: jiminy is published only as git dependencies, so no
 CVLR crate can name its types. The scaffold writes `src/certora/jiminy.rs` from
@@ -929,8 +929,15 @@ CVLR crate can name its types. The scaffold writes `src/certora/jiminy.rs` from
 from a zero-account `deser_accounts`. The author prompt swaps the Anchor-only parts of "Reaching a
 handler" for `cvlr_reaching_jiminy_handler.j2`. Checked on inf-1.5's controller: two `set_admin`
 rules verified with their vacuity checks passing, and a planted violation came back violated.
-Pinocchio would take the same shape: a second `HarnessShim` and its own `AuthorSection`. Original
-text:
+Pinocchio took the same shape, as three generations, because its account header changed across
+0.x: `SOLANA_PINOCCHIO_0_11` (0.11-0.12, `AccountView`, the header's four spare bytes hold the
+original data length under `account-resize`), `SOLANA_PINOCCHIO_0_10` (`AccountView`, a resize
+delta) and `SOLANA_PINOCCHIO_0_8` (0.8-0.9, `AccountInfo`, built by layout as P-Token does). All
+three write `src/certora/pinocchio.rs`, each from its own `harness_files/pinocchio_*.template.rs`,
+and a witness crate may now be listed at several lines. Pinocchio programs are usually `no_std` with
+their own panic handler, which collides with `std`'s (E0152, cvlr links `std`), so the scaffold
+gained a `SourceEdit` that gates `no_std` and the handler off under the feature, as P-Token's specs
+do by hand. Checked on solana-developers' Pinocchio escrow (0.11). Original text:
 
 A
 platform generation is recognised by a witness crate the package links, `solana-program` or
