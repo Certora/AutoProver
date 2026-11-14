@@ -9,6 +9,7 @@ import pytest
 
 from certora_autosetup.utils.certora_wget import to_outputs_url
 from certora_autosetup.utils.job_utils import (
+    extract_group_id_from_text,
     extract_job_hash_from_url,
     extract_job_id_from_url,
     extract_job_url_from_text,
@@ -112,3 +113,19 @@ def test_outputs_url_from_legacy_link() -> None:
 def test_outputs_url_rejects_other_links() -> None:
     with pytest.raises(ValueError):
         to_outputs_url("https://app.certora.com/orgs/some-org/jobs")
+
+
+def test_group_id_parses_from_split_rules_output() -> None:
+    """A --split_rules run prints the group link; extract_group_id_from_text finds its id even
+    with the per-rule output links also present in the stdout."""
+    group = "49d3e90d-d61b-4f29-bc11-63a9b50ea692"
+    out = (
+        "See all jobs generated from splitting the rules at "
+        f"https://vaas-dev.certora.com/?groupIds={group}\n"
+        f"Follow your job at https://vaas-dev.certora.com/output/22224/{JOB_HASH}\n"
+    )
+    assert extract_group_id_from_text(out) == group
+
+
+def test_no_group_id_for_an_unsplit_run() -> None:
+    assert extract_group_id_from_text(f"Follow your job at {LEGACY_LINK}") is None

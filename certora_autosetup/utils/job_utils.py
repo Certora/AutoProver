@@ -50,6 +50,19 @@ def extract_job_url_from_text(output: str) -> Optional[str]:
     return matches[-1] if matches else None
 
 
+# certoraRun with --split_rules submits one job per rule as a group and prints the group link
+# "<domain>/?groupIds=<uuid>" (certora_cli's print_group_id_url). The per-rule jobs do not all
+# surface as a single job URL, so a split run is identified by this group id.
+CERTORA_GROUP_URL_RE = re.compile(rf"https://[\w.-]+/\?groupIds=({_JOB_UUID_PATTERN})")
+
+
+def extract_group_id_from_text(output: str) -> Optional[str]:
+    """The rule-split group id certoraRun prints (``...?groupIds=<uuid>``), or None when the run
+    was not split into a group."""
+    match = CERTORA_GROUP_URL_RE.search(output)
+    return match.group(1) if match else None
+
+
 def extract_job_id_from_url(url: str) -> str:
     """Extract job ID from Certora URL.
 
