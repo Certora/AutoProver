@@ -1109,28 +1109,6 @@ class CloudProverRunner(ProverRunner):
                 return decision
         return None
 
-    #: Terminal job-lifecycle statuses — the same set the single-job wait treats as done. A job in
-    #: any other status (including an unrecognized one) counts as pending, so the split wait runs to
-    #: its timeout rather than finishing early on a job that has not really completed.
-    _TERMINAL_JOB_STATUSES = frozenset(
-        {
-            ProverJobStatus.SUCCEEDED,
-            ProverJobStatus.HALTED,
-            ProverJobStatus.FAILED,
-            ProverJobStatus.CANCELED,
-            ProverJobStatus.SERVICE_UNAVAILABLE,
-            ProverJobStatus.UPLOAD_FAILED,
-        }
-    )
-
-    @staticmethod
-    def _job_is_terminal(job_info: Any) -> bool:
-        """True when a job's info reports a terminal status — the single-job wait's completion
-        test (a known terminal status, or the job otherwise reporting itself completed)."""
-        if getattr(job_info, "status", None) in CloudProverRunner._TERMINAL_JOB_STATUSES:
-            return True
-        return bool(getattr(job_info, "is_completed", False))
-
     async def _wait_and_record_split(
         self,
         job_urls: List[str],
@@ -1152,7 +1130,7 @@ class CloudProverRunner(ProverRunner):
             job_spec.contract_name,
             f"Waiting for {len(job_urls)} per-rule split jobs to finish",
         )
-        all_terminal = await self._wait_for_urls_completion(
+        all_succeeded = await self._wait_for_urls_completion(
             prover_api, job_urls, self.job_wait_timeout
         )
         duration = time.time() - start_time
@@ -1165,14 +1143,14 @@ class CloudProverRunner(ProverRunner):
         except Exception as e:  # noqa: BLE001 - usage accounting must not fail the run
             self.log(f"Could not record split-run runtime: {e}", "DEBUG")
 
-        job_handle.status = JobStatus.COMPLETED if all_terminal else JobStatus.FAILED
+        job_handle.status = JobStatus.COMPLETED if all_succeeded else JobStatus.FAILED
         output_data = {
             "job_url": job_url,
             "job_urls": job_urls,
             "output": submission_result.output if submission_result else "",
             "return_code": submission_result.return_code if submission_result else 0,
         }
-        if all_terminal:
+        if all_succeeded:
             log_with_contract(
                 self.component,
                 "info",
@@ -1186,47 +1164,33 @@ class CloudProverRunner(ProverRunner):
                 output_data=output_data,
                 job_spec=job_spec,
             )
-        self.log(f"Split run did not finish within {self.job_wait_timeout}s", "WARNING")
+        # A job failing, timing out or stopping early does not lose the others: the caller reads
+        # back whatever each job produced. success=False only flags that not all ran cleanly.
+        self.log("Not every split job completed successfully", "WARNING")
         return ProverResult(
             job_handle=job_handle,
             success=False,
             report_path=None,
             output_data=output_data,
             job_spec=job_spec,
-            error_message="a --split_rules job did not complete within the wait timeout",
+            error_message="not every --split_rules job completed successfully",
         )
 
     async def _wait_for_urls_completion(
         self, prover_api: ProverOutputAPI, job_urls: List[str], timeout_seconds: int
     ) -> bool:
-        """Poll each job URL until all have reached a terminal status. Returns True when every job
-        is done, False on timeout. Jobs already terminal drop out so only the rest are re-polled."""
+        """Wait for all of a split run's jobs by running the single-job wait on each concurrently —
+        same completion test, auth-retry and early-stop as an ordinary run. Returns True when every
+        job finished successfully, False if any failed, timed out or stopped early."""
         import asyncio
 
-        start = time.time()
-        poll_interval = 10
-        remaining = list(job_urls)
-        while time.time() - start < timeout_seconds:
-            still_pending: List[str] = []
-            for url in remaining:
-                try:
-                    job_info = await asyncio.get_event_loop().run_in_executor(
-                        None, prover_api.get_job_info, url
-                    )
-                except Exception as e:  # noqa: BLE001 - a transient poll error keeps it pending
-                    self.log(f"Status poll failed for {url}: {e}", "DEBUG")
-                    still_pending.append(url)
-                    continue
-                if not (job_info and self._job_is_terminal(job_info)):
-                    still_pending.append(url)
-            if not still_pending:
-                return True
-            self.log(
-                f"Split jobs: {len(still_pending)}/{len(job_urls)} still running", "DEBUG"
+        results = await asyncio.gather(
+            *(
+                self._wait_for_job_completion_with_api(prover_api, url, timeout_seconds)
+                for url in job_urls
             )
-            remaining = still_pending
-            await asyncio.sleep(poll_interval)
-        return False
+        )
+        return all(success for success, _early_stop in results)
 
     def _urls_runtime_seconds(
         self, prover_api: ProverOutputAPI, job_urls: List[str]
