@@ -922,8 +922,8 @@ files is C7b's.
 markers were planned here; `editor.py` imports them first, so they ride P5.
 
 Still the PR that makes the backend a product, and still last in the wave — but it is now the PR
-that *composes* seven working things rather than the PR that makes twelve dead ones reachable. Lands
-without the two pinned-run flags; see *Deferred: pinned runs*.
+that *composes* seven working things rather than the PR that makes twelve dead ones reachable. The
+pinned-run flags are gone from the branch; see *Dropped: pinned runs*.
 
 It now also carries three things that were meant to land earlier: the `cvlr-preflight` script (still to
 write) and `entry.py`'s parser, both of which P1 merged without; `make_run_link_fetcher`, which S4 can no longer
@@ -1028,7 +1028,7 @@ Changes that touch only an unlanded slice's own files are not listed: the author
 | The ranker is told the bonus that decides the pick (`13623ecc`) | `composer/spec/prioritize.py`, `composer/templates/property_prioritization_system.j2`, `tests/test_prioritize.py` *(hunks)* | **master now** |
 | A cross-unit property is checked at the focus unit's own entry points, and the report records it as `run_scoped` (schema 3.8, `bf6283d5`) | `composer/spec/{prioritize,types}.py`, `composer/templates/property_prioritization_{prompt,system}.j2`, `composer/pipeline/core.py`, report *(hunks)*, `tests/test_prioritized_scope.py` | **P7**, with the hoist: the narrowing reads `SharedUnit.entry_points` |
 | The hoist says what synthesis and salvage changed (`b93506d2`) and binds `HoistPlan` through the structured-output helper (`a3072a0d`) | `composer/spec/hoist.py`, `tests/test_structured_output.py` *(hunk)* | **P7** |
-| A pinned replay keeps a prioritized run's `checked_at` narrowing (`672d52f9`) | `composer/pipeline/pinned.py`, `tests/test_pinned_properties.py` | **Pinned runs**, deferred |
+| A pinned replay keeps a prioritized run's `checked_at` narrowing (`672d52f9`) | `composer/pipeline/pinned.py`, `tests/test_pinned_properties.py` | **Dropped** with pinned runs. The property set keeps the narrowing instead (see *Dropped: pinned runs*) |
 | report.json says why a run ended without a report (`ec5351af`, schema 3.9) | `composer/pipeline/{run_failure,refusal}.py`, `composer/{foundry,spec}/artifacts.py`, `composer/foundry/entry.py`, `composer/rustapp/adapter.py`, `composer/spec/gen_types.py`, `composer/spec/source/autoprove_common.py`, report *(hunks)*, `tests/test_run_failure.py` | **master**, open as #305 at master's numbering. When it merges, staging keeps 3.9 and drops the duplicate |
 | The property ranking moves into report.json (`e0905887`, schema 3.10) | `composer/pipeline/core.py`, `composer/spec/artifacts.py`, report *(hunks)* | **Merged** as #306 (`f720b977`) at master's 3.3. Staging keeps 3.10 |
 | Per-unit deliverables: one self-contained directory per unit, with its conf at `cvlr/confs/<module>.conf` (schema 4.0, `bd62e232`, `57e8e0e1`) | `composer/spec/cvlr/deliverable.py` (replaces `patch.py`), `tests/test_cvlr_deliverable.py` (replaces `test_cvlr_patch.py`), `composer/cargo/manifest.py`, `composer/pipeline/core.py`, report *(hunks: `unit_deliverables`)*, `composer/templates/autoprove_report.html.j2` *(hunk)*, `tests/test_pipeline_staged_formalizer.py` *(hunk)*, `README-solana.md`, `source_edits_integration.md` *(hunk)* | **P7**, in place of the run-wide patch. Master never had `deliverable_patch` or `prover_confs`, so there is nothing to backport |
@@ -1048,11 +1048,10 @@ The report's `schema_version` went from 3.1 to 4.0 on the branch, one step per c
 `prioritization` (master's 3.3), and 4.0 `unit_deliverables`.
 Each PR that changes the schema bumps it once, from whatever master has.
 
-**#273's predefined property sets and pinned runs.** Since `489f8423`, master has a second way to
-start a run past extraction: `--predefined-properties` loads a `property_set.json`, and
-`--property-generator` supplies one. The merge kept both. A pinned run cannot take a property set
-or a generator as well, and the CVLR entry accepts master's three flags beside its own
-`--properties`. This bears on [Deferred: pinned runs](#deferred-pinned-runs).
+**#273's predefined property sets replaced pinned runs.** Since `489f8423`, master has
+`--predefined-properties`, which loads the `property_set.json` every run writes. The branch then
+moved the pin's two remaining features onto it and deleted pinned runs; see
+[Dropped: pinned runs](#dropped-pinned-runs).
 
 ### Order, and what is forced
 
@@ -1243,39 +1242,38 @@ also carries the branch's other `BASE_CONF` change, `-solanaHeapSize 262144` (`3
 **P7 must not merge with the pin.** If the release has not happened by then, P7 waits for it, or
 lands without the flag and the branch keeps it.
 
-## Deferred: pinned runs
+## Dropped: pinned runs
 
-`composer/pipeline/pinned.py` writes a run's analysis *and* properties to disk (`--pin-to`) so a
-later run can re-enter at formalization (`--properties`), skipping the two phases that on one real
-target were 98% of the wall clock before the first prover job. Both halves are pinned because a unit
-is an index into the analysis, so properties keyed by component name can attach to a component that
-has changed under the name.
+`composer/pipeline/pinned.py` wrote a run's analysis *and* properties to disk (`--pin-to`) so a
+later run could re-enter at formalization (`--properties`), skipping the two phases that on one real
+target were 98% of the wall clock before the first prover job. Both halves were pinned because a
+unit is an index into the analysis, so properties keyed by component name can attach to a component
+that has changed under the name. It was held back while it was unsettled whether this was the right
+shape for "start a run somewhere other than the beginning".
 
-**It is held back deliberately, and the decision is the point.** Whether this is the right shape for
-"start a run somewhere other than the beginning" is not settled, and nothing else in the branch needs
-it — so the cost of deciding later is zero, while landing it early would make a 4,233-line checked-in
-fixture and a second way to configure a run into things master has to keep working.
+Master settled it. #273's property set holds the same two halves, the whole system model and each
+unit's final properties matched by name and unit index, and every run writes one. On 2026-11-15
+the branch moved the pin's two remaining features onto it, and deleted `pinned.py`, the two CVLR
+flags, the `pinned` / `pin_to` parameters of `cli_pipeline` and `run_pipeline`, and
+`tests/test_pinned_properties.py`:
 
-What its dependents must do while it is deferred:
+* **The target's commit.** `PropertySet.target_commit` records the project's checkout when the set
+  is written, and a replay warns when the checkout has moved past it (`check_target`). A warning,
+  not a refusal, for the reason the pin gave: a set refused on every unrelated commit would be
+  rewritten reflexively.
+* **A prioritized run's narrowing.** A property narrowed to the focus unit's entry points is
+  recorded as a `ScopedPropertyFormulation`. A set that validated it as a plain property dropped
+  `checked_at`, so its replay checked the property at every entry point it names.
 
-* **P7** lands without `--pin-to` and `--properties` and without the `load_pinned_run` import —
-  roughly eight lines of `composer/spec/cvlr/entry.py`. No test exercises them, so nothing else moves.
-* The `pinned` / `pin_to` parameters stay out of `cli_pipeline` and `run_pipeline`, which is why the
-  shared-pipeline caution above names two PRs rather than three.
-* `tests/test_pinned_properties.py` and `tests/data/pins/` travel with the feature if it ever lands.
+Both are shared code on master's file. They ride as a follow-up to #273, and the narrowing's half
+needs `ScopedPropertyFormulation`, which lands with `run_scoped` in **P7**, so it rides P7. The three
+recovered fixtures were converted and are now `tests/data/property_sets/`, with their tests in
+`tests/test_solana_property_sets.py`. They travel with the gate that replays them (**P8**).
 
-If it is dropped instead, the same paths are what to delete from the branch.
-
-**Master now has the same thing under another name (2026-11-15).** #273's `--predefined-properties`
-loads a `property_set.json`, which holds the whole system model and each unit's final properties,
-matched by name and unit index. That is a pin's content, and it skips the same two phases. What a
-pin adds is the warning when the target has moved past the commit it was taken at
-(`check_target`), and, since `672d52f9`, the `checked_at` narrowing of a prioritized run's
-properties. A property set validates its properties as `PropertyFormulation`, so it drops that
-narrowing, as the pin did before `672d52f9`. The merge (`489f8423`) keeps both and refuses a run
-that names a pin together with a property set or generator. That makes the open question
-above smaller. If pinned runs are still wanted, the cheaper path is to port the target check and
-the narrowing to the property set and delete `pinned.py`, not to land a second file format.
+What a pin did that a property set does not: a pinned run in prioritized mode ranked the pinned
+properties again, and a property set written by a comprehensive run does not load into a
+prioritized one (`PropertySet.loadable_in`). A prioritized replay needs a set that a prioritized
+run wrote.
 
 ---
 
@@ -1616,7 +1614,8 @@ already local to the functions that need them.
 | Miscellaneous, to master | `composer/prover/results.py` *(hunks: `flatten_tree_view`, the alert errors)* `tests/test_tree_view_static_verdict.py` `composer/prover/{cloud,core}.py` *(hunks: the results fetch, the job failure's link and alerts)* `tests/test_cloud_fetch_retry.py` `tests/test_cloud_results_fetch.py` `tests/test_alert_errors.py` `composer/templates/cex_instructions.j2` `composer/pipeline/cli.py` *(hunks)* `composer/spec/source/prover.py` *(docstring)* `composer/authoring/judge.py` `composer/spec/cvl_research.py` `composer/rag/wipe.py` `composer/scripts/{ragbuild,rag_import}.py` *(hunks)* `scripts/wipe_rag.py` `tests/test_rag_wipe.py` `scripts/autoprove-entrypoint.sh` *(hunk: `setup-db`)* `composer/pipeline/ptypes.py` `composer/cli/{console_autoprove,console_foundry}.py` `composer/scripts/budget_math.py` `tests/test_pipeline_result.py` `composer/spec/source/report/{build,findings,grouping,render,schema}.py` `composer/templates/autoprove_report.html.j2` `tests/test_autoprove_report.py` *(hunks: U8, U21, the finding drafts)* `composer/prover/{cloud,core,ptypes,results,analysis}.py` *(hunks: U32, U44, the typed failures and the code read, the sibling calls)* `composer/spec/source/{author,prover}.py` `composer/tools/prover.py` `composer/templates/{rule_feedback,flat_rule_feedback}.j2` *(hunks)* `tests/test_{rule_statistics,prover_message,cex_analysis_sibling_calls}.py` `tests/data/prover_statistics/` `tests/test_{cloud_results_fetch,alert_errors,cex_analysis_failure_isolation}.py` *(hunks)* `composer/authoring/{state,tools}.py` `composer/spec/source/{autoprove_common,pipeline}.py` `composer/pipeline/run_mode.py` *(hunks: U42, the shared focus exits)* `tests/test_{focus_exits,rustapp_gate}.py` *(hunks)* `composer/spec/prioritize.py` `composer/templates/property_prioritization_system.j2` `tests/test_prioritize.py` *(hunks: `13623ecc`)* |
 | Run failure, to master *(#305)* | `composer/pipeline/{run_failure,refusal}.py` `composer/{foundry,spec}/artifacts.py` `composer/foundry/entry.py` `composer/rustapp/adapter.py` `composer/spec/gen_types.py` `composer/spec/source/autoprove_common.py` `composer/spec/source/report/{render,schema}.py` `composer/templates/autoprove_report.html.j2` *(hunks)* `tests/test_run_failure.py` |
 | graphcore re-pin *(held)* | `graphcore` *(`67871fbe`; re-pin once `eric/summary-nonempty` merges)* |
-| Pinned runs *(deferred)* | `composer/pipeline/pinned.py` `tests/test_pinned_properties.py` `tests/data/pins/` |
+| Property-set follow-up, to master after #273 | `composer/pipeline/property_set.py` *(hunks: `target_commit`, `check_target`, `git_head`; the `RecordedProperty` narrowing rides P7)* `composer/pipeline/core.py` *(hunks: the commit recorded and checked)* `tests/test_pipeline_property_set.py` *(hunks)* |
+| Recorded Solana property sets, with P8 | `tests/data/property_sets/` `tests/test_solana_property_sets.py` |
 | D | `docs/` *(less the sections that ride their slice, and less `rag-import-format.md`, which goes with C7b)* |
 
 ---

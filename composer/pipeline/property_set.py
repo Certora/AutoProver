@@ -5,13 +5,17 @@ The whole system model is kept, not a per-component slice, because a unit is a v
 EVM's ``ContractComponentInstance`` reads its siblings, interactions and parent contract through
 the application. Restoring the model and re-enumerating its units rebuilds the same units.
 
-The set does not pin the source code. Units are matched by name and index only, so a set replayed
-against changed sources applies its properties to the changed code without notice; replay it
-against the commit that wrote it.
+Units are matched by name and index only, so a set replayed against changed sources applies its
+properties to the changed code. The set records the target's commit, and a replay warns when the
+checkout has moved past it (:meth:`PropertySet.check_target`). A warning rather than a refusal: the
+analysis may still describe a checkout whose new commit touched other code, and a set refused on
+every unrelated commit would be rewritten reflexively, which is how a stale one gets blessed.
 """
 
+import logging
+import subprocess
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from collections.abc import Collection
 
@@ -21,15 +25,25 @@ from composer.pipeline.ecosystem import ChainTag
 from composer.pipeline.run_mode import RunMode
 from composer.spec.system_model import BaseApplication, FeatureUnit
 from composer.spec.types import (
-    ComponentName, PropertyFormulation, PropertyKey, PropertyTitle, SourceIdentifier,
+    ComponentName, PropertyFormulation, PropertyKey, PropertyTitle, ScopedPropertyFormulation,
+    SourceIdentifier,
 )
+
+_log = logging.getLogger(__name__)
+
+#: A property as the set holds it. A prioritized run's narrowed property keeps its ``checked_at``:
+#: replayed without it, the property would be checked at every entry point it names, a wider claim
+#: than the run that wrote the set made.
+type RecordedProperty = Annotated[
+    ScopedPropertyFormulation | PropertyFormulation, Field(union_mode="left_to_right")
+]
 
 
 class PropertySetComponent(BaseModel):
     """One unit's identity among the rebuilt units, and its final properties."""
     name: ComponentName
     unit_index: int
-    properties: list[PropertyFormulation]
+    properties: list[RecordedProperty]
 
 
 class PropertyRank(BaseModel):
@@ -55,6 +69,9 @@ class PropertySet(BaseModel):
     #: ``None`` when the set is unranked. Every entry names a property of the set, at most once.
     #: A ranking may leave properties out, and its ranks may have gaps.
     ranking: list[PropertyRank] | None = None
+    #: The target checkout's commit when the set was written; ``None`` when the target is not a git
+    #: checkout.
+    target_commit: str | None = None
 
     @model_validator(mode="after")
     def _ranking_names_the_set_properties(self) -> "PropertySet":
@@ -100,6 +117,20 @@ class PropertySet(BaseModel):
         unranked = {RunMode.COMPREHENSIVE, RunMode.EVALUATE, RunMode.PROPERTY_GENERATION}
         return self.run_mode in unranked and run_mode in unranked
 
+    def check_target(self, project_root: Path) -> None:
+        """Warn when ``project_root`` is a checkout at a commit other than the one the set was
+        written at."""
+        if self.target_commit is None:
+            return
+        head = git_head(project_root)
+        if head is None or head == self.target_commit:
+            return
+        _log.warning(
+            "the property set was written at %s but %s is at %s; its analysis may no longer "
+            "describe this source",
+            self.target_commit[:12], project_root, head[:12],
+        )
+
     def analyzed[App: BaseApplication](self, ty: type[App]) -> App:
         return ty.model_validate(self.system_model)
 
@@ -131,5 +162,17 @@ class PropertySet(BaseModel):
                     f"property set component {c.name!r} has unit index {c.unit_index}, "
                     f"but the rebuilt unit has {unit.unit_index}"
                 )
-            paired.append((unit, c.properties))
+            paired.append((unit, [*c.properties]))
         return paired
+
+
+def git_head(project_root: Path) -> str | None:
+    """The checkout's commit, or ``None`` when it is not a git checkout or git is unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return (out.stdout.strip() or None) if out.returncode == 0 else None

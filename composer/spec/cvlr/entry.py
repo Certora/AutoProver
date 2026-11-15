@@ -45,7 +45,6 @@ from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, 
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
 from composer.pipeline.cli import AtExit, cli_pipeline, user_ns
-from composer.pipeline.pinned import load_pinned_run
 from composer.pipeline.ecosystem import SOLANA
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS, CorePipelineResult
 from composer.pipeline.run_failure import reporting_run_failure
@@ -103,8 +102,6 @@ class CvlrArgs(ExtendedModelOptions, PropertySetOptions, Protocol):
     memory_ns: str | None
     interactive: bool
     max_bug_rounds: int
-    properties: str | None
-    pin_to: str | None
     recursion_limit: int
     budget: str | None
     budget_total: float | None
@@ -174,19 +171,6 @@ def build_parser() -> argparse.ArgumentParser:
              "the EVM pipeline does.",
     )
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
-    parser.add_argument(
-        "--properties", default=None, metavar="PATH",
-        help="Re-enter the pipeline at formalization using a fixture written by --pin-to: its "
-             "analysis and its properties are used instead of running those two phases, which "
-             "between them are most of what a run on a real target costs. Components the fixture "
-             "omits are dropped, so pinning one of ten is what makes it cheap.",
-    )
-    parser.add_argument(
-        "--pin-to", default=None, metavar="PATH", dest="pin_to",
-        help="After analysis and extraction, write both to PATH as a fixture --properties can "
-             "replay. Records the target's commit so a later run can say when the checkout has "
-             "moved out from under it.",
-    )
     # One budget, two spellings — the file shapes spend across phases, the scalar sets the pool
     # alone. Mutually exclusive here so argparse renders the choice in --help.
     budget_group = parser.add_mutually_exclusive_group()
@@ -382,13 +366,6 @@ async def _executor(
             "analysis will be told to declare %r",
             identifier, crate, identifier,
         )
-    # Read before any service starts: a malformed pin file should cost nothing, and the shape
-    # error is far easier to act on when it is the first thing printed.
-    pinned = (
-        load_pinned_run(pathlib.Path(args.properties).resolve(), SOLANA.system_model)
-        if args.properties is not None else None
-    )
-
     # After the workspace read, which already names a missing cargo, and before anything is staged:
     # the build subcommand is the one prerequisite nothing else touches until the first submission.
     _log.info("cvlr: building with %s", await sbf_subcommand_version())
@@ -405,8 +382,6 @@ async def _executor(
             ecosystem=SOLANA,
             at_exit=_usage_exit_logger(summary, selected, run_mode),
             run_mode=run_mode,
-            pinned=pinned,
-            pin_to=pathlib.Path(args.pin_to).resolve() if args.pin_to else None,
             workflow="cvlr",
             package=selected.name,
             confined=sandbox.enabled,

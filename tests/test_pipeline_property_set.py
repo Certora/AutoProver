@@ -19,8 +19,12 @@ import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM, main_instance
 from composer.pipeline.modes import ModeSupport
-from composer.pipeline.property_set import PropertyRank, PropertySet, PropertySetComponent
+from composer.pipeline import property_set
+from composer.pipeline.property_set import (
+    PropertyRank, PropertySet, PropertySetComponent, git_head,
+)
 from composer.pipeline.run_mode import RunMode
+from composer.spec.types import ScopedPropertyFormulation
 from composer.spec.source.harness import (
     HarnessDef, HarnessedContract, SystemDescriptionHarnessed, lift_harnessed,
 )
@@ -510,3 +514,86 @@ def test_a_malformed_file_is_reported_with_its_path(tmp_path):
     path.write_text('{"schema_version": 2}')
     with pytest.raises(ValueError, match="bad.json"):
         PropertySet.load(path)
+
+
+# ---------------------------------------------------------------------------------------------
+# what a replay keeps from the run that wrote the set
+
+
+def test_a_narrowed_property_keeps_its_scope_through_the_round_trip(tmp_path):
+    """A prioritized run's set holds properties narrowed to the focus unit's entry points. A
+    replay that dropped ``checked_at`` would check them at every entry point they name, a wider
+    claim than the run that wrote the set made."""
+    scoped = ScopedPropertyFormulation(
+        sort="invariant", title="scoped", description="holds at deposit and withdraw",
+        checked_at=["deposit"], excluded=["withdraw"],
+    )
+    ps = _set(("deposits", 0)).model_copy(update={"property_components": [
+        PropertySetComponent(name="deposits", unit_index=0, properties=[scoped, _prop("plain")]),
+    ]})
+    path = tmp_path / "set.json"
+    path.write_text(ps.model_dump_json())
+
+    loaded = PropertySet.load(path).property_components[0].properties
+
+    assert loaded == [scoped, _prop("plain")]
+    assert isinstance(loaded[0], ScopedPropertyFormulation)
+    assert not isinstance(loaded[1], ScopedPropertyFormulation)
+
+
+async def test_a_run_records_its_targets_commit(monkeypatch):
+    """The target's commit, read from the project root: a set stamped with the working directory's
+    commit would say nothing about the source its analysis describes."""
+    asked: list[Path] = []
+
+    def fake_head(root: Path) -> str:
+        asked.append(root)
+        return "c0ffee"
+
+    monkeypatch.setattr(core, "git_head", fake_head)
+    d = await _drive(monkeypatch)
+
+    written = d.backend.artifact_store.property_set
+    assert written is not None and written.target_commit == "c0ffee"
+    assert asked == [Path("/nonexistent/project")]
+
+
+async def test_a_replay_warns_when_the_checkout_has_moved(monkeypatch, tmp_path, caplog):
+    _, ps = await _recorded(monkeypatch, tmp_path)
+    moved = ps.model_copy(update={"target_commit": "0" * 40})
+    monkeypatch.setattr(property_set, "git_head", lambda _root: "1" * 40)
+
+    with caplog.at_level("WARNING"):
+        await _drive(monkeypatch, predefined=moved)
+
+    assert any("may no longer describe this source" in r.message for r in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "recorded, head",
+    [("0" * 40, "0" * 40), ("0" * 40, None), (None, "0" * 40)],
+    ids=["same-commit", "not-a-checkout", "nothing-recorded"],
+)
+def test_check_target_is_silent_without_a_known_move(monkeypatch, caplog, recorded, head):
+    monkeypatch.setattr(property_set, "git_head", lambda _root: head)
+    ps = _set(("admin", 1)).model_copy(update={"target_commit": recorded})
+
+    with caplog.at_level("WARNING"):
+        ps.check_target(Path("/nonexistent"))
+
+    assert not caplog.records
+
+
+def test_git_head_is_none_outside_a_repository(tmp_path):
+    assert git_head(tmp_path) is None
+
+
+def test_git_head_reads_a_real_repository():
+    head = git_head(Path(__file__).resolve().parent.parent)
+    assert head is not None and len(head) == 40
+
+
+def test_a_set_written_before_the_commit_was_recorded_loads(tmp_path):
+    path = tmp_path / "set.json"
+    path.write_text(_set(("admin", 1)).model_dump_json(exclude={"target_commit"}))
+    assert PropertySet.load(path).target_commit is None

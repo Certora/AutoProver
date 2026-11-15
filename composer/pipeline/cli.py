@@ -23,7 +23,6 @@ from composer.diagnostics.logging_setup import setup_autoprove_logging
 from composer.spec.context import SourceFields, WorkflowContext, SourceCode
 from composer.spec.service_host import ServiceHost
 from composer.workflow.services import IndexedConnections, standard_connections
-from composer.pipeline.pinned import PinnedRun
 from composer.pipeline.ptypes import (
     PipelineRun, BackendResult,
     CorePipelineResult, PhaseBudget, RunBudget
@@ -321,13 +320,8 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
     ecosystem: Ecosystem[App, Main, U],
     at_exit: AtExit | None = None,
     run_mode: RunMode = RunMode.COMPREHENSIVE,
-    pinned: PinnedRun | None = None,
-    pin_to: pathlib.Path | None = None,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H, App, Main, U]]]:
-    """``pinned`` supplies the analysis and the properties, skipping the two phases that between
-    them dominate a real target's cost; ``pin_to`` writes that fixture from a full run. See
-    :mod:`composer.pipeline.pinned`."""
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
@@ -531,8 +525,6 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
                     budget=budget,
                     time_budget_s=args.time_budget,
                     ecosystem=ecosystem,
-                    pinned=pinned,
-                    pin_to=pin_to,
                     predefined=predefined,
                     stop_after_properties=args.stop_after_properties,
                 )

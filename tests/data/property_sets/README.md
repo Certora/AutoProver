@@ -1,14 +1,19 @@
-# Pinned runs
+# Recorded property sets
 
-Fixtures for `--properties` (see `composer/pipeline/pinned.py`): a recorded analysis plus the
-properties extracted from it, so a run can re-enter the pipeline at formalization without paying
-for the two phases that dominate a real target's cost.
+Property sets for `--predefined-properties` (see `composer/pipeline/property_set.py`): a recorded
+analysis plus the properties extracted from it, so a run can re-enter the pipeline at
+formalization without paying for the two phases that dominate a real target's cost. Every run
+writes one to its report directory as `property_set.json`.
+
+They were first written as pinned-run fixtures (`--pin-to` / `--properties`, deleted 2026-11-15)
+and converted to this format then. The history below keeps the old names where it describes what
+was done at the time.
 
 **These are expected to be temporary.** They exist because the CVLR backend is not yet reliable
 enough to reach formalization cheaply on a real program; once it is, a gate can afford to run the
 whole pipeline and these files should go.
 
-## `spl-stake-pool.pin.json`
+## `spl-stake-pool.property_set.json`
 
 | | |
 |---|---|
@@ -42,13 +47,13 @@ for reasons that are not our fault, which is the opposite of what a gate is for.
 `admin_fee_configuration` is the better target: it covers `set_fee`, which the normative
 verification does cover, so its rules have a known-good counterpart to be read against.
 
-## `vault.pin.json` and `vault-deposits.pin.json`
+## `vault.property_set.json` and `vault-deposits.property_set.json`
 
 | | |
 |---|---|
 | target | `test_scenarios/solana_vault_idl`, in this repo |
 | taken from | run of 2026-09-18, thread `cvlr_d71e0ec8c99f` |
-| contents | `vault.pin.json`: 3 components, 30 properties. `vault-deposits.pin.json`: the `Deposits` component alone, 9 properties |
+| contents | `vault.property_set.json`: 3 components, 30 properties. `vault-deposits.property_set.json`: the `Deposits` component alone, 9 properties |
 
 They exist for one experiment: whether `optimistic_loop` earns its place as a default
 ([cvlr-todo.md](../../../docs/cvlr-todo.md) U9). That run's `Deposits` unit could not discharge an
@@ -56,7 +61,7 @@ unwinding condition at any bound and gave up the handler, so the comparison is t
 properties formalized twice, with the assumption off and on. The trimmed pin is the cheap half of
 it: the two components it drops took 1h09 and 1h24 of formalization between them.
 
-Trimmed by deleting a key from `properties`, which is all a narrower pin is. Narrowing *within* a
+Trimmed by deleting an entry from `property_components`, which is all a narrower set is. Narrowing *within* a
 component is possible the same way and was deliberately not done — the author's strategy responds to
 the whole batch it is given, and a unit handed two properties may never attempt the handler at all,
 which is the thing being measured.
@@ -118,7 +123,7 @@ Submitted with `composer.certora_env.import_prover_entry("solana")` from the pin
 `.cvlr_work/build`, which already holds the compiled workspace and the generated summaries — no
 pipeline, no model calls, about 20 seconds of prover time each.
 
-### The `swap_import` run off `vault-deposits.pin.json`
+### The `swap_import` run off `vault-deposits.property_set.json`
 
 The second use of this pin, and the one it was kept for: the first end-to-end exercise of the
 `swap_import` munge kind ([cvlr-todo.md](../../../docs/cvlr-todo.md) U11,

@@ -75,7 +75,7 @@ stays off. The EVM side sets it on every run ([source/prover.py](../composer/spe
 The measurement that decided it (2026-09-21): one rule, the real vault `deposit` handler,
 `balance_post == balance_pre + amount` over `NativeInt`, submitted against the delivered `Deposits`
 harness with only the conf changed
-([vault-deposits.pin.json](../tests/data/pins/vault-deposits.pin.json)):
+([vault-deposits.property_set.json](../tests/data/property_sets/vault-deposits.property_set.json)):
 
 | conf | verdict |
 |---|---|
@@ -105,7 +105,7 @@ report it came from.
 
 **~~U11. `swap_import` has never been used by an author on a real run.~~** — **run, 2026-09-21.**
 Seven of nine properties verified, three skipped, none faked, on thread `cvlr_e924521c4199` off
-[vault-deposits.pin.json](../tests/data/pins/vault-deposits.pin.json).
+[vault-deposits.property_set.json](../tests/data/property_sets/vault-deposits.property_set.json).
 [who-edits-the-program.md](./who-edits-the-program.md) §13.4 is the account. What it found went to
 the author prompt (two stand-in constraints), to [upstream-defects.md](./upstream-defects.md) P9, and
 to **U12**.

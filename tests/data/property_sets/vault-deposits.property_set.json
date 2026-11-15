@@ -1,7 +1,9 @@
 {
-  "version": 1,
-  "target_commit": "3f3c84c136e61664225cd52a1c1f43e7d916e9a3",
-  "analysis": {
+  "schema_version": 1,
+  "ecosystem": "solana",
+  "contract_name": "vault",
+  "run_mode": "comprehensive",
+  "system_model": {
     "application_type": "Vault / SOL Custody (with fee-sharing on withdrawal)",
     "description": "A minimal Anchor program that lets any user create a personal program-derived vault to custody SOL. Anyone may deposit into an existing vault, but only its recorded authority may withdraw, optionally routing a fixed 1% fee to a caller-supplied fee-collector account while the rest goes to the authority.",
     "components": [
@@ -25,7 +27,7 @@
         "name": "Fee Collector",
         "description": "An optional, caller-supplied account passed to `withdraw` to receive a 1% (100 bps) fee share of the withdrawal amount.",
         "assumptions": [
-          "Is untrusted and unchecked by the program beyond being a valid account able to receive lamports \u2014 it is only ever credited, never debited or read, so no ownership or type constraint is enforced on it.",
+          "Is untrusted and unchecked by the program beyond being a valid account able to receive lamports — it is only ever credited, never debited or read, so no ownership or type constraint is enforced on it.",
           "Its presence or absence is entirely at the withdrawing authority's discretion for a given call."
         ]
       },
@@ -47,7 +49,7 @@
                   "pda"
                 ],
                 "constraints": [
-                  "init \u2014 must not already exist; enforces exactly one vault per authority",
+                  "init — must not already exist; enforces exactly one vault per authority",
                   "payer = authority",
                   "space = 8 + VaultState::SIZE",
                   "seeds = [\"vault\", authority.key()], canonical bump"
@@ -106,7 +108,7 @@
                   "pda"
                 ],
                 "constraints": [
-                  "seeds = [\"vault\", vault.authority.as_ref()], bump = vault.bump \u2014 validates the account is the canonical vault for its stored authority"
+                  "seeds = [\"vault\", vault.authority.as_ref()], bump = vault.bump — validates the account is the canonical vault for its stored authority"
                 ]
               },
               {
@@ -164,7 +166,7 @@
                 ],
                 "constraints": [
                   "seeds = [\"vault\", authority.key()], bump = vault.bump",
-                  "has_one = authority \u2014 vault.authority must equal the supplied authority account"
+                  "has_one = authority — vault.authority must equal the supplied authority account"
                 ]
               },
               {
@@ -186,7 +188,7 @@
                   "writable"
                 ],
                 "constraints": [
-                  "none enforced \u2014 explicitly unchecked, since it is only ever credited lamports and never debited or read"
+                  "none enforced — explicitly unchecked, since it is only ever credited lamports and never debited or read"
                 ]
               }
             ],
@@ -210,7 +212,7 @@
           }
         ],
         "account_types": [
-          "VaultState \u2014 PDA at seeds [\"vault\", authority]; stores `authority: Pubkey` (the owner/withdrawer), `balance: u64` (net lamports recorded as deposited minus withdrawn), and `bump: u8` (the PDA derivation bump). Exactly one is created per authority."
+          "VaultState — PDA at seeds [\"vault\", authority]; stores `authority: Pubkey` (the owner/withdrawer), `balance: u64` (net lamports recorded as deposited minus withdrawn), and `bump: u8` (the PDA derivation bump). Exactly one is created per authority."
         ],
         "components": [
           {
@@ -236,7 +238,8 @@
               "The implementation must enforce exactly one vault per authority via PDA derivation combined with the `init` constraint.",
               "The implementation must never allow re-initialization of an existing vault.",
               "The implementation must ensure the vault PDA is always the canonical PDA of [\"vault\", authority] for its recorded authority."
-            ]
+            ],
+            "computations": []
           },
           {
             "name": "Deposits",
@@ -261,7 +264,8 @@
             "requirements": [
               "The implementation must move lamports through an explicit System Program transfer rather than a raw lamport mutation.",
               "The implementation must keep balance accounting overflow-safe and consistent with the amount actually transferred."
-            ]
+            ],
+            "computations": []
           },
           {
             "name": "Withdrawals & Fee Sharing",
@@ -292,59 +296,66 @@
               "The implementation must never withdraw more than the vault's recorded balance.",
               "The implementation must conserve lamports across the authority/fee-collector split (amount leaving the vault equals amount received by authority plus fee collector).",
               "The implementation must ensure supplying a fee collector never increases the amount the authority receives relative to omitting one."
-            ]
+            ],
+            "computations": []
           }
         ]
       }
     ]
   },
-  "properties": {
-    "deposits": [
-      {
-        "sort": "safety_property",
-        "description": "If `deposit(amount)` succeeds, the vault's recorded `balance` after the call equals its balance before the call plus `amount` computed over exact integers \u2014 no double credit, truncation, or wrap \u2014 so the recorded balance never diverges from the lamports actually moved.",
-        "title": "deposit_credits_exactly_amount"
-      },
-      {
-        "sort": "safety_property",
-        "description": "If `vault.balance` before the call plus `amount` exceeds u64::MAX, `deposit` must fail and leave `vault.balance` (and `authority`/`bump`) unchanged, since a wrapping credit would silently shrink the recorded balance and permanently strand the deposited lamports in the PDA.",
-        "title": "deposit_reverts_on_balance_overflow"
-      },
-      {
-        "sort": "invariant",
-        "description": "`deposit` never modifies `vault.authority` or `vault.bump`, so an arbitrary depositor cannot re-point a vault's ownership or its PDA derivation (and thereby gain withdrawal rights) by depositing into someone else's vault.",
-        "title": "deposit_preserves_vault_authority_and_bump"
-      },
-      {
-        "sort": "attack_vector",
-        "description": "`deposit` must fail unless the account passed as `depositor` is a signer; if the signer check were missing or weakened to an AccountInfo, anyone could debit a third party's lamports into a vault they do not control.",
-        "title": "deposit_requires_depositor_signature"
-      },
-      {
-        "sort": "attack_vector",
-        "description": "`deposit` must fail unless the `vault` account's key equals the canonical PDA of seeds [\"vault\", vault.authority] for this program \u2014 note the handler validates with the *stored* `vault.bump` rather than re-deriving the canonical bump, so a vault whose stored bump is non-canonical, or an attacker-supplied look-alike account, must not be creditable.",
-        "title": "deposit_requires_canonical_vault_pda"
-      },
-      {
-        "sort": "attack_vector",
-        "description": "The only lamport movement `deposit` performs is a System Program CPI transferring exactly `amount` lamports from the `depositor` account to the very same `vault` account whose recorded `balance` is credited \u2014 no raw lamport mutation of `vault` or `depositor`, and no third-party source or destination \u2014 otherwise a caller could fund one vault while crediting another, or credit a vault while lamports land elsewhere.",
-        "title": "deposit_transfer_matches_credited_account_and_amount"
-      },
-      {
-        "sort": "attack_vector",
-        "description": "If the System Program transfer CPI returns an error (e.g. the depositor is short of lamports), `deposit` must abort with `vault.balance` unchanged rather than swallowing the `Result` and crediting the balance, since a credit without an incoming transfer makes the recorded balance exceed the lamports held and lets the vault be over-withdrawn.",
-        "title": "deposit_credit_only_after_successful_transfer"
-      },
-      {
-        "sort": "invariant",
-        "description": "With the System Program transfer modeled as an exact lamport move, the vault PDA's lamports minus its recorded `balance` is never decreased by `deposit` (the rent/surplus cushion is never consumed and the vault never becomes under-collateralized); this invariant ranges over every lamport-moving handler of the program, `deposit` and `withdraw` alike.",
-        "title": "deposit_preserves_vault_lamport_solvency"
-      },
-      {
-        "sort": "safety_property",
-        "description": "A signer that is not `vault.authority` can successfully complete `deposit` on an existing, canonically-derived vault when `amount` neither overflows the recorded balance nor exceeds the depositor's lamports, so the documented \"anyone may deposit into any vault\" behavior is not made dead by an over-strict authority or PDA guard.",
-        "title": "deposit_reachable_for_non_authority_depositor"
-      }
-    ]
-  }
+  "property_components": [
+    {
+      "name": "Deposits",
+      "unit_index": 1,
+      "properties": [
+        {
+          "sort": "safety_property",
+          "description": "If `deposit(amount)` succeeds, the vault's recorded `balance` after the call equals its balance before the call plus `amount` computed over exact integers — no double credit, truncation, or wrap — so the recorded balance never diverges from the lamports actually moved.",
+          "title": "deposit_credits_exactly_amount"
+        },
+        {
+          "sort": "safety_property",
+          "description": "If `vault.balance` before the call plus `amount` exceeds u64::MAX, `deposit` must fail and leave `vault.balance` (and `authority`/`bump`) unchanged, since a wrapping credit would silently shrink the recorded balance and permanently strand the deposited lamports in the PDA.",
+          "title": "deposit_reverts_on_balance_overflow"
+        },
+        {
+          "sort": "invariant",
+          "description": "`deposit` never modifies `vault.authority` or `vault.bump`, so an arbitrary depositor cannot re-point a vault's ownership or its PDA derivation (and thereby gain withdrawal rights) by depositing into someone else's vault.",
+          "title": "deposit_preserves_vault_authority_and_bump"
+        },
+        {
+          "sort": "attack_vector",
+          "description": "`deposit` must fail unless the account passed as `depositor` is a signer; if the signer check were missing or weakened to an AccountInfo, anyone could debit a third party's lamports into a vault they do not control.",
+          "title": "deposit_requires_depositor_signature"
+        },
+        {
+          "sort": "attack_vector",
+          "description": "`deposit` must fail unless the `vault` account's key equals the canonical PDA of seeds [\"vault\", vault.authority] for this program — note the handler validates with the *stored* `vault.bump` rather than re-deriving the canonical bump, so a vault whose stored bump is non-canonical, or an attacker-supplied look-alike account, must not be creditable.",
+          "title": "deposit_requires_canonical_vault_pda"
+        },
+        {
+          "sort": "attack_vector",
+          "description": "The only lamport movement `deposit` performs is a System Program CPI transferring exactly `amount` lamports from the `depositor` account to the very same `vault` account whose recorded `balance` is credited — no raw lamport mutation of `vault` or `depositor`, and no third-party source or destination — otherwise a caller could fund one vault while crediting another, or credit a vault while lamports land elsewhere.",
+          "title": "deposit_transfer_matches_credited_account_and_amount"
+        },
+        {
+          "sort": "attack_vector",
+          "description": "If the System Program transfer CPI returns an error (e.g. the depositor is short of lamports), `deposit` must abort with `vault.balance` unchanged rather than swallowing the `Result` and crediting the balance, since a credit without an incoming transfer makes the recorded balance exceed the lamports held and lets the vault be over-withdrawn.",
+          "title": "deposit_credit_only_after_successful_transfer"
+        },
+        {
+          "sort": "invariant",
+          "description": "With the System Program transfer modeled as an exact lamport move, the vault PDA's lamports minus its recorded `balance` is never decreased by `deposit` (the rent/surplus cushion is never consumed and the vault never becomes under-collateralized); this invariant ranges over every lamport-moving handler of the program, `deposit` and `withdraw` alike.",
+          "title": "deposit_preserves_vault_lamport_solvency"
+        },
+        {
+          "sort": "safety_property",
+          "description": "A signer that is not `vault.authority` can successfully complete `deposit` on an existing, canonically-derived vault when `amount` neither overflows the recorded balance nor exceeds the depositor's lamports, so the documented \"anyone may deposit into any vault\" behavior is not made dead by an over-strict authority or PDA guard.",
+          "title": "deposit_reachable_for_non_authority_depositor"
+        }
+      ]
+    }
+  ],
+  "ranking": null,
+  "target_commit": "3f3c84c136e61664225cd52a1c1f43e7d916e9a3"
 }
