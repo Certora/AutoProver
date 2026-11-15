@@ -41,7 +41,7 @@ from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, sbf_subcommand_version
 from composer.core.user import get_uid
 from composer.diagnostics.timing import RunSummary
 from composer.input.parsing import add_extra_context_args, add_protocol_args
-from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, PropertySetOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
 from composer.pipeline.cli import AtExit, cli_pipeline, user_ns
@@ -90,7 +90,7 @@ type CvlrRunner = Callable[
 # ---------------------------------------------------------------------------
 
 
-class CvlrArgs(ExtendedModelOptions, Protocol):
+class CvlrArgs(ExtendedModelOptions, PropertySetOptions, Protocol):
     project_root: str
     main_contract: str
     system_doc: str | None
@@ -119,6 +119,7 @@ def build_parser() -> argparse.ArgumentParser:
         description="CVLR rule author for the Certora Solana Prover",
     )
     add_protocol_args(parser, ExtendedModelOptions)
+    add_protocol_args(parser, PropertySetOptions)
     parser.add_argument(
         "--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT,
         help=f"Max graph iterations (default: {DEFAULT_RECURSION_LIMIT})",

@@ -50,6 +50,24 @@ def extract_job_url_from_text(output: str) -> Optional[str]:
     return matches[-1] if matches else None
 
 
+def extract_job_urls_from_text(output: str) -> List[str]:
+    """Every distinct Certora job URL in arbitrary text (e.g. certoraRun stdout), in first-seen
+    order. A --split_rules run submits one job per rule and prints each one's URL, so this is how
+    the whole set is recovered. De-duplicated by job hash, so the output and app-report links of
+    the same job collapse to the first one seen."""
+    seen: set[str] = set()
+    urls: List[str] = []
+    for url in CERTORA_JOB_URL_RE.findall(output):
+        try:
+            key = extract_job_hash_from_url(url)
+        except ValueError:
+            key = url
+        if key not in seen:
+            seen.add(key)
+            urls.append(url)
+    return urls
+
+
 def extract_job_id_from_url(url: str) -> str:
     """Extract job ID from Certora URL.
 

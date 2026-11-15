@@ -276,6 +276,11 @@ class FormalizedProperty(PropertyFormulation):
         description="Identities of the rules that (jointly) formalize this property.",
     )
     coverage: PropertyCoverage | None = None
+    rank: int | None = Field(
+        default=None,
+        description="1-based importance rank across the run's properties (1 = most important). "
+        "None when the run did not rank its properties.",
+    )
 
     @property
     def key(self) -> PropertyKey:
