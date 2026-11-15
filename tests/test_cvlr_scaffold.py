@@ -36,6 +36,7 @@ from composer.spec.cvlr.scaffold import (
     Write,
     apply,
     plan_scaffold,
+    select_generation,
 )
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
 from composer.spec.cvlr.reference import SOLANA_V1_18, SOLANA_V2, SOLANA_V3, SOROBAN, generations
@@ -806,6 +807,8 @@ class _FakeCargo:
         self.calls: list[tuple[Path, tuple[str, ...]]] = []
         self.toolchains: list[str | None] = []
         self.cargo_homes: list[Path | None] = []
+        #: The cargo config each read would have found in its cargo home, ``None`` for none.
+        self.configs: list[str | None] = []
 
     async def __call__(
         self, root, *, offline=False, features=(), toolchain=None, cargo_home=None, timeout_s=0
@@ -813,6 +816,8 @@ class _FakeCargo:
         self.calls.append((Path(root), tuple(features)))
         self.toolchains.append(toolchain)
         self.cargo_homes.append(cargo_home)
+        config = cargo_home / "config.toml" if cargo_home is not None else None
+        self.configs.append(config.read_text() if config is not None and config.is_file() else None)
         return self.workspace
 
 
@@ -886,6 +891,30 @@ async def test_a_confined_preflight_fetches_into_the_cargo_home_the_gate_warms(
 
 
 @pytest.mark.asyncio
+async def test_a_confined_preflights_first_read_already_has_the_users_cargo_config(
+    tmp_path, fake_cargo, monkeypatch
+):
+    """The first read of a run is online, so it needs the registry mirrors and source
+    replacements the shared cargo config declares. Credentials stay behind."""
+    shared = tmp_path / "shared-cargo"
+    shared.mkdir()
+    (shared / "config.toml").write_text('[net]\ngit-fetch-with-cli = true\n')
+    (shared / "credentials.toml").write_text('[registry]\ntoken = "secret"\n')
+    monkeypatch.setenv("CARGO_HOME", str(shared))
+    project = tmp_path / "project"
+    workspace, _ = _project(project, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    fake = fake_cargo(workspace)
+
+    await preflight.prepare_workspace(
+        project, reference=SOLANA_V2, sandbox=SandboxConfig(provider="launcher"), package="prog"
+    )
+
+    assert fake.configs and set(fake.configs) == {'[net]\ngit-fetch-with-cli = true\n'}
+    (home,) = set(fake.cargo_homes)
+    assert home is not None and not (home / "credentials.toml").exists()
+
+
+@pytest.mark.asyncio
 async def test_preflight_reports_what_cargo_said_when_the_project_cannot_be_read(
     tmp_path, fake_cargo
 ):
@@ -893,6 +922,18 @@ async def test_preflight_reports_what_cargo_said_when_the_project_cannot_be_read
     with pytest.raises(preflight.PreflightFailed, match="failed to parse manifest") as caught:
         await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED)
     assert str(caught.value).startswith(f"Could not read the Cargo project at {tmp_path}:")
+
+
+@pytest.mark.asyncio
+async def test_preflight_names_the_host_toolchain_when_it_is_not_installed(tmp_path, monkeypatch):
+    from composer.cargo.rustup import ToolchainMissing
+
+    def missing(*args, **kwargs):
+        raise ToolchainMissing("1.90.0", "")
+
+    monkeypatch.setattr(Workspace, "read", missing)
+    with pytest.raises(preflight.PreflightFailed, match="rustup toolchain install 1.90.0"):
+        await preflight.prepare_workspace(tmp_path, reference=SOLANA_V2, sandbox=_UNCONFINED)
 
 
 @pytest.mark.asyncio
@@ -970,6 +1011,25 @@ def test_an_anchor_target_is_redirected_at_the_verification_fork(tmp_path):
     patch = tables[("patch", "crates-io", "anchor-lang")]
     assert ("branch", "certora-v0.31.1") in patch.body
     assert ("git", "https://github.com/Certora/anchor.git") in patch.body
+
+
+def test_a_crates_io_anchor_1_x_target_on_sdk_3_is_redirected_at_the_verification_fork(tmp_path):
+    """Anchor 1.x is on SDK 3, so its target selects the newest reference set, and that set has to
+    redirect it rather than refuse it as uncovered."""
+    workspace, package = _project(
+        tmp_path,
+        manifest=ANCHOR_MANIFEST.replace("0.31.1", "1.2.1"),
+        workspace_manifest='[workspace]\nmembers = ["."]\n',
+        platform="3.0.0",
+        platform_crate="solana-account-info",
+        cvlr_resolved={"anchor-lang": "1.2.1", "anchor-lang-error": "1.2.1"},
+    )
+    assert select_generation(workspace, package, generations("solana")) is SOLANA_V3
+    plan = plan_scaffold(workspace, package, SOLANA_V3)
+    assert plan.blocked == ()
+    tables = {a.table: a for a in _additions(plan) if isinstance(a, AddTable)}
+    for crate in ("anchor-lang", "anchor-lang-error"):
+        assert ("branch", "certora-v1.2.1") in tables[("patch", "crates-io", crate)].body
 
 
 def test_redirecting_twice_is_a_no_op(tmp_path):

@@ -10,6 +10,8 @@
 #[inline(never)] ^([^:]+::)*CVT_.*$
 
 ; Rust memory allocation functions. rustc 1.89 and later put them under `__rustc::`.
+; The Prover models each of these, `__rust_realloc` as an alloc of the new size plus a copy
+; (EVMVerifier#8777). Inlined, realloc would reach the allocator's own code instead.
 #[inline(never)] ^(__rustc::)?__rust_alloc$
 #[inline(never)] ^(__rustc::)?__rust_dealloc$
 #[inline(never)] ^(__rustc::)?__rust_alloc_zeroed$

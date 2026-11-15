@@ -9,6 +9,9 @@ run's CPU budget (``PipelineRun.cpu_runner``), the same split as
 :mod:`composer.rustapp.adapter`. One function that did both could not be placed on either side
 of that line.
 
+Solana only for now. :data:`~composer.spec.cvlr.reference.SOROBAN` has a reference set, but the
+compile gate is the Solana platform tools' SBF check.
+
 Three outcomes are refusals, all :class:`~composer.spec.cvlr.scaffold.Blocked`: a package that
 builds no loadable object, a project on a CVLR release other than the one this build is pinned to,
 and a CVLR pin that does not match the platform generation the project is already on.
@@ -21,10 +24,11 @@ from pathlib import Path
 
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
+from composer.cargo.rustup import ToolchainMissing
 from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
 from composer.sandbox.config import SandboxConfig
-from composer.sandbox.recipes import sandbox_cargo_home
+from composer.sandbox.recipes import prepare_sandbox_cargo_home
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.crates import CvlrSources, Divergence
 from composer.spec.cvlr.scaffold import (
@@ -185,7 +189,7 @@ async def _workspace_at(
         workspace = await Workspace.read(
             root, features=features, toolchain=HOST_RUST_TOOLCHAIN, cargo_home=cargo_home
         )
-    except CargoUnavailable as exc:
+    except (CargoUnavailable, ToolchainMissing) as exc:
         raise PreflightFailed(str(exc)) from exc
     if not isinstance(workspace, Workspace):
         raise PreflightFailed(
@@ -214,7 +218,7 @@ async def prepare_workspace(
     # so these reads reuse the registry crates it fetched. Git sources are fetched again: these
     # reads use the host cargo, and the platform-tools cargo does not see the host cargo's git
     # checkouts (:func:`composer.cargo.sbf.platform_tools_cargos`).
-    cargo_home = sandbox_cargo_home(project_root) if sandbox.enabled else None
+    cargo_home = prepare_sandbox_cargo_home(project_root) if sandbox.enabled else None
     workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     member = _pick_package(workspace, package)
 
@@ -272,6 +276,8 @@ async def gate_workspace(
 
     ``cargo check`` for the SBF target (:func:`~composer.cargo.sbf.sbf_check`). The full build
     runs at a later gate.
+
+    Solana only: a Soroban target would need a check for its own target.
     """
     try:
         check_with = sbf_check(PLATFORM_TOOLS_VERSION)

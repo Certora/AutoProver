@@ -29,7 +29,7 @@ from composer.spec.cvlr.forks import (
     patch_tables,
     plan_overrides,
 )
-from composer.spec.cvlr.reference import SOLANA_V2
+from composer.spec.cvlr.reference import SOLANA_V2, SOLANA_V3
 
 REGISTRY = RegistrySource("registry+https://github.com/rust-lang/crates.io-index")
 
@@ -127,14 +127,15 @@ def test_every_declared_version_maps_to_a_branch(tmp_path, version):
 
 
 def test_an_uncovered_version_blocks_rather_than_leaving_the_boxing_in(tmp_path):
-    """The fork covers 0.30.1 and not 0.30.0, which is why versions are listed. A derived name
-    would send cargo after a branch that does not exist, and the error would be about git."""
+    """crates.io has Anchor 1.2.2 and the fork does not, which is why versions are listed. A
+    derived name would send cargo after a branch that does not exist, and the error would be
+    about git."""
     refused = _refused(
-        plan_overrides(_workspace(tmp_path, _package("anchor-lang", "0.30.0")), SOLANA_V2.forks)
+        plan_overrides(_workspace(tmp_path, _package("anchor-lang", "1.2.2")), SOLANA_V3.forks)
     )
     (blocked,) = refused.blocked
-    assert "0.30.0" in blocked.problem
-    assert "0.30.1" in blocked.resolution
+    assert "1.2.2" in blocked.problem
+    assert "1.2.1" in blocked.resolution
 
 
 @pytest.mark.parametrize("fork", SOLANA_V2.forks, ids=lambda f: f.crates[0])
@@ -221,7 +222,7 @@ def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
     assert _added(plan) == _ROOT
     # Reported rather than dropped: "Anchor was not replaced" is what a reader of a [3006] failure
     # needs to know, and silence looks the same as success.
-    assert set(plan.inapplicable) == {"anchor-lang", "anchor-spl", "fixed"}
+    assert set(plan.inapplicable) == {"anchor-lang", "anchor-spl", "anchor-lang-error", "fixed"}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -229,16 +230,17 @@ def test_a_target_that_is_not_an_anchor_program_needs_nothing(tmp_path):
 
 
 def test_the_branch_list_matches_what_the_fork_publishes():
-    """Read from ``Certora/anchor`` on 2026-09-01. The fork also has ``-pad-error`` and
-    ``-reduce-error`` branches of 0.29.0. Those are experiments and are not in this list."""
+    """Read from ``Certora/anchor`` on 2026-11-15. The fork also has ``-pad-error`` and
+    ``-reduce-error`` branches of 0.29.0, and ``v<version>+certora.1`` tags-as-branches of four
+    releases. Those are not ``certora-v`` release branches and are not in this list."""
     versions = list(ANCHOR_FORK.branches)
     assert versions == sorted(versions), "keep the list ordered so a gap is visible"
     assert len(set(versions)) == len(versions)
     for version, branch in ANCHOR_FORK.branches.items():
         assert branch == f"certora-v{version}"
-    # The gap that motivates listing rather than deriving.
-    assert "0.30.0" not in versions
-    assert "0.30.1" in versions
+    # crates.io releases the fork has no branch for, which is why the list is not derived.
+    assert "0.25.0" not in versions
+    assert "1.2.2" not in versions
 
 
 def test_every_override_says_why_it_exists_and_covers_at_least_one_version():
@@ -255,7 +257,6 @@ def test_the_anchor_fork_covers_both_crates_it_publishes(tmp_path):
     ``anchor_lang::error``, and leaves ``anchor-spl`` upstream. Its ``TokenAccount`` and ``Mint``
     are newtypes with a private field. The fork adds ``new_unchecked`` for those, so a harness
     can build a token account. Both crates are redirected to the same branch."""
-    assert set(ANCHOR_FORK.crates) == {"anchor-lang", "anchor-spl"}
     plan = _planned(
         plan_overrides(
             _workspace(
@@ -267,6 +268,27 @@ def test_the_anchor_fork_covers_both_crates_it_publishes(tmp_path):
     assert {o.crate: o.branch for o in plan.overrides} == {
         "anchor-lang": "certora-v0.31.1",
         "anchor-spl": "certora-v0.31.1",
+    }
+
+
+def test_an_anchor_1_x_target_has_its_error_crate_redirected_with_it(tmp_path):
+    """Anchor 1.1.0 moved ``anchor_lang::error`` into ``anchor-lang-error``. A copy of it left on
+    crates.io sits beside the fork's, with its own ``Error`` type."""
+    plan = _planned(
+        plan_overrides(
+            _workspace(
+                tmp_path,
+                _package("anchor-lang", "1.2.1"),
+                _package("anchor-spl", "1.2.1"),
+                _package("anchor-lang-error", "1.2.1"),
+            ),
+            SOLANA_V3.forks,
+        )
+    )
+    assert {o.crate: o.branch for o in plan.overrides} == {
+        "anchor-lang": "certora-v1.2.1",
+        "anchor-spl": "certora-v1.2.1",
+        "anchor-lang-error": "certora-v1.2.1",
     }
 
 

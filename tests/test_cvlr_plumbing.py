@@ -606,7 +606,7 @@ async def test_a_session_checks_and_warms_with_the_cargo_its_check_runs(tmp_path
     assert warm_program == program == "/pt/cargo"
     assert warm_args[0] == "fetch"
     assert args[:4] == ["check", "--quiet", "--target", "t"]
-    assert env == {"RUSTUP_TOOLCHAIN": "1.90.0", "RUSTC": "/pt/rustc"}
+    assert env == {"RUSTUP_TOOLCHAIN": "1.90.0", "RUSTUP_AUTO_INSTALL": "0", "RUSTC": "/pt/rustc"}
     assert session.already_warmed("/pt/cargo") and not session.already_warmed("cargo")
 
 
@@ -1040,7 +1040,7 @@ async def test_the_build_script_runs_its_command_with_the_sessions_toolchain(tmp
     script = await write_build_script(session, _build(), into=_outside(tmp_path), name="unit")
     command_file = build_command_path(script)
     command = json.loads(command_file.read_text())
-    assert command["env"] == {"RUSTUP_TOOLCHAIN": "1.90.0"}
+    assert command["env"] == {"RUSTUP_TOOLCHAIN": "1.90.0", "RUSTUP_AUTO_INSTALL": "0"}
     command["argv"] = [sys.executable, *_PRINT_TOOLCHAIN]
     command_file.write_text(json.dumps(command))
     ran = subprocess.run([str(script), "--json"], capture_output=True, text=True, check=True)
@@ -1057,6 +1057,7 @@ def test_reading_a_workspace_passes_its_toolchain_and_cargo_home_on(tmp_path, mo
         return subprocess.CompletedProcess(args, 1, "", "no manifest")
 
     monkeypatch.setattr(metadata.shutil, "which", lambda _: "/usr/bin/cargo")
+    monkeypatch.setattr(metadata, "require_toolchain", lambda _: None)
     monkeypatch.setattr(metadata.subprocess, "run", fake_run)
     monkeypatch.setenv("AUTOPROVER_METADATA_SENTINEL", "kept")
     monkeypatch.delenv("RUSTUP_TOOLCHAIN", raising=False)
@@ -1075,6 +1076,7 @@ def test_reading_a_workspace_passes_its_toolchain_and_cargo_home_on(tmp_path, mo
     assert untouched is None
     assert with_toolchain is not None
     assert with_toolchain["RUSTUP_TOOLCHAIN"] == "1.90.0"
+    assert with_toolchain["RUSTUP_AUTO_INSTALL"] == "0"
     assert with_toolchain["AUTOPROVER_METADATA_SENTINEL"] == "kept"
     assert with_toolchain.get("CARGO_HOME") != str(home)
     assert with_home is not None
@@ -1083,3 +1085,25 @@ def test_reading_a_workspace_passes_its_toolchain_and_cargo_home_on(tmp_path, mo
     assert with_home["AUTOPROVER_METADATA_SENTINEL"] == "kept"
     assert home.is_dir()
 
+
+
+def test_a_missing_toolchain_fails_the_read_before_cargo_runs(tmp_path, monkeypatch):
+    """rustup would otherwise install it on demand: slow, racy between parallel runs, and
+    impossible on a read-only rustup home."""
+    from composer.cargo import rustup
+
+    probes: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_run(args, **kwargs):
+        probes.append((args, kwargs["env"]))
+        return subprocess.CompletedProcess(args, 1, "", "error: toolchain '9.9.9' is not installed")
+
+    monkeypatch.setattr(metadata.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(rustup.subprocess, "run", fake_run)
+    with pytest.raises(rustup.ToolchainMissing, match="rustup toolchain install 9.9.9"):
+        metadata._cargo_metadata(
+            tmp_path, offline=True, features=(), toolchain="9.9.9", cargo_home=None, timeout_s=5
+        )
+    ((args, env),) = probes
+    assert args[1:] == ["which", "--toolchain", "9.9.9", "cargo"]
+    assert env["RUSTUP_AUTO_INSTALL"] == "0"

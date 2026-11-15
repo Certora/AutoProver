@@ -118,8 +118,13 @@ PLATFORM_TOOLS_VERSION = "v1.53"
 #: Host Rust toolchain for every cargo command in a CVLR run, in place of the project's
 #: ``rust-toolchain.toml``. The program and its ``cargo check`` are compiled by the platform-tools
 #: rustc (:func:`~composer.cargo.sbf.sbf_check`). This toolchain runs ``cargo metadata`` and the
-#: cargo that launches ``cargo certora-sbf``. A container's rustup home is read-only, so a toolchain
-#: the image does not have cannot be installed, and cargo does not start.
+#: cargo that launches ``cargo certora-sbf``.
+#:
+#: Nothing in this repository's default image installs it: that image carries no Rust. The Solana
+#: images install it, and a dev machine needs ``rustup toolchain install 1.90.0``. rustup is told
+#: not to install it on demand (:func:`~composer.cargo.rustup.toolchain_env`), so a machine
+#: without it fails the first ``cargo metadata`` with
+#: :class:`~composer.cargo.rustup.ToolchainMissing`.
 HOST_RUST_TOOLCHAIN = "1.90.0"
 
 

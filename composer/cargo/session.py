@@ -25,9 +25,10 @@ from pathlib import Path
 from typing import Literal
 
 from composer.cargo.features import CargoFeature
+from composer.cargo.rustup import toolchain_env
 from composer.sandbox.command import CommandResult, run_local_command
 from composer.sandbox.config import BackendSpec, SandboxConfig
-from composer.sandbox.recipes import sandbox_cargo_home
+from composer.sandbox.recipes import prepare_sandbox_cargo_home, sandbox_cargo_home
 
 _log = logging.getLogger(__name__)
 
@@ -143,12 +144,9 @@ class CargoSession:
 
     @property
     def toolchain_env(self) -> dict[str, str]:
-        """The environment that selects :attr:`toolchain`.
-
-        rustup reads ``RUSTUP_TOOLCHAIN`` before ``rust-toolchain.toml``. A cargo that rustup does
-        not manage ignores the variable.
-        """
-        return {"RUSTUP_TOOLCHAIN": self.toolchain} if self.toolchain is not None else {}
+        """The environment that selects :attr:`toolchain`
+        (:func:`~composer.cargo.rustup.toolchain_env`)."""
+        return toolchain_env(self.toolchain)
 
     @property
     def check_cargo(self) -> str:
@@ -216,9 +214,7 @@ class CargoSession:
         For prep steps only (``docs/command-sandbox.md`` §5). Uses the session's
         cargo home so the confined build can read the cache.
         """
-        home = self.cargo_home
-        if home is not None:
-            home.mkdir(parents=True, exist_ok=True)
+        home = prepare_sandbox_cargo_home(self.workdir) if self.sandbox.enabled else None
         return await run_local_command(
             program,
             args,
