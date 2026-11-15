@@ -226,15 +226,17 @@ class ChainReference:
 #: parametric-rule layer with it.
 _CORE = CrateRelease("cvlr", "0.6.2")
 
-#: ``cvlr-solana`` 0.5.1. The three crates of that repository are released together, at one version.
+#: ``cvlr-solana`` 0.5.2, which reads account flags without branching (each nondet account used to
+#: add 2^3 paths to a rule). The three crates of that repository are released together, at one
+#: version.
 SOLANA_V2 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.5.1"),
+    chain_crate=CrateRelease("cvlr-solana", "0.5.2"),
     specializations=(
-        CrateRelease("cvlr-solana-stake", "0.5.1"),
+        CrateRelease("cvlr-solana-stake", "0.5.2"),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
         # summaries.
-        CrateRelease("cvlr-spl-token", "0.5.1"),
+        CrateRelease("cvlr-spl-token", "0.5.2"),
     ),
     forks=(ANCHOR_FORK, FIXED_FORK),
     platform=PlatformGeneration(
@@ -288,13 +290,13 @@ SOLANA_V2 = ChainReference(
     ),
 )
 
-#: ``cvlr-solana`` 0.6.0, for the split ``solana-*`` 3.x crates.
+#: ``cvlr-solana`` 0.6.1, for the split ``solana-*`` 3.x crates: 0.5.2 ported to them.
 SOLANA_V3 = replace(
     SOLANA_V2,
-    chain_crate=CrateRelease("cvlr-solana", "0.6.0"),
+    chain_crate=CrateRelease("cvlr-solana", "0.6.1"),
     specializations=(
-        CrateRelease("cvlr-solana-stake", "0.6.0"),
-        CrateRelease("cvlr-spl-token", "0.6.0"),
+        CrateRelease("cvlr-solana-stake", "0.6.1"),
+        CrateRelease("cvlr-spl-token", "0.6.1"),
     ),
     platform=PlatformGeneration(
         # Every platform type lives in its own crate.
@@ -343,11 +345,12 @@ SOLANA_V3 = replace(
     ),
 )
 
-#: ``cvlr-solana`` 0.4.6, for ``solana-program`` 1.18. It requires ``cvlr-*`` ``>=0.4, <1``, so
-#: cargo resolves it onto the shared 0.6.2 core, one copy of each core crate.
+#: ``cvlr-solana`` 0.4.7, for ``solana-program`` 1.18, with the same account-flag fix. It requires
+#: ``cvlr-*`` ``>=0.4, <1``, so cargo resolves it onto the shared 0.6.2 core, one copy of each core
+#: crate.
 SOLANA_V1_18 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.4.6"),
+    chain_crate=CrateRelease("cvlr-solana", "0.4.7"),
     # No specializations. The 0.4 line has no stake model, and its token helpers are in the chain
     # crate. It has no SPL Token CPI model either: a token CPI reaches ``invoke_signed_unchecked``,
     # which the core summaries make opaque.

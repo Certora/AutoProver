@@ -46,21 +46,21 @@ def test_the_dependency_block_carries_the_platform_too():
     # gate for a missing import rather than for anything about CVLR.
     block = ref.SOLANA_V2.cargo_dependencies()
     assert 'cvlr = "=0.6.2"' in block
-    assert 'cvlr-solana = "=0.5.1"' in block
+    assert 'cvlr-solana = "=0.5.2"' in block
     assert 'solana-program = "2.2"' in block
 
 
 def test_the_solana_choice_records_the_platform_it_implies():
     # cvlr-solana 0.5.x requires solana-program 2.2, and each Solana generation has its own
     # AccountInfo. Changing the chain crate without changing this label pairs the wrong types.
-    assert ref.SOLANA_V2.chain_crate == ref.CrateRelease("cvlr-solana", "0.5.1")
+    assert ref.SOLANA_V2.chain_crate == ref.CrateRelease("cvlr-solana", "0.5.2")
     assert "2.x" in ref.SOLANA_V2.platform.label
 
 
 def test_the_spl_token_model_is_part_of_the_reference_set():
     # Pinned with the chain crate, at the same version. Left off this list, the scaffold does not
     # pin it.
-    assert ref.CrateRelease("cvlr-spl-token", "0.5.1") in ref.SOLANA_V2.specializations
+    assert ref.CrateRelease("cvlr-spl-token", "0.5.2") in ref.SOLANA_V2.specializations
     assert ref.SOLANA_V2.unpublished == ()
 
 
@@ -93,5 +93,5 @@ def test_the_sdk3_line_is_released_whole():
     version was never published with this chain crate."""
     v3 = ref.SOLANA_V3
     assert {(c.name, c.version) for c in (v3.chain_crate, *v3.specializations)} == {
-        ("cvlr-solana", "0.6.0"), ("cvlr-solana-stake", "0.6.0"), ("cvlr-spl-token", "0.6.0")
+        ("cvlr-solana", "0.6.1"), ("cvlr-solana-stake", "0.6.1"), ("cvlr-spl-token", "0.6.1")
     }
