@@ -87,7 +87,7 @@ from composer.spec.cvlr.tree import SharedTree
 from composer.spec.cvlr.tuning import SUMMARIES, TuningFiles
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY
 from composer.spec.cvlr.verify import CexAnalysis, HarnessTarget, VerifyDeps
-from composer.spec.cvlr.reference import ChainReference
+from composer.spec.cvlr.reference import ChainReference, HarnessShim
 from composer.spec.solana.model import (
     SolanaApplication,
     SolanaComponentInstance,
@@ -165,6 +165,9 @@ class CvlrDeps:
     #: What the manual gets wrong for this run's generation
     #: (:attr:`~composer.spec.cvlr.reference.ChainReference.caveats`).
     caveats: tuple[str, ...]
+    #: The harness module this run's generation binds the core with, when it has no chain crate
+    #: (:attr:`~composer.spec.cvlr.reference.ChainReference.shim`).
+    shim: HarnessShim | None
     #: Where each violated rule's analysis lands, for the report to reshape into findings.
     cex_analysis: CexAnalysisStore
     #: The source tools every unit's agents read the program through, and the store their edits
@@ -292,6 +295,7 @@ class CvlrFormalizer(Formalizer[GeneratedHarness, SolanaComponentInstance]):
             module=identity.module,
             cvlr_versions=self.deps.versions,
             caveats=self.deps.caveats,
+            shim=self.deps.shim,
             target=target,
             verify=verify,
             editing=self.deps.editing,
@@ -670,6 +674,7 @@ class CvlrBackend:
             package_dir=preflight.package_dir,
             versions=versions,
             caveats=self.reference.caveats,
+            shim=self.reference.shim,
             cex_analysis=self.cex_analysis,
             editing=program_editing(
                 self.editing,

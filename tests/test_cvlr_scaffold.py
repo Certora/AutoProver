@@ -38,7 +38,17 @@ from composer.spec.cvlr.scaffold import (
     plan_scaffold,
 )
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
-from composer.spec.cvlr.reference import SOLANA_V1_18, SOLANA_V2, SOLANA_V3, SOROBAN, generations
+from composer.spec.cvlr.reference import (
+    SOLANA_JIMINY,
+    SOLANA_PINOCCHIO_0_8,
+    SOLANA_PINOCCHIO_0_10,
+    SOLANA_PINOCCHIO_0_11,
+    SOLANA_V1_18,
+    SOLANA_V2,
+    SOLANA_V3,
+    SOROBAN,
+    generations,
+)
 from composer.sandbox.config import SandboxConfig
 from tests.conftest import CVLR_SOLANA_0_5_1_COMMIT, read_from_commit
 
@@ -596,7 +606,7 @@ def test_a_reference_set_crate_the_project_does_not_name_is_not_a_refusal(tmp_pa
     # pinned core and chain crate and names neither specialization; the scaffold adds them. A gate
     # that read "not in the graph" as a disagreement would refuse every project it is meant to set
     # up, starting with the fresh one.
-    chain = SOLANA_V2.chain_crate.version
+    chain = SOLANA_V2.binding.version
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
         f'[dependencies]\ncvlr = "=0.6.2"\ncvlr-solana = "={chain}"\nsolana-program',
@@ -1110,6 +1120,13 @@ def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
         ("solana-program", "2.2.1", "solana-program 2.x"),
         ("solana-program", "1.18.26", "solana-program 1.18"),
         ("solana-program", "1.17.18", None),
+        ("jiminy-entrypoint", "0.1.0", "jiminy"),
+        ("pinocchio", "0.12.0", "pinocchio 0.11+"),
+        ("pinocchio", "0.11.2", "pinocchio 0.11+"),
+        ("pinocchio", "0.10.2", "pinocchio 0.10"),
+        ("pinocchio", "0.9.3", "pinocchio 0.8-0.9"),
+        ("pinocchio", "0.8.4", "pinocchio 0.8-0.9"),
+        ("pinocchio", "0.7.1", None),
     ],
 )
 def test_a_project_is_set_up_with_the_generation_it_is_on(
@@ -1156,3 +1173,252 @@ def test_a_1_18_project_scaffolds_without_program_models(tmp_path):
     plan = plan_scaffold(workspace, package, SOLANA_V1_18)
     assert not plan.blocked
     assert not any("cvlr-spl-token" in str(c) or "cvlr-solana-stake" in str(c) for c in plan.changes)
+
+
+# ---------------------------------------------------------------------------------------------
+# jiminy
+
+
+JIMINY_MANIFEST = """\
+[package]
+name = "prog"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+jiminy-entrypoint = { git = "https://github.com/igneous-labs/jiminy.git", branch = "master" }
+"""
+
+JIMINY_PROGRAM = """\
+use jiminy_entrypoint::{account::{Abr, AccountHandle}, program_error::ProgramError};
+
+jiminy_entrypoint::entrypoint!(process_ix);
+
+fn process_ix(
+    _abr: &mut Abr,
+    _accounts: &[AccountHandle<'_>],
+    _data: &[u8],
+    _prog_id: &[u8; 32],
+) -> Result<(), ProgramError> {
+    Ok(())
+}
+"""
+
+
+def _jiminy_project(root: Path, *, manifest: str = JIMINY_MANIFEST, **kwargs):
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "lib.rs").write_text(JIMINY_PROGRAM)
+    return _project(
+        root,
+        manifest=manifest,
+        workspace_manifest=manifest,
+        platform="0.1.0",
+        platform_crate="jiminy-entrypoint",
+        **kwargs,
+    )
+
+
+def test_a_jiminy_program_that_also_links_the_sdk_is_on_jiminy(tmp_path):
+    """Its handlers take jiminy's account type whatever a dependency links, so an SDK crate in its
+    graph must not put it on the SDK's generation, where the scaffold would give it
+    `cvlr-solana`'s `AccountInfo` helpers."""
+    workspace, package = _jiminy_project(
+        tmp_path, cvlr_resolved={"solana-account-info": "3.1.1"}
+    )
+    chosen = scaffold.select_generation(workspace, package, generations("solana"))
+    assert chosen == SOLANA_JIMINY
+
+
+def test_a_jiminy_program_gets_the_core_and_the_account_helpers(tmp_path):
+    workspace, package = _jiminy_project(tmp_path)
+    plan = plan_scaffold(workspace, package, SOLANA_JIMINY)
+    assert not plan.blocked
+
+    writes = {c.path: c.contents for c in plan.changes if isinstance(c, Write)}
+    assert "use jiminy_entrypoint::account::" in writes[HARNESS_DIR / "jiminy.rs"]
+    assert "pub fn cvlr_jiminy_accounts()" in writes[HARNESS_DIR / "jiminy.rs"]
+    assert "pub mod jiminy;" in writes[HARNESS_DIR / "mod.rs"]
+    assert "pub mod specs;" in writes[HARNESS_DIR / "mod.rs"]
+
+    added = [a for a in _additions(plan) if a.table == ("dependencies",)]
+    (deps,) = added
+    assert isinstance(deps, AddEntries)
+    assert [name for name, _ in deps.entries] == ["cvlr"]
+
+
+def test_a_jiminy_program_that_calls_entrypoint_gets_no_sdk_heap_switch(tmp_path):
+    """jiminy's `entrypoint!` matches the SDK macro's spelling, but installs its allocator
+    unconditionally. `custom-heap` would be a feature that switches nothing off."""
+    workspace, package = _jiminy_project(tmp_path)
+    plan = plan_scaffold(workspace, package, SOLANA_JIMINY)
+    features = _features(plan)
+    assert features == {"certora": ["dep:cvlr"]}
+
+
+def test_a_jiminy_program_scaffolds_once(tmp_path):
+    workspace, package = _jiminy_project(tmp_path)
+    apply(plan_scaffold(workspace, package, SOLANA_JIMINY), workspace.root)
+    manifest = tomllib.loads((tmp_path / "Cargo.toml").read_text())
+    assert manifest["features"]["certora"] == ["dep:cvlr"]
+    assert (tmp_path / HARNESS_DIR / "jiminy.rs").is_file()
+
+    again = plan_scaffold(workspace, package, SOLANA_JIMINY)
+    assert again.changes == ()
+
+
+def test_a_jiminy_program_that_does_not_declare_the_entrypoint_crate_is_refused(tmp_path):
+    """The helpers name `jiminy_entrypoint`, and a crate can only name its own dependencies."""
+    manifest = JIMINY_MANIFEST.replace("jiminy-entrypoint", "jiminy-cpi")
+    workspace, package = _jiminy_project(tmp_path, manifest=manifest)
+    (blocked,) = plan_scaffold(workspace, package, SOLANA_JIMINY).blocked
+    assert "jiminy-entrypoint" in blocked.problem
+    assert blocked.resolution.startswith("add jiminy-entrypoint to prog's [dependencies]")
+
+
+def test_an_sdk_program_gets_no_jiminy_module(tmp_path):
+    plan, _ = _plan(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    writes = {c.path: c.contents for c in plan.changes if isinstance(c, Write)}
+    assert HARNESS_DIR / "jiminy.rs" not in writes
+    assert "jiminy" not in writes[HARNESS_DIR / "mod.rs"]
+
+
+# ---------------------------------------------------------------------------------------------
+# Pinocchio
+
+
+PINOCCHIO_MANIFEST = """\
+[package]
+name = "prog"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+pinocchio = "0.9"
+"""
+
+PINOCCHIO_PROGRAM = """\
+#![no_std]
+
+use pinocchio::{account_info::AccountInfo, entrypoint, pubkey::Pubkey, ProgramResult};
+
+entrypoint!(process_instruction);
+nostd_panic_handler!();
+
+fn process_instruction(_id: &Pubkey, _accounts: &[AccountInfo], _data: &[u8]) -> ProgramResult {
+    Ok(())
+}
+"""
+
+
+def _pinocchio_project(
+    root: Path, *, manifest: str = PINOCCHIO_MANIFEST, platform: str = "0.9.3", **kwargs
+):
+    (root / "src").mkdir(parents=True, exist_ok=True)
+    (root / "src" / "lib.rs").write_text(PINOCCHIO_PROGRAM)
+    return _project(
+        root,
+        manifest=manifest,
+        workspace_manifest=manifest,
+        platform=platform,
+        platform_crate="pinocchio",
+        **kwargs,
+    )
+
+
+@pytest.mark.parametrize(
+    "version, reference, template_marker",
+    [
+        ("0.12.0", SOLANA_PINOCCHIO_0_11, "(*raw).padding"),
+        ("0.10.2", SOLANA_PINOCCHIO_0_10, "(*raw).resize_delta == 0"),
+        ("0.9.3", SOLANA_PINOCCHIO_0_8, "transmute::<*mut u8, AccountInfo>"),
+    ],
+)
+def test_a_pinocchio_program_gets_its_lines_account_helpers(
+    tmp_path, version, reference, template_marker
+):
+    """Every line writes `crate::certora::pinocchio`, from the template for its account header."""
+    workspace, package = _pinocchio_project(tmp_path, platform=version)
+    assert scaffold.select_generation(workspace, package, generations("solana")) == reference
+    plan = plan_scaffold(workspace, package, reference)
+    assert not plan.blocked
+
+    writes = {c.path: c.contents for c in plan.changes if isinstance(c, Write)}
+    module = writes[HARNESS_DIR / "pinocchio.rs"]
+    assert template_marker in module
+    assert "pub fn cvlr_pinocchio_accounts()" in module
+    assert "pub mod pinocchio;" in writes[HARNESS_DIR / "mod.rs"]
+    assert _features(plan) == {"certora": ["dep:cvlr"]}
+
+
+def test_a_pinocchio_program_linking_two_lines_is_on_neither(tmp_path):
+    """A copy on another line still meets the module's account type wherever its dependents pass
+    one along, so the program is refused rather than set up for half of its graph."""
+    workspace, package = _pinocchio_project(tmp_path, cvlr_resolved={"pinocchio": "0.12.0"})
+    assert scaffold.select_generation(workspace, package, generations("solana")) is None
+    (blocked,) = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8).blocked
+    assert "pinocchio 0.12.0" in blocked.problem
+
+
+def test_a_pinocchio_program_scaffolds_once(tmp_path):
+    workspace, package = _pinocchio_project(tmp_path)
+    apply(plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8), workspace.root)
+    assert (tmp_path / HARNESS_DIR / "pinocchio.rs").is_file()
+    assert plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8).changes == ()
+
+
+def test_a_pinocchio_program_that_does_not_declare_pinocchio_is_refused(tmp_path):
+    """The module names `pinocchio`, and a crate can only name its own dependencies: a program
+    reaching Pinocchio only through another crate cannot compile it."""
+    manifest = PINOCCHIO_MANIFEST.replace('pinocchio = "0.9"', 'pinocchio-token = "0.4"')
+    workspace, package = _pinocchio_project(tmp_path, manifest=manifest)
+    (blocked,) = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8).blocked
+    assert blocked.resolution.startswith("add pinocchio to prog's [dependencies]")
+
+
+def test_a_no_std_program_builds_with_std_under_the_feature(tmp_path):
+    """cvlr links `std`, whose panic handler collides with the crate's own (E0152). The handler and
+    `no_std` are gated off under the feature, as Certora's P-Token specs do by hand."""
+    workspace, package = _pinocchio_project(tmp_path)
+    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8)
+    (edit,) = [c for c in plan.changes if isinstance(c, scaffold.SourceEdit)]
+    assert edit.path == Path("src/lib.rs")
+    assert '#![cfg_attr(not(feature = "certora"), no_std)]' in edit.after
+    assert '#[cfg(not(feature = "certora"))]\nnostd_panic_handler!();' in edit.after
+
+    apply(plan, workspace.root)
+    lib = (tmp_path / "src" / "lib.rs").read_text()
+    assert lib.startswith('#![cfg_attr(not(feature = "certora"), no_std)]')
+    assert lib.rstrip().endswith("mod certora;")
+
+
+def test_a_panic_handler_beside_the_entrypoint_is_gated_too(tmp_path):
+    workspace, package = _pinocchio_project(tmp_path)
+    (tmp_path / "src" / "entrypoint.rs").write_text(
+        '#[cfg(target_os = "solana")]\n#[panic_handler]\nfn panic(_: &core::panic::PanicInfo) -> ! {\n'
+        "    loop {}\n}\n"
+    )
+    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8)
+    edits = {c.path: c.after for c in plan.changes if isinstance(c, scaffold.SourceEdit)}
+    assert edits[Path("src/entrypoint.rs")].startswith(
+        '#[cfg(target_os = "solana")]\n#[cfg(not(feature = "certora"))]\n#[panic_handler]'
+    )
+
+
+def test_a_conditional_no_std_keeps_its_condition():
+    assert scaffold._with_std("#![cfg_attr(not(test), no_std)]\n") == (
+        '#![cfg_attr(all(not(test), not(feature = "certora")), no_std)]\n'
+    )
+
+
+def test_a_source_edit_over_a_changed_file_is_stale(tmp_path):
+    workspace, package = _pinocchio_project(tmp_path)
+    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8)
+    (tmp_path / "src" / "lib.rs").write_text(PINOCCHIO_PROGRAM + "// edited\n")
+    with pytest.raises(scaffold.ScaffoldStale, match="src/lib.rs"):
+        apply(plan, workspace.root)

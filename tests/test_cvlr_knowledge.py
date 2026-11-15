@@ -15,9 +15,12 @@ No toolchain, no network, no LLM.
 """
 from typing import get_args
 
+import pytest
+
 from composer.pipeline.ecosystem import SOLANA, SOLANA_PROPERTY_SYSTEM_TEMPLATE
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.author import CvlrVersionParams, Rebuttal
+from composer.spec.cvlr.reference import HarnessShim
 from composer.spec.prop_inference import PropertySystemPromptParams
 from composer.spec.types import PropertyFormulation
 from composer.templates.loader import load_jinja_template
@@ -92,7 +95,9 @@ def test_no_soroban_guidance_has_been_guessed():
 # --------------------------------------------------------------------------------------------
 
 
-def _author_system_prompt(caveats: tuple[str, ...] = ()) -> str:
+def _author_system_prompt(
+    caveats: tuple[str, ...] = (), shim: HarnessShim | None = None
+) -> str:
     """Everything the author is told: the CVLR knowledge bundle that goes in front of every CVLR
     agent, plus this agent's own system prompt.
 
@@ -115,6 +120,7 @@ def _author_system_prompt(caveats: tuple[str, ...] = ()) -> str:
         "module": "spec",
         "example": None,
         "conf": tunable_conf(TunableConf()),
+        "shim": shim,
     }
     return "\n".join([
         *context_documents(CVLR_BUNDLE),
@@ -318,6 +324,55 @@ def test_an_older_generation_tells_the_author_and_the_judge_where_the_manual_is_
         assert all(_flat(c) in flat for c in caveats)
     assert "Where the manual is wrong" not in _author_system_prompt()
     assert "Where the manual is wrong" not in _judge_system_prompt()
+
+
+def test_a_jiminy_run_is_told_how_to_reach_a_jiminy_handler_instead_of_an_anchor_one():
+    """A jiminy handler takes an `Abr` and `AccountHandle`s, so the Anchor mechanics (an accounts
+    struct, `Context::new`, an `AccountInfo` array kept from dropping) would send the author after
+    types the program does not have. What applies to both stays: `.unwrap()`, the contrapositive,
+    and that a CPI is not modelled."""
+    from composer.spec.cvlr.reference import SOLANA_JIMINY
+
+    prompt = _flat(_author_system_prompt(SOLANA_JIMINY.caveats, SOLANA_JIMINY.shim))
+    assert "Reaching a handler on a jiminy program" in prompt
+    assert "cvlr_jiminy_abr()" in prompt and "cvlr_jiminy_accounts()" in prompt
+    assert "Reaching a handler on an Anchor program" not in prompt
+    assert "Context::new" not in prompt
+    assert "core::mem::forget(accounts);`.**" not in prompt
+    assert "Token movements are the exception" not in prompt
+    assert "Consume the handler's `Result` with `.unwrap()`" in prompt
+    assert "What a CPI does is not modelled" in prompt
+
+    anchor = _flat(_author_system_prompt())
+    assert "Reaching a handler on an Anchor program" in anchor
+    assert "jiminy" not in anchor
+
+
+@pytest.mark.parametrize(
+    "generation, account, key, other_account",
+    [
+        ("SOLANA_PINOCCHIO_0_11", "AccountView", "address()", "AccountInfo; 16"),
+        ("SOLANA_PINOCCHIO_0_10", "AccountView", "address()", "AccountInfo; 16"),
+        ("SOLANA_PINOCCHIO_0_8", "AccountInfo", "key()", "AccountView"),
+    ],
+)
+def test_a_pinocchio_run_is_told_its_own_account_type(generation, account, key, other_account):
+    """Pinocchio's account type changed name and accessors at 0.10, so each line is told the
+    spellings its program compiles with, and none of the Anchor mechanics."""
+    from composer.spec.cvlr import reference
+
+    ref = getattr(reference, generation)
+    prompt = _flat(_author_system_prompt(ref.caveats, ref.shim))
+    assert "Reaching a handler on a Pinocchio program" in prompt
+    assert "cvlr_pinocchio_accounts()" in prompt
+    assert f"[{account}; 16]" in prompt
+    assert f"a.{key} != b.{key}" in prompt
+    assert other_account not in prompt
+    assert "Reaching a handler on an Anchor program" not in prompt
+    assert "Context::new" not in prompt
+    assert "Token movements are the exception" not in prompt
+    assert "What a CPI does is not modelled" in prompt
+    assert "pinocchio" not in _flat(_author_system_prompt()).lower()
 
 
 def test_the_author_is_told_the_subject_of_a_rule_is_the_programs_code():

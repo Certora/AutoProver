@@ -69,7 +69,7 @@ from composer.spec.cvlr.preflight import (
     sbf_session,
     select_package,
 )
-from composer.spec.cvlr.reference import generations
+from composer.spec.cvlr.reference import HarnessShim, generations
 from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
 from composer.spec.cvlr.prover import (
     BuildRejected,
@@ -199,6 +199,7 @@ async def setup(
         package=pre.package,
         cvlr_versions=", ".join(f"{c.name} {c.version}" for c in pre.sources.crates),
         caveats=selected.reference.caveats,
+        shim=selected.reference.shim,
     )
     if check:
         await gate_workspace(pre, sandbox=sandbox)
@@ -214,7 +215,7 @@ async def setup(
 
 
 def reference_documents(
-    *, package: str, cvlr_versions: str, caveats: Sequence[str]
+    *, package: str, cvlr_versions: str, caveats: Sequence[str], shim: HarnessShim | None
 ) -> dict[Path, str]:
     """The reference text for a project on ``cvlr_versions``, by path under the reference
     directory."""
@@ -232,6 +233,7 @@ def reference_documents(
                 "caveats": list(caveats),
                 "example": None,
                 "conf": tunable_conf(TunableConf()),
+                "shim": shim,
             }
         ),
         Path("judge.md"): render_judge_system(
@@ -250,13 +252,20 @@ def reference_documents(
 
 
 def write_reference(
-    directory: Path, *, package: str, cvlr_versions: str, caveats: Sequence[str]
+    directory: Path,
+    *,
+    package: str,
+    cvlr_versions: str,
+    caveats: Sequence[str],
+    shim: HarnessShim | None,
 ) -> None:
     """Replace ``directory`` with :func:`reference_documents`, so nothing from an older version
     is left beside them."""
     if directory.exists():
         shutil.rmtree(directory)
-    documents = reference_documents(package=package, cvlr_versions=cvlr_versions, caveats=caveats)
+    documents = reference_documents(
+        package=package, cvlr_versions=cvlr_versions, caveats=caveats, shim=shim
+    )
     for relative, text in documents.items():
         path = directory / relative
         path.parent.mkdir(parents=True, exist_ok=True)

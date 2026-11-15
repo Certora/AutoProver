@@ -55,6 +55,7 @@ async def _focus_for(run_mode: RunMode, monkeypatch, tmp_path: Path) -> FocusPol
         cex_analysis=None,
         versions="cvlr 0.6.1",
         caveats=(),
+        shim=None,
         editing=None,
     )
     build = SimpleNamespace(

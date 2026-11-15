@@ -207,7 +207,8 @@ it fit the unroll bound, and it is unsound in a direction nothing reports: a pro
 entries is not proved for 8. `cvlr_assume!` on the length does the same work and puts the bound in the
 rule, where the report states it. Use the assume.
 
-## Reaching a handler on an Anchor program
+{% if shim %}{% import shim.author_section.value as framework %}{{ framework.opening() }}
+{% else %}## Reaching a handler on an Anchor program
 
 Most Solana targets are Anchor programs, and getting a rule *into* one has four idioms. Each of them
 is the difference between a rule that says something about the program and a rule that fails — or
@@ -219,10 +220,10 @@ generated dispatch — discriminator matching, account validation, serialization
 property in your batch is about, and all of which the prover pays for. A rule that names one handler
 is cheaper and is the shape the extraction guidance asks for. Build the accounts struct and call
 `crate::<program_module>::<handler>(ctx, ..)`.
-
+{% endif %}
 **Start at the handler, and descend only for a reason you can name.** A rule that drives the handler
-has the best fidelity: the real `Context`, the real target, and real account validation when the
-struct comes from `try_accounts` (recipe K14). Prefer it.
+has the best fidelity{% if shim %}: the real accounts, and the program's own checks run on them{% else %}: the real `Context`, the real target, and real account validation when the
+struct comes from `try_accounts` (recipe K14){% endif %}. Prefer it.
 
 But a handler that performs a CPI rarely carries a post-state property at handler level. **What a
 CPI does is not modelled**: the prover keeps every value the call would change as it was before the call.
@@ -251,10 +252,11 @@ handler level whichever way you reach it, and a property that needs the lamports
 or a total to stay constant across the call, passes having checked nothing. Split the batch on that
 line. "The vault's recorded balance rises by exactly `amount`" is the handler's own bookkeeping and
 belongs here; "the depositor's lamports fall by exactly `amount`" is the CPI's effect and belongs in
-neither — it is a skip, and saying so is the right outcome. Token movements are the exception:
-recipe K6 names the models that apply them.
+neither — it is a skip, and saying so is the right outcome.{% if not shim %} Token movements are the exception:
+recipe K6 names the models that apply them.{% endif %}
 
-**Build the accounts struct field by field, from nondet account infos.** `cvlr-solana` hands you an
+{% if shim %}{{ framework.building_accounts() }}
+{% else %}**Build the accounts struct field by field, from nondet account infos.** `cvlr-solana` hands you an
 array of unconstrained `AccountInfo`s; each field of the handler's `#[derive(Accounts)]` struct is
 then constructed from one of them — `Account::try_from`, `Signer::try_from`, `Program::try_from`,
 `AccountLoader::try_from` for a zero-copy account. Ask `cvlr_research` for the current spelling of
@@ -275,7 +277,7 @@ submissions verified, vacuity check passing, with this one line and nothing else
 And **do not annotate that array's lifetime.** The helper is generic over it; writing a wrapper that
 returns `[AccountInfo<'static>; 16]` forces the *borrow* to be `'static` too, and the struct literal
 below then fails with "does not live long enough". Let inference pick it.
-
+{% endif %}
 **Consume the handler's `Result` with `.unwrap()`, not by branching on it.** This one looks like a
 style choice and is not. Write `handler(ctx, ..).unwrap();` and then assert; do **not** write
 `if handler(ctx, ..).is_ok() { assert }`.
@@ -330,7 +332,8 @@ recipe K13. Skip them without spending a run.
 This is also why **panic-freedom is not a property you can state here** — see the context document's
 arithmetic section. Pruning is what makes `.unwrap()` work, and it is not switchable per rule.
 
-**Observe post-state through the handle the context borrowed — never by deserializing the account
+{% if shim %}{{ framework.observing_state() }}
+{% else %}**Observe post-state through the handle the context borrowed — never by deserializing the account
 again.** This is the one that silently produces a wrong answer, so it is worth understanding rather
 than memorising.
 
@@ -409,7 +412,7 @@ for a property of the handler body. For a property the *constraints* enforce, re
 The instruction discriminant is `{{ example.discriminant_path }}`, and
 `{{ example.client_accounts_module }}` is a client-side copy of the struct that nothing a rule
 builds lives in{% endif %}.
-
+{% endif %}
 ## State invariants: a base case and one step per writer
 
 Some properties are about a state, not an operation: "queued shares never exceed the supply", "the

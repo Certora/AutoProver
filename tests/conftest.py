@@ -40,7 +40,7 @@ from composer.prover.core import ProverFailure, ProverOptions, ProverReport, Run
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.policy import ensure_available
 from composer.spec.cvlr.entry import announce_confinement, build_confinement
-from composer.spec.cvlr.reference import ChainReference, GitCommit
+from composer.spec.cvlr.reference import ChainReference, CrateRelease, GitCommit
 from composer.spec.source.prover import get_prover_tool, in_situ_project, LLM
 
 if TYPE_CHECKING:
@@ -599,9 +599,10 @@ def read_from_commit(reference: ChainReference, commit: GitCommit) -> ChainRefer
     For the tests of the git-commit path, which should not depend on whether any release the
     shipping reference sets pin is unpublished at the moment.
     """
+    assert isinstance(reference.binding, CrateRelease)
     return dataclasses.replace(
         reference,
-        chain_crate=dataclasses.replace(reference.chain_crate, unpublished=commit),
+        binding=dataclasses.replace(reference.binding, unpublished=commit),
         models=tuple(
             dataclasses.replace(m, release=dataclasses.replace(m.release, unpublished=commit))
             for m in reference.models

@@ -68,7 +68,7 @@ def test_every_subcommand_and_flag_the_skill_passes_exists():
 
 @pytest.mark.skill_interface
 def test_the_reference_holds_every_file_and_section_the_skill_reads():
-    docs = reference_documents(package="vault", cvlr_versions="cvlr 0.6.2", caveats=())
+    docs = reference_documents(package="vault", cvlr_versions="cvlr 0.6.2", caveats=(), shim=None)
     assert str(REFERENCE_DIR) == interface.REFERENCE_DIR
     assert {Path(f) for f in interface.REFERENCE_FILES} <= set(docs)
     author = docs[Path("author.md")].splitlines()
@@ -169,7 +169,7 @@ def test_a_units_summaries_compose_from_the_package_file_as_from_the_layers():
 
 
 def test_every_recipe_the_index_names_is_a_file_under_its_id():
-    docs = reference_documents(package="vault", cvlr_versions="cvlr 0.6.2", caveats=())
+    docs = reference_documents(package="vault", cvlr_versions="cvlr 0.6.2", caveats=(), shim=None)
     index = docs[Path("recipes") / "index.md"]
     ids = [p.stem for p in docs if p.parent == Path("recipes") and p.name != "index.md"]
     assert ids
