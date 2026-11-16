@@ -129,7 +129,7 @@ def test_the_failure_survives_a_round_trip_and_renders(tmp_path):
             raise RunRefusal("Supported: solana-program 2.x <and> 1.18.")
 
     raw = json.loads((tmp_path / REPORT_FILE).read_text())
-    assert raw["schema_version"] == "3.3"
+    assert raw["schema_version"] == "3.5"
     assert raw["run_failure"] == {
         "kind": "refused", "message": "Supported: solana-program 2.x <and> 1.18.",
     }
@@ -156,5 +156,5 @@ def test_a_report_without_the_field_still_loads():
     )
     raw = json.loads(report.model_dump_json())
     del raw["run_failure"]
-    raw["schema_version"] = "3.2"
+    raw["schema_version"] = "3.4"
     assert AutoProverReport.model_validate(raw).run_failure is None

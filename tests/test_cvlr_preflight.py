@@ -24,7 +24,7 @@ import pytest
 
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.preflight import gate_workspace, prepare_workspace, select_package
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA_V2
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
@@ -44,6 +44,7 @@ edition = "2021"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
+solana-program = "2"
 """
 
 PROGRAM = """\
@@ -51,6 +52,8 @@ pub fn deposit(amount: u64) -> u64 {
     amount
 }
 """
+
+_UNCONFINED = SandboxConfig(provider="none")
 
 
 @pytest.fixture
@@ -74,18 +77,22 @@ async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_i
     """
     main_source = project / "programs" / "vault" / "src" / "lib.rs"
 
-    selected = await select_package(project, None, main_source=main_source)
+    selected = await select_package(
+        project, None, candidates=(SOLANA_V2,), main_source=main_source
+    )
     assert selected.name == "vault"
     assert selected.package_dir == Path("programs/vault")
 
-    pre = await prepare_workspace(selected.workspace_root, reference=SOLANA, package=selected.name)
+    pre = await prepare_workspace(
+        selected.workspace_root, reference=SOLANA_V2, sandbox=_UNCONFINED, package=selected.name
+    )
     assert pre.scaffold.blocked == (), pre.scaffold.blocked
     assert pre.artifact_stem == "vault"
     # Resolved from the scaffolded graph: before it, this project had no CVLR dependency at all.
     assert {crate.name for crate in pre.sources.crates} >= {"cvlr", "cvlr-solana"}
     assert (main_source.parent / "certora" / "specs" / "mod.rs").is_file()
 
-    await gate_workspace(pre, sandbox=SandboxConfig(provider="none"))
+    await gate_workspace(pre, sandbox=_UNCONFINED)
 
 
 async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_edited_harness(
@@ -94,10 +101,12 @@ async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_
     """The harness files are AutoProver's. A second run puts an edited one back and changes
     nothing else, so the manifests it already extended are not extended again."""
     main_source = project / "programs" / "vault" / "src" / "lib.rs"
-    selected = await select_package(project, None, main_source=main_source)
+    selected = await select_package(
+        project, None, candidates=(SOLANA_V2,), main_source=main_source
+    )
 
     first = await prepare_workspace(
-        selected.workspace_root, reference=SOLANA, package=selected.name
+        selected.workspace_root, reference=SOLANA_V2, sandbox=_UNCONFINED, package=selected.name
     )
     assert first.applied != ()
     specs = main_source.parent / "certora" / "specs" / "mod.rs"
@@ -105,7 +114,7 @@ async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_
     specs.write_text(f"{scaffolded}\n// an author's work\n")
 
     again = await prepare_workspace(
-        selected.workspace_root, reference=SOLANA, package=selected.name
+        selected.workspace_root, reference=SOLANA_V2, sandbox=_UNCONFINED, package=selected.name
     )
 
     assert again.applied == (specs.relative_to(selected.workspace_root),)
