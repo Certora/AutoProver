@@ -166,6 +166,7 @@ class _Env:
 class _Run:
     source = _Source()
     run_mode = RunMode.COMPREHENSIVE
+    property_generator = None
     env = _Env()
     ctx = _Ctx()
 

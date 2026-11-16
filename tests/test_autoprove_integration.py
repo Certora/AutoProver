@@ -112,6 +112,7 @@ def _make_args(rag_conn: str, scenario_dir: Path, system_doc: str | None) -> Aut
         run_mode=None,
         predefined_properties=None,
         stop_after_properties=False,
+        property_generator=None,
     ))
 
 

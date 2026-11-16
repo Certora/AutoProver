@@ -161,6 +161,13 @@ async def test_stops_at_the_first_round_that_adds_nothing(script) -> None:
     assert s.runs == 3
 
 
+async def test_a_first_round_that_finds_nothing_yields_no_properties(script) -> None:
+    s = script(_round())
+    titles = await _run(_Env(_no_restatements(0)), max_rounds=5)
+    assert titles == []
+    assert s.runs == 1
+
+
 async def test_stops_at_the_round_limit(script) -> None:
     s = script(_round("a"), _round("b"), _round("c"), _round("d"))
     titles = await _run(_Env(_no_restatements(2)), max_rounds=3)
@@ -429,6 +436,7 @@ async def test_driver_passes_the_round_limit_and_flags_evaluate_runs(monkeypatch
         ctx = _ctx()
         env = None
         run_mode = RunMode(mode)
+        property_generator = None
         source = type("S", (), {"content": None})()
 
         async def runner(self, _info, job):

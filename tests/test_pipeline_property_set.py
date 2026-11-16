@@ -19,7 +19,7 @@ import composer.pipeline.core as core
 from composer.pipeline.core import run_pipeline
 from composer.pipeline.ecosystem import EVM, main_instance
 from composer.pipeline.modes import ModeSupport
-from composer.pipeline.property_set import PropertySet, PropertySetComponent
+from composer.pipeline.property_set import PropertyRank, PropertySet, PropertySetComponent
 from composer.pipeline.run_mode import RunMode
 from composer.spec.source.harness import (
     HarnessDef, HarnessedContract, SystemDescriptionHarnessed, lift_harnessed,
@@ -357,6 +357,38 @@ def _set(*components: tuple[str, int]) -> PropertySet:
             for n, i in components
         ],
     )
+
+
+def test_a_ranking_names_only_properties_of_the_set():
+    ranked = _set(("deposits", 0), ("admin", 1)).model_copy(update={"ranking": [
+        PropertyRank(component="admin", title="p", rank=1),
+    ]})
+    assert PropertySet.model_validate(ranked.model_dump()).ranking == ranked.ranking
+    assert ranked.ranking_of({("deposits", "p")}) == []
+
+
+@pytest.mark.parametrize(
+    "ranking, match",
+    [
+        ([("gone", "p")], "does not hold"),
+        ([("admin", "q")], "does not hold"),
+        ([("admin", "p"), ("admin", "p")], "more than once"),
+    ],
+    ids=["unknown-component", "unknown-title", "duplicate"],
+)
+def test_a_ranking_of_other_properties_is_rejected(ranking, match):
+    data = _set(("admin", 1)).model_dump()
+    data["ranking"] = [
+        {"component": c, "title": t, "rank": i + 1} for i, (c, t) in enumerate(ranking)
+    ]
+    with pytest.raises(ValueError, match=match):
+        PropertySet.model_validate(data)
+
+
+def test_a_set_without_a_ranking_loads_unranked(tmp_path):
+    path = tmp_path / "set.json"
+    path.write_text(_set(("admin", 1)).model_dump_json(exclude={"ranking"}))
+    assert PropertySet.load(path).ranking is None
 
 
 def test_match_units_pairs_in_file_order():

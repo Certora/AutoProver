@@ -16,6 +16,9 @@ takes into ``composer.prover.core``.
 extracted batches to a mode implementation installed from another package (see
 ``composer/pipeline/MODES.md``), which measures the project's own specs and confs against
 them and returns the report.
+
+``property_generation`` infers the property list and stops: the run's deliverable is the
+property set (``property_set.json``). It formalizes nothing and needs no mode implementation.
 """
 
 import enum
@@ -24,7 +27,7 @@ import os
 from typing import Literal
 
 
-type RunModeName = Literal["comprehensive", "prioritized", "evaluate"]
+type RunModeName = Literal["comprehensive", "prioritized", "evaluate", "property_generation"]
 """The mode's wire form: what a cache key, a report field or an env var carries. Spelled as a
 closed literal so a key family cannot be handed an arbitrary string."""
 
@@ -33,6 +36,7 @@ class RunMode(enum.StrEnum):
     COMPREHENSIVE = "comprehensive"
     PRIORITIZED = "prioritized"
     EVALUATE = "evaluate"
+    PROPERTY_GENERATION = "property_generation"
 
 
 RUN_MODE_ENV = "AUTOPROVER_RUN_MODE"
@@ -44,6 +48,10 @@ MODE_ENTRY_POINT_GROUP = "certora.autoprove.modes"
 #: Modes whose implementation this package does not ship. A run in one of them needs an
 #: implementation registered under :data:`MODE_ENTRY_POINT_GROUP`.
 EXTERNAL_MODES: frozenset["RunMode"] = frozenset({RunMode.EVALUATE})
+
+#: Modes that write no specs. A run in one of them creates no harness and keeps the main
+#: contract the user named, even a library.
+NON_FORMALIZING_MODES: frozenset["RunMode"] = EXTERNAL_MODES | {RunMode.PROPERTY_GENERATION}
 
 
 def installed_mode_names() -> set[str]:
@@ -88,4 +96,6 @@ def run_mode_name(raw: str | None) -> RunModeName:
         return "prioritized"
     if raw == RunMode.EVALUATE.value:
         return "evaluate"
+    if raw == RunMode.PROPERTY_GENERATION.value:
+        return "property_generation"
     return "comprehensive"
