@@ -1,8 +1,10 @@
 # CVLR and the Certora Solana Prover
 
 What is true of CVLR, of the Solana Prover, and of the programs they run against, for any agent
-working on a CVLR verification — the author who writes rules, the judge who reviews them, the editor
-who changes the program under them.
+working on a CVLR verification. It is written to the author, who writes the rules: "you" is the
+author, and "the editor" is the agent that changes the program under them. A judge reviewing the
+author's rules, or the editor itself, reads it as what the author was told. The recipes it names
+(K4, K11, ...) are the author's; what each says is summarized here where it is named.
 
 What it says about accounts, CPIs and account validation is for programs on the Solana SDK's
 `AccountInfo`, Anchor included. A program on another framework, such as Pinocchio or jiminy, has
@@ -161,15 +163,20 @@ condition in a loop"* — a real result, not a configuration accident: the prove
 cannot account for the remaining iterations.
 
 `optimistic_loop` hides that by assuming every loop finishes within the bound, so it is the last
-remedy, not the first. Recipe K4 gives the remedies in order.
+remedy, not the first. The remedies, in order (recipe K4): bound in the rule what sets the trip count;
+summarize or munge the function holding a loop the property is not about; raise `loop_iter` to the
+smallest count the property needs; and only then `optimistic_loop`, for a trip count no bound
+discharges.
 
 ## Asking for a munge
 
 When the program's own data is what the analysis cannot follow (`[3005]`, a `[3308]` on account
 state that the `data_len()` assumption above did not clear, an internal error out of `ScalarDomain`,
-or a job that fails with no per-rule verdicts), the remedy is usually a munge; recipe K11 says which.
-A `[3308]` whose trace runs through error formatting — the program's `#[error_code]` enum building
-its message — is not about the data, and recipe K10 covers it.
+or a job that fails with no per-rule verdicts), the remedy is usually a munge (recipe K11): a
+`mock_fn` of a variable-length collection's accessors, or a `swap_derive` of a fixed-size state type
+whose encoding is variable-length. A `[3308]` whose trace runs through error formatting — the
+program's `#[error_code]` enum building its message — is not about the data: the remedy is a
+summary of the formatting path, or a skip (recipe K10).
 
 **A munge is the most consequential thing in this run, so treat asking for one that way.** It changes
 the program the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the
@@ -272,7 +279,7 @@ rather than the program, which makes the redirect **run-global** — in force fo
 run, not only yours; the editor will tell you if the workspace is not wired for it. And a rule proved
 against substituted arithmetic is a rule about the substitute: overflow is no longer reachable there,
 so any property whose content is "this cannot overflow" is gone rather than proved. Say so in the
-summary. The judge will ask.
+summary; a reviewer will ask.
 
 ### The arithmetic is the property's
 
