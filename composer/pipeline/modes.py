@@ -14,7 +14,6 @@ See ``MODES.md`` beside this file for the contract an implementation must meet.
 """
 
 import enum
-import importlib.metadata
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -30,7 +29,7 @@ from composer.spec.artifacts import ArtifactStore
 from composer.spec.source.report.schema import AutoProverReport
 from composer.spec.system_model import FeatureUnit
 from .plugin_api import PluginScope
-from .plugins import applies_to
+from .plugins import applies_to, declared_loader
 from .ptypes import ExtractedBatch, ExtractionFailure, PipelineRun
 from .run_mode import EXTERNAL_MODES, MODE_ENTRY_POINT_GROUP, RunMode
 
@@ -149,32 +148,15 @@ class RunModeLoader[U: FeatureUnit, Main](ABC):
 def _declared_loader(mode: RunMode) -> RunModeLoader[Any, Any]:
     """The installed loader for ``mode``. Raises when there is none, more than one, or the entry
     point names something that is not a :class:`RunModeLoader` for ``mode``."""
-    found = [
-        ep for ep in importlib.metadata.entry_points(group=MODE_ENTRY_POINT_GROUP)
-        if ep.name == mode.value
-    ]
-    if not found:
-        raise RuntimeError(
-            f"Run mode {mode.value!r} has no implementation installed: register one under the "
-            f"entry-point group {MODE_ENTRY_POINT_GROUP!r} with the name {mode.value!r}."
-        )
-    if len(found) > 1:
-        raise RuntimeError(
-            f"Multiple implementations of run mode {mode.value!r} under "
-            f"{MODE_ENTRY_POINT_GROUP!r}, failing"
-        )
-    ep = found[0]
-    loader = ep.load()
-    if not isinstance(loader, type) or not issubclass(loader, RunModeLoader):
-        raise RuntimeError(
-            f"Bad run-mode declaration: {ep.name}: {ep.module}.{ep.attr} is not a RunModeLoader"
-        )
+    loader: RunModeLoader[Any, Any] = declared_loader(
+        MODE_ENTRY_POINT_GROUP, mode.value, RunModeLoader, "Run mode",
+    )
     if loader.name is not mode:
         raise RuntimeError(
-            f"Bad run-mode declaration: {ep.name}: {ep.module}.{ep.attr} implements "
+            f"Bad run mode declaration: {mode.value}: {type(loader).__qualname__} implements "
             f"{loader.name.value!r}, not {mode.value!r}"
         )
-    return cast(RunModeLoader[Any, Any], loader())
+    return loader
 
 
 @asynccontextmanager

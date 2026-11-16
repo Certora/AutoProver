@@ -22,8 +22,8 @@ from composer.spec.source.report.grouping import (
     build_fallback_grouping, build_groups, call_grouping_llm, PropertyGroup
 )
 from composer.spec.source.report.schema import (
-    AutoProverReport, DeprioritizedProperty, Finding, Outcome, PropertyKey, ReportBackend,
-    RuleRef, SourceEditRecord,
+    AutoProverReport, DeprioritizedProperty, Finding, Outcome, Prioritization, PropertyKey,
+    ReportBackend, RuleRef, SourceEditRecord,
     VerificationArtifactRecord,
 )
 
@@ -51,6 +51,7 @@ async def build_report[R: ReportableResult](
     findings_llm: BaseChatModel | None = None,
     fetch_evidence: EvidenceFetcher | None = None,
     run_mode: str | None = None,
+    prioritization: Prioritization | None = None,
     deprioritized: list[DeprioritizedProperty] | None = None,
     active_plugins: list[str] | None = None,
 ) -> AutoProverReport:
@@ -138,6 +139,7 @@ async def build_report[R: ReportableResult](
     report = AutoProverReport(
         backend=backend,
         run_mode=run_mode,
+        prioritization=prioritization,
         deprioritized=deprioritized or [],
         active_plugins=active_plugins or [],
         contract_name=contract_name,
