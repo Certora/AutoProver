@@ -143,100 +143,14 @@ loop that can run longer than the bound comes back as a violated assertion readi
 condition in a loop"* — a real result, not a configuration accident: the prover is telling you it
 cannot account for the remaining iterations.
 
-`optimistic_loop` silences it by *assuming* the loop always finishes within the bound, which hides
-any violation that needs more iterations to reach. It is the last resort, below everything else, and
-what follows is the order to work through first:
+`optimistic_loop` hides that by assuming every loop finishes within the bound, so it is the last
+remedy, not the first. Recipe K4 gives the remedies in order.
 
-1. **Constrain what determines the trip count.** Usually the loop is over a collection whose length is
-   nondeterministic, so `cvlr_assume!` a bound on that length. This is the honest fix: the rule then
-   states the bound it proves under, and the report says so.
-2. **Ask whether the loop is even in your property's way.** A loop in a borsh deserialization path or
-   a logging helper is not what the property is about; a summary for that function is the same trade
-   as any other summary, with the same obligation to justify it.
-3. **Raise the bound, having tried the first two.** The bound is the conf's `loop_iter`. Cost
-   grows exponentially with it, so raise it to the smallest number the property needs and record
-   what you bounded first and why it was not enough. Above 3 or 4 it grows faster than the answer
-   is usually worth; if the property genuinely needs more than that, a skip naming the count you
-   needed against the count you have is the more useful result.
-4. **Assume it, having established that no bound will do.** This is `optimistic_loop`, the rung the
-   first three do not reach: a trip count the analysis cannot fix is not answered by constraining
-   the inputs, by a summary, or by unrolling further — the bound goes up and the reported iteration
-   goes up with it, forever. Establish that it is that
-   case by moving the bound and reading what comes back, because a loop that discharges at 3 is not.
+## Asking for a munge
 
-   What it costs is not confined to the loop you were fighting: **every rule in the unit's next
-   submission is verified under the assumption**, so each of their verdicts becomes conditional on
-   something nothing checked. A rule whose property *is* the loop's termination or its later
-   iterations proves nothing under it, and for that rule a skip naming the loop is the honest
-   result. What it buys is the rest of the handler, which is otherwise unreachable.
-
-An unwinding violation reported as a property failure is a wrong answer, so read the counterexample
-before concluding the program is at fault: if the failing assertion is the unwinding condition rather
-than your own, the rule never reached its property.
-
-## When the Prover cannot follow the program's own data
-
-Four symptoms, one family, and none of them names its cause:
-
-| symptom | what it is telling you |
-|---|---|
-| `[3005] memcpy with dynamically sized length` | a copy whose length the analysis cannot pin down |
-| `[3308] illegal dereference of an absolute address` | a pointer it could not resolve to an object |
-| an internal error out of `sbf.domains.ScalarDomain` | the same analysis giving up rather than reporting |
-| **a submission that fails with no per-rule verdicts at all** | the same thing, before any rule was encoded |
-
-That last row is the one to watch for, because it reports the least. A job that comes back failed
-with no rule results is not an infrastructure hiccup to retry — retrying it costs a job and returns
-the same answer.
-
-None of these is a rule defect and no rewording clears them. They come from the program moving state
-whose *size the analysis cannot fix*. `cvlr_assume!` on an account's `data_len()` is still worth
-doing and is **not** enough on its own: the length that defeats the analysis is usually inside the
-encoding or the accessor, not on the account.
-
-**Two shapes cause this, and only one of them you can do anything about.** Read the handler and find
-which:
-
-**A variable-length collection** — a byte-slice-backed vector of entries, a packed list, anything
-indexed at a stride computed at runtime. **Ask the editor to `mock_fn` its accessors** — the
-find / find_mut / retain / iterate methods, not the handler that calls them. Write stand-ins that
-serve a small fixed number of entries, dispatching on whatever index or key the program uses, and
-`cvlr_assert!(false)` on the fall-through so that reaching an entry your model does not have is a
-*reported failure* rather than a silent aliasing of two entries into one. This is the case where
-asking early beats asking last: every rule in the unit needs the same stand-ins, so discovering it
-after three prover jobs wastes three.
-
-**A fixed-size state struct behind a derived (de)serializer** — the handler does
-`try_from_slice_unchecked::<State>(&info.data.borrow())` and `borsh::to_writer(&mut
-info.data.borrow_mut()[..], &state)`, and `State` has `Option` or enum fields, so its *encoding* is
-variable length even though the struct is not. **Ask the editor for a `swap_derive`**: it moves the
-derived (de)serializer behind your unit's feature so you can supply the impls instead. Name the type
-and the two calls.
-
-You then owe the impls, in this module, the way you owe a `mock_fn` stand-in. They read and write a
-value held in a `static mut` that each rule initialises with
-`cvlr::nondet::havoc::alloc_havoced::<State>()`, so the program's own `try_from_slice_unchecked` and
-`to_writer` calls move a fixed-layout value in memory instead of parsing a buffer. `derive(Copy)` is
-what lets an impl assign `*self` to it, and the editor adds that.
-
-Two things to get right, because nothing else will catch either:
-
-* **A rule that reads state back after the handler wrote it needs the impls to share one value.** If
-  each call mints a fresh one instead, the write is invisible and a transition property is violated
-  for a reason that has nothing to do with the program. A rule that only checks *who signed* never
-  reads back and does not need the sharing — for those, an impl returning a fresh unconstrained
-  value is simpler and safer.
-* **One value per type means two accounts of that type are the same account.** If the handler takes
-  a source and a destination of the swapped type, this munge cannot express it — skip it rather
-  than prove something about a program that cannot tell them apart.
-
-And the cost, which the judge will hold you to: with the deserializer gone, deserialization can no
-longer fail and never reads the bytes. Any property about *encoding* — a malformed account rejected,
-a truncated one rejected, a field surviving a round trip — is unprovable under a swap and will pass
-while meaning nothing. Do not ask for one to serve a property of that shape.
-
-The two are told apart by what the handler touches, not by the error code: the same `[3005]` comes
-from both. If the handler never indexes a collection, it is the second shape.
+When the program's own data is what the analysis cannot follow (`[3005]`, `[3308]`, an internal
+error out of `ScalarDomain`, or a job that fails with no per-rule verdicts), the remedy is usually a
+munge; recipe K11 says which.
 
 **A munge is the most consequential thing in this run, so treat asking for one that way.** It changes
 the program the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the
