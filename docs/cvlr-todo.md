@@ -968,6 +968,32 @@ construction is unchecked. Support needs:
   Pinocchio or jiminy programs are not supported yet. Do not list generations the owner has no way
   to move to. This is cheap, and it reaches users only once U55 lands.
 
+**U59. A private registry's token in `credentials.toml` is not seen by a confined run's fetches.**
+A confined run fetches its dependency graph into a private per-run cargo home
+(`sandbox_cargo_home`), not the shared `~/.cargo`. Since #299 (23e2a64f),
+`prepare_sandbox_cargo_home` copies the shared `config.toml` into it before the first fetch, so
+mirrors, `[source]` replacement and `net.git-fetch-with-cli` apply. `credentials.toml` is
+deliberately not copied: the per-run home is under the workdir, which a confined build can read, so
+a copied token would be readable by every `build.rs` in the graph. So a dependency from a private
+cargo registry whose token exists only in `~/.cargo/credentials.toml` fails the first metadata read
+and the warm step, with cargo's authentication error. This is not new with #299: the warm step
+already used the per-run home without credentials.
+
+What still works: a private program repository (the run reads a local copy); private git
+dependencies (git authenticates through SSH or git's credential helpers, and both fetch steps run
+unconfined with the parent's environment and `HOME`); a registry token supplied as
+`CARGO_REGISTRIES_<NAME>_TOKEN`, which the unconfined steps inherit; and, untested, a
+credential provider set in the copied config, such as an OS keychain.
+
+The fix keeps the token out of every confined step. Read the shared home's tokens (or ask cargo,
+through `cargo login`'s credential providers) and pass them as `CARGO_REGISTRIES_<NAME>_TOKEN`, or
+`CARGO_REGISTRY_TOKEN` for crates.io, in the environment of the unconfined steps only: preflight's
+metadata reads (`Workspace.read`) and `CargoSession.run_unconfined`. Never in `SandboxConfig.env`,
+which reaches the confined build. All of this is about local runs. A cloud run's container
+presumably has no SSH keys or registry tokens at all, so private git or registry dependencies fail
+there regardless; whether cloud runs should support them, and how the owner would provide
+credentials, is a separate question for the executor (AIAutoProver).
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
