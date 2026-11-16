@@ -26,6 +26,13 @@ For token movements there is a model that does move them: a stand-in whose body 
 token accounts it is given. A rule asserting over a token account's balance or a mint's supply
 across a CPI needs one. For lamports there is none (see below), so such a property is a skip.
 
+The token model moves amounts and checks nothing else. `spl_token_transfer` *assumes* the source
+holds at least `amount`, so executions where it does not are dropped rather than refused, and it
+ignores the authority, the owner and the mint. Through it, "a transfer the source cannot cover is
+refused" and "only the owner can move tokens" pass without being checked. Neither is a property of
+the calling program anyway, since the token program enforces both; if the property is that the
+program checks a balance or an authority *before* the CPI, assert over the program's own check.
+
 **Writing the stand-in: two things that do not analyze.**
 
 Both were measured on a handler that moves lamports with a System Program transfer, and each costs
