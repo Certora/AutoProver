@@ -3,13 +3,10 @@
 ### K4. A loop the bound does not finish `[CONF]` `[RULE]`
 
 **Trigger:** a rule stops on the assertion *"Unwinding condition in a loop"*: a VIOLATED with the
-loop in its trace, or a vacuous rule whose every path runs through one. The conf's `loop_iter`
-unrolls loops that many times and does not set `optimistic_loop`, so this is a real result, not a
-configuration accident: the prover cannot account for the remaining iterations.
+loop in its trace, or a vacuous rule whose every path runs through one.
 
 `optimistic_loop` silences it by *assuming* the loop always finishes within the bound, which hides
-any violation that needs more iterations to reach. It is the last resort, below everything else, and
-what follows is the order to work through first:
+any violation that needs more iterations to reach. Work through these first, in order:
 
 1. **Constrain what determines the trip count.** Usually the loop is over a collection whose length is
    nondeterministic, so `cvlr_assume!` a bound on that length, in the rule, and record it as an
@@ -17,7 +14,7 @@ what follows is the order to work through first:
    says so. Shrinking the collection in the program instead is unsound in a direction nothing
    reports. When the rule fixes the length itself, the loop needs `loop_iter` at that length:
    a signer-collecting walk over the account list the rule passed stops on the unwinding assertion
-   until the two are equal. Raising the bound to that length (3 below) is then the fix.
+   until the two are equal. Raising the bound to that length (step 3) is then the fix.
 2. **Ask whether the loop is even in your property's way.** A loop in a borsh deserialization path or
    a logging helper is not what the property is about. Summarize the function that holds it with
    `summarize_for_prover`, or ask `code_editor` to munge it; either is the same trade as any other

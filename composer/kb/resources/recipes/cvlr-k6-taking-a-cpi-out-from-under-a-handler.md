@@ -9,9 +9,9 @@ instruction's bytes.
 Keep the handler and take the CPI out from under it, by asking the editor for a
 `swap_import` on the name the call goes through. You write a stand-in with `invoke`'s signature and
 return `Ok(())` from it; the editor points the program's `use` at it behind your feature. The call is
-gone, and its instruction-building loop with it, so the handler's own bookkeeping is provable — with
-the real `Context`, and validation if the struct comes from `try_accounts`, which is what descending
-gives up.
+gone, and its instruction-building loop with it, so the handler's own bookkeeping is provable. The
+rule still drives the handler with its real `Context`, and through `try_accounts` with its real
+validation, which descending to the state-transition core (recipe K7) gives up.
 
 **What the stand-in costs.** The Prover's own model of a cross-program call already moves nothing:
 every value the call would change keeps its value from before it. So a stand-in returning `Ok(())`
@@ -40,8 +40,7 @@ a prover round to rediscover.
 
 **Move nothing.** `AccountInfo::lamports` is an `Rc<RefCell<&mut u64>>`, and on an info the *handler*
 built with `to_account_info()` the pointer analysis cannot establish provenance through the `Rc`:
-reading or writing it is `[3308]`'s sibling, `[3003] dereference of a register with unknown
-provenance`, with `alloc/src/rc.rs` in the trace. A stand-in that performs the transfer does not
+reading or writing it fails with `[3003] dereference of a register with unknown provenance`, with `alloc/src/rc.rs` in the trace. A stand-in that performs the transfer does not
 analyze. Record what was asked for instead, and let the rule add the modelled effect in
 arithmetically:
 

@@ -46,6 +46,3 @@ publish one as the rule that drives a property.
 condition. For `cvlr_satisfy!(true)` that is the setup being unreachable — usually an assumption
 that contradicts the state you built, which is worth finding before you trust any assert-rule over
 the same setup.
-
-**What this rests on:** the sanctioned uses are attested across 4 projects and 12 occurrences in the
-surveyed corpus; the prohibition is the backend's own, and is what the feedback judge checks.

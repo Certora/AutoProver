@@ -7,8 +7,8 @@ First check that it ends with `core::mem::forget(accounts);`; the dropped accoun
 common cause on this backend.
 
 **Start with `explain_vacuity(rule)`.** It reruns that one rule with the vacuity check off, about
-as fast as an ordinary run, and reads the unsat core of the proof. Its first line settles the
-question above: if the rule's own assertion is not in the core, the core's constraints contradict
+as fast as an ordinary run, and reads the unsat core of the proof. Its first line says whether your
+assumptions are the cause: if the rule's own assertion is not in the core, the core's constraints contradict
 each other and the analysis names them; if it is, your assumptions are not the cause and weakening
 them will not help. What a core cannot show is anything after the assertion: it is the core of the
 rule's proof, and the vacuity check's `satisfy` comes later, after the drops.

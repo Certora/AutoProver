@@ -5,12 +5,9 @@
 **Trigger:** a property enforced by the struct's `#[account(...)]` constraints (the signer, `mut`,
 `has_one`, the owner) rather than by the handler body.
 
-**A struct built by hand has skipped validation.** Every `#[account(...)]` constraint on it — the
-signer, `mut`, `has_one`, the owner — is checked in the struct's generated `try_accounts`, and a
-rule that builds the struct field by field and calls the handler never calls it. That is right for a property of the handler body. For a property the
-*constraints* enforce, validate first and state it as "success implies":
-
-The names are the example's (a `Deposit` struct with a `depositor` signer); use the program's.
+A struct built by hand skips validation, which is right for a property of the handler body. For a
+property the *constraints* enforce, validate first and state it as "success implies". The names
+below are the example's (a `Deposit` struct with a `depositor` signer); use the program's.
 
 ```rust,ignore
 use anchor_lang::Accounts as _;          // the trait `try_accounts` is on

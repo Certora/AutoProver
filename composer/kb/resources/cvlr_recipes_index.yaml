@@ -82,6 +82,55 @@ recipes:
     program has an accounting function below the handler
   channel: RULE
   file: recipes/cvlr-k7-descend-to-the-state-transition-core.md
+- id: K8
+  name: 'A rule that times out: its shape first, then a bounded stand-in'
+  triggers:
+  - A rule comes back TIMEOUT in a job that returned verdicts, or a rule that drives one function
+    alone times out
+  - A rule ranges over several account-list lengths or pre-state variants, multiplies two unbounded
+    `u64`s, or walks a distance nothing bounds
+  - A timed-out rule's statistics line says `static analysis`
+  - One function holds most of a timed-out rule's branching or nonlinear share, including a function
+    in a stand-in already in place
+  channel: [RULE, EDIT, SKIP]
+  file: recipes/cvlr-k8-a-bounded-stand-in.md
+  search_terms:
+  - mock_fn
+- id: K9
+  name: A halted job, and which rule halted it
+  triggers:
+  - A job that reaches its time limit, with no verdicts or with rules cut off as TIMEOUT
+  - A rule that still halts the job when submitted alone
+  - A handler that runs a `HashSet` insert, serializes a fixed-size array, or reads a buffer an
+    external allocator filled
+  channel: [RULE, EDIT, SKIP]
+  file: recipes/cvlr-k9-a-halted-job.md
+- id: K10
+  name: A rule the pointer analysis refuses
+  triggers:
+  - A rule ends in `[3308]` illegal dereference of an absolute address with error formatting in the
+    trace, or in `[3006]` illegal store of a stack pointer
+  - You are about to write a `summarize_for_prover` directive
+  channel: [SUMMARY, SKIP]
+  file: recipes/cvlr-k10-a-rule-the-pointer-analysis-refuses.md
+- id: K11
+  name: State the analysis cannot size, variable-length collections and `swap_derive`
+  triggers:
+  - A rule ends in `[3005]` memcpy with dynamically sized length
+  - A rule ends in `[3308]` on the program's account state, and a `data_len()` assumption did not
+    clear it
+  - An internal error out of `ScalarDomain`
+  - A submission that fails with no per-rule verdicts at all
+  - You are about to ask the editor for a `swap_derive`
+  channel: [EDIT, SKIP]
+  file: recipes/cvlr-k11-state-the-analysis-cannot-size.md
+- id: K12
+  name: Diagnosing a vacuous rule
+  triggers:
+  - A rule reported `SANITY_FAILED`
+  - You are about to write a `cvlr_satisfy!` rule to find out why another rule is vacuous
+  channel: RULE
+  file: recipes/cvlr-k12-diagnosing-a-vacuous-rule.md
 - id: K13
   name: Acceptance through a `seeds` constraint
   triggers:
@@ -104,54 +153,16 @@ recipes:
   file: recipes/cvlr-k14-validating-with-try-accounts.md
   search_terms:
   - try_accounts
-- id: K10
-  name: A rule the pointer analysis refuses
+- id: K15
+  name: 'A rule that cannot finish: nonlinear arithmetic'
   triggers:
-  - A rule ends in `[3308]` illegal dereference of an absolute address with error formatting in the
-    trace, or in `[3006]` illegal store of a stack pointer
-  - You are about to write a `summarize_for_prover` directive
-  channel: [SUMMARY, SKIP]
-  file: recipes/cvlr-k10-a-rule-the-pointer-analysis-refuses.md
-- id: K11
-  name: State the analysis cannot size, variable-length collections and `swap_derive`
-  triggers:
-  - A rule ends in `[3005]` memcpy with dynamically sized length
-  - A rule ends in `[3308]` on the program's account state, and a `data_len()` assumption did not
-    clear it
-  - An internal error out of `ScalarDomain`
-  - A submission that fails with no per-rule verdicts at all
-  - You are about to ask the editor for a `swap_derive`
-  channel: [EDIT, SKIP]
-  file: recipes/cvlr-k11-state-the-analysis-cannot-size.md
-- id: K8
-  name: 'A rule that times out: its shape first, then a bounded stand-in'
-  triggers:
-  - A rule comes back TIMEOUT in a job that returned verdicts, or a probe rule that drives a function
-    alone times out
-  - A rule ranges over several account-list lengths or pre-state variants, multiplies two unbounded
-    `u64`s, or walks a distance nothing bounds
-  - A timed-out rule's statistics line says `static analysis`
-  - One function holds most of a timed-out rule's branching or nonlinear share, including a function
-    in a stand-in already in place
+  - A job reports a rule at a low completion percentage after splitting it into many sub-problems,
+    and halts on its global timeout
+  - A rule multiplies or divides two symbolic values, in the program's arithmetic helpers or in the
+    property itself
+  - A counterexample whose witness holds a value no field of the program could store
   channel: [RULE, EDIT, SKIP]
-  file: recipes/cvlr-k8-a-bounded-stand-in.md
+  file: recipes/cvlr-k15-nonlinear-arithmetic.md
   search_terms:
-  - mock_fn
-- id: K9
-  name: A halted job, and which rule halted it
-  triggers:
-  - A job that reaches its time limit, with no verdicts or with rules cut off as TIMEOUT
-  - A rule that still halts the job when submitted alone
-  - A handler that runs a `HashSet` insert, serializes a fixed-size array, or reads a buffer an
-    external allocator filled
-  channel: [RULE, EDIT, SKIP]
-  file: recipes/cvlr-k9-a-halted-job.md
-- id: K12
-  name: Diagnosing a vacuous rule
-  triggers:
-  - A rule reported `SANITY_FAILED`
-  - You are about to write a `cvlr_satisfy!` rule to find out why another rule is vacuous
-  channel: RULE
-  file: recipes/cvlr-k12-diagnosing-a-vacuous-rule.md
-  search_terms:
-  - explain_vacuity
+  - NativeInt
+  - cvlr_lemma

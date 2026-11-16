@@ -25,8 +25,7 @@ the bound. Measured cases:
   account's credit history, is the same kind of loop.
 
 Drive the program's own function below that handler, the accounting it wraps, and name that
-function as the rule's subject. A copy of the handler written in the harness is a verdict about
-your code. If the property is about the handler's own checks and there is no function below
+function as the rule's subject (recipe K7). If the property is about the handler's own checks and there is no function below
 them, `record_skip` and name the halted job. A summary of a function the compiler has inlined
 into the handler matches no symbol, and the halt stays.
 

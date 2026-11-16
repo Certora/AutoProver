@@ -58,10 +58,5 @@ value and writes nothing, so `from_account_info` never returns a usable sysvar. 
 names it among the external functions. When it does, skip the property, naming
 `Sysvar::from_account_info` as external, and stop. Do not rewrite the handler around it.
 
-**What this rests on:** Stake Pool's specs (`cvlr_initialize_rent_account`, the epoch props) and
-P-Token's (`cvlr_initialize_rent_account`, `cvlr_assume_rent_defaults`) read both sysvars this way.
-A Prover probe against the stake program verified that `Clock::from_account_info` and
-`Rent::from_account_info` succeed on the sysvar's account, and that a successful
-`Clock::from_account_info` implies the canonical key. A second probe, against stake on the SDK 3
-crates, verified that `Clock::get()` and `Rent::get()` succeed and agree across two reads, and that
-`StakeHistorySysvar` can return an entry.
+**What this rests on:** Prover probes against the stake program on both SDK lines, and the Stake
+Pool and P-Token specifications, which read both sysvars this way.

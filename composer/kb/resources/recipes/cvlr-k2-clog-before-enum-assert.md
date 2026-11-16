@@ -28,7 +28,6 @@ established cause.
 not a differently-computed equivalent. A `clog!` on the wrong value is a no-op that looks like the
 fix, and the rule keeps racing the optimizer.
 
-**What this rests on:** 4 clients, 4 projects, 11 occurrences across solana and soroban, observed on
-cvlr 0.4.0 through 0.6.1. Why the log defeats the fold is not documented upstream, and whether it is
-needed for every such assertion or only at some optimization levels is not established — so treat a
-counterexample that survives the log as a different problem, not as a reason to add more logs.
+Whether the log is needed for every such assertion or only at some optimization levels is not
+established either, so treat a counterexample that survives the log as a different problem, not as a
+reason to add more logs.

@@ -24,9 +24,8 @@ exactly this reason.
 
 Three conditions on it, and they are what separate this from the failure it resembles:
 
-* **The function must be the program's.** Descending to `crate::<module>::<fn>` is narrowing scope;
-  writing your own version of that function in this module is not descending, it is reimplementing,
-  and it produces a verdict about your code. That is never acceptable, at any depth.
+* **The function must be the program's.** Descending to `crate::<module>::<fn>` narrows scope; a
+  version of it written in the harness is a reimplementation, at any depth.
 * **Declare it.** The rule's declared subject is that function, not the handler, and the report says
   so.
 * **Say what it costs, in the commentary.** Account validation, the CPI's effects and Anchor's
