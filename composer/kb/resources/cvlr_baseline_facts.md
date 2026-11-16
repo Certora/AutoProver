@@ -4,6 +4,11 @@ What is true of CVLR, of the Solana Prover, and of the programs they run against
 working on a CVLR verification — the author who writes rules, the judge who reviews them, the editor
 who changes the program under them.
 
+What it says about accounts, CPIs and account validation is for programs on the Solana SDK's
+`AccountInfo`, Anchor included. A program on another framework, such as Pinocchio or jiminy, has
+its own account type and no token model, and where your instructions give caveats for the
+program's framework, those govern.
+
 ## What a rule is
 
 Two forms, and the choice matters:
@@ -91,6 +96,11 @@ the universal quantifier.
 
 For account inputs, `cvlr-solana` provides the nondet account machinery; read its source for the
 current spelling rather than guessing, since it has changed across releases.
+
+**Keep the account array alive to the end of the rule.** Build it in a `Box` and end the rule with
+`core::mem::forget(accounts);`. Without that, the array's `AccountInfo`s are dropped after your last
+assertion, the drop loop runs ahead of the vacuity check, and the rule is reported vacuous for code
+that is not the program's. It is the most common cause of `SANITY_FAILED` on this backend.
 
 **A nondet account has a nondet data length, and that is what breaks rules.** The account machinery
 gives you unconstrained bytes *and* an unconstrained `data_len()`. Every deserializer the program

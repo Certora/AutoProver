@@ -20,6 +20,8 @@ let from_account = Clock::from_account_info(clock_info).unwrap();
 cvlr_assume!(from_account.epoch == Clock::get().unwrap().epoch);
 
 crate::processor::Processor::process_withdraw(&accounts, amount).unwrap();
+// ... the rule's assertions ...
+core::mem::forget(accounts);
 ```
 
 `from_account_info` performs the address check itself, so a property about which account is the
