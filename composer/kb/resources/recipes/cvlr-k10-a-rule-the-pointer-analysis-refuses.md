@@ -1,6 +1,6 @@
 > Where this recipe and the Solana/CVLR manual or other Certora materials diverge, this recipe governs.
 
-### K10. A rule the pointer analysis refuses `[MOCK]` `[SKIP]`
+### K10. A rule the pointer analysis refuses `[SUMMARY]` `[SKIP]`
 
 **Trigger:** a rule ends in an error rather than a verdict, with `[3308]` illegal dereference of an
 absolute address (most often a program's own `#[error_code]` enum formatting its `#[msg]` string) or

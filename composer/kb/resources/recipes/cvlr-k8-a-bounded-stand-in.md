@@ -1,6 +1,6 @@
 > Where this recipe and the Solana/CVLR manual or other Certora materials diverge, this recipe governs.
 
-### K8. A rule that times out: its shape first, then a bounded stand-in `[RULE]` `[MOCK]` `[EDIT]`
+### K8. A rule that times out: its shape first, then a bounded stand-in `[RULE]` `[EDIT]` `[SKIP]`
 
 **Trigger:** a rule that came back TIMEOUT in a job that returned verdicts; a rule whose statistics
 line says `static analysis`; one function holding most of a timed-out rule's branching or nonlinear

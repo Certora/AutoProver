@@ -206,10 +206,10 @@ def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
 
 
 #: Each name is one of the author's tools. The channel says which tool can make the fix.
-#: ``RULE`` is ``put_harness``. ``MOCK`` is ``summarize_for_prover``. ``EDIT`` is ``code_editor``.
+#: ``RULE`` is ``put_harness``. ``SUMMARY`` is ``summarize_for_prover``. ``EDIT`` is ``code_editor``.
 #: ``CONF`` is ``adjust_prover_config``, and only for the loop bound and ``optimistic_loop``.
 #: ``SKIP`` is ``record_skip``.
-type CvlrChannel = Literal["RULE", "MOCK", "EDIT", "CONF", "SKIP"]
+type CvlrChannel = Literal["RULE", "SUMMARY", "EDIT", "CONF", "SKIP"]
 
 CVLR_RECIPES = RecipeSet[CvlrChannel](
     tool_name="get_cvlr_recipe",

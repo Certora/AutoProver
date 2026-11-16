@@ -1,7 +1,7 @@
 channels:
   RULE: The fix is in the rule, in the harness module, which the author writes with `put_harness`.
-  MOCK: The fix is a `summarize_for_prover` stand-in. Unsound by construction, so it is for code the
-    properties do not depend on, and it invalidates the prover stamp.
+  SUMMARY: The fix is a `summarize_for_prover` directive. Unsound by construction, so it is for code
+    the properties do not depend on, and it invalidates the prover stamp.
   EDIT: The fix is in the program's own source. The author describes the problem to `code_editor`
     and does not edit the program itself.
   CONF: 'The fix is a prover setting. The author controls only two: the loop bound and
@@ -110,7 +110,7 @@ recipes:
   - A rule ends in `[3308]` illegal dereference of an absolute address with error formatting in the
     trace, or in `[3006]` illegal store of a stack pointer
   - You are about to write a `summarize_for_prover` directive
-  channel: [MOCK, SKIP]
+  channel: [SUMMARY, SKIP]
   file: recipes/cvlr-k10-a-rule-the-pointer-analysis-refuses.md
 - id: K11
   name: State the analysis cannot size, variable-length collections and `swap_derive`
@@ -133,7 +133,7 @@ recipes:
   - A timed-out rule's statistics line says `static analysis`
   - One function holds most of a timed-out rule's branching or nonlinear share, including a function
     in a stand-in already in place
-  channel: [RULE, MOCK, EDIT]
+  channel: [RULE, EDIT, SKIP]
   file: recipes/cvlr-k8-a-bounded-stand-in.md
   search_terms:
   - mock_fn
