@@ -11,10 +11,17 @@ Two forms, and the choice matters:
 * `#[rule] fn rule_<name>() { ... }` — one rule. The attribute makes the function a prover entry
   point; the rule's name is the function's name.
 * `cvlr_rules! { name: "<name>", spec: <spec>, bases: [base_a, base_b] }` — one *specification*
-  checked against several base functions, which generates one rule per base (`<name>_a`, `<name>_b`,
-  with a `base_` prefix stripped). Reach for this when one property genuinely applies across several
-  handlers: it is far cheaper to write than the same rule restated per handler, and each generated
-  rule gets its own verdict and its own counterexample.
+  (a `cvlr_spec!` of `requires` and `ensures`) checked against several base functions, which
+  generates one rule per base (`<name>_a`, `<name>_b`, with a `base_` prefix stripped). Reach for
+  this when one property genuinely applies across several handlers; each generated rule gets its own
+  verdict and its own counterexample. Two things the macro does not do for you:
+  - **A base is a harness function, not a handler.** It takes the accounts and the spec, assumes
+    the spec's `requires`, calls one handler, and asserts its `ensures`. Write one per handler.
+  - **The module must define `cvlr_impl_rule!`.** `cvlr_rules!` expands to one
+    `cvlr_impl_rule!{rule_name, spec, base}` per base and leaves that macro to the calling module,
+    so without it nothing compiles. It is what writes each `#[rule]`: build the nondet accounts and
+    call `base(&accounts, spec)`. The spec expression is pasted into every rule, so it cannot name
+    a local variable.
 
 A rule body is: create nondeterministic inputs, assume the preconditions, call the program, assert
 the postcondition.
