@@ -23,8 +23,8 @@ import re
 from dataclasses import dataclass
 from collections.abc import Iterable
 
-from composer.cargo.metadata import Workspace
-from composer.spec.cvlr.reference import ChainReference, NamespacePattern, PathAlias
+from composer.cargo.metadata import CratePackage, Workspace
+from composer.spec.cvlr.reference import ChainReference, PathAlias
 
 _log = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def _crate_of(path: str) -> str:
 class PathDialect:
     """How one target spells the paths in the starting tuning files.
 
-    Built by :func:`dialect_for` from the aliases whose crates this target resolves.
+    Built by :func:`dialect_for` from the aliases whose crates this target links.
     """
 
     aliases: tuple[PathAlias, ...] = ()
@@ -123,21 +123,21 @@ def _unique(patterns: Iterable[str]) -> list[str]:
     return list(dict.fromkeys(patterns))
 
 
-def dialect_for(workspace: Workspace, reference: ChainReference) -> PathDialect:
-    """The spelling ``workspace`` uses for the platform generation ``reference`` names.
+def dialect_for(
+    workspace: Workspace, package: CratePackage, reference: ChainReference
+) -> PathDialect:
+    """The spelling ``package`` uses for the platform generation ``reference`` names.
 
-    Aliases whose crate the target does not resolve are dropped. On an older generation this
-    returns a dialect that changes nothing.
+    Aliases whose crate ``package`` does not link are dropped: a copy only a sibling member or a
+    dev-dependency resolves is not in the program, and must not rewrite its paths. On an older
+    generation this returns a dialect that changes nothing.
     """
-    aliases: list[PathAlias] = []
-    for alias in reference.platform.path_aliases:
-        match alias:
-            case PathAlias(canonical=canonical, actual=actual):
-                usable = tuple(a for a in actual if workspace.resolved(_crate_of(a)))
-                if usable:
-                    aliases.append(PathAlias(canonical, usable))
-            case NamespacePattern(canonical=canonical, actual=actual):
-                aliases.append(PathAlias(canonical, (actual,)))
+    linked = {p.name for p in workspace.linked_into(package)}
+    aliases = [
+        PathAlias(alias.canonical, usable)
+        for alias in reference.platform.path_aliases
+        if (usable := tuple(a for a in alias.actual if _crate_of(a) in linked))
+    ]
     dialect = PathDialect(tuple(aliases))
     _log.debug(
         "tuning-path dialect for %s: %d of %d aliases usable",

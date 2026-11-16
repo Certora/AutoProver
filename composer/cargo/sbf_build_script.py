@@ -53,6 +53,7 @@ def main() -> int:
         stderr=subprocess.PIPE,
         text=True,
         cwd=workdir,
+        env={**os.environ, **command.get("env", {})},
         start_new_session=True,
     )
     try:
