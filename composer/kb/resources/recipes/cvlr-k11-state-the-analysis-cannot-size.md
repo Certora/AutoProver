@@ -43,10 +43,15 @@ derived (de)serializer behind your unit's feature so you can supply the impls in
 and the two calls.
 
 You then owe the impls, in this module, the way you owe a `mock_fn` stand-in. They read and write a
-value held in a `static mut` that each rule initialises with
-`cvlr::nondet::havoc::alloc_havoced::<State>()`, so the program's own `try_from_slice_unchecked` and
-`to_writer` calls move a fixed-layout value in memory instead of parsing a buffer. `derive(Copy)` is
-what lets an impl assign `*self` to it, and the editor adds that.
+value held in a `static mut` that each rule initialises with `nondet::<State>()`, so the program's
+own `try_from_slice_unchecked` and `to_writer` calls move a fixed-layout value in memory instead of
+parsing a buffer. `derive(Copy)` is what lets an impl assign `*self` to it, and the editor adds that.
+
+`State` needs a `Nondet` impl for that, written in this module: each enum or `Option` field from a
+nondet discriminant with a catch-all arm, as for any enum input, and each `Pubkey` field from
+`cvlr_solana::cvlr_nondet_pubkey()`. Do not reach for `cvlr::nondet::havoc::alloc_havoced` instead.
+It requires a type every bit pattern of which is a valid value, and a type with enum or `Option`
+fields is not one: the havoced bytes can hold a discriminant no variant has.
 
 Two things to get right, because nothing else will catch either:
 
