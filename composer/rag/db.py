@@ -137,6 +137,16 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
     async def open(self) -> None:
         await self.test_connection()
 
+    @staticmethod
+    @asynccontextmanager
+    async def rag_context(model: SentenceTransformer, location: str) -> AsyncIterator[ComposerRAGDB]:
+        """The corpus at ``location``, Postgres or SQLite, as :func:`rag_context` opens it.
+
+        Kept for dz-strategy's ``dz-resolve-timeout``, which calls this rather than the module
+        function. Remove it once dz-strategy calls ``rag_context(parse_rag_location(...))``."""
+        async with rag_context(parse_rag_location(location), model) as db:
+            yield db
+
     async def test_connection(self) -> None:
         """Test database connection and setup"""
         try:

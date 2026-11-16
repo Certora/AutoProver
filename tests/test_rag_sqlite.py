@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING
 import pytest
 
 from composer.rag.db import (
-    PostgresRag, SqliteRag, default_corpus_dir, parse_rag_location, rag_build_context, rag_context,
+    PostgreSQLRAGDatabase, PostgresRag, SqliteRag, default_corpus_dir, parse_rag_location,
+    rag_build_context, rag_context,
 )
 from composer.rag.fts_query import to_fts5_query
 from composer.rag.sqlite import CorpusFileError
@@ -125,6 +126,18 @@ async def test_a_missing_file_fails_on_open(tmp_path: pathlib.Path, model: "Sent
     assert "scripts/fetch_rag.sh" in str(e.value) and "scripts/refresh_rag.sh" in str(e.value)
     # Opening for search must not leave an empty corpus behind for the next open to "succeed" on.
     assert not (tmp_path / "absent.sqlite").exists()
+
+
+@pytest.mark.asyncio
+async def test_the_legacy_entry_point_opens_a_corpus_file(
+    tmp_path: pathlib.Path, model: "SentenceTransformer"
+) -> None:
+    # dz-strategy opens its corpus through PostgreSQLRAGDatabase.rag_context(model, location), and
+    # the location it is given is now a corpus file.
+    location = SqliteRag(tmp_path / "kb.sqlite")
+    await _build(location, model, "alpha")
+    async with PostgreSQLRAGDatabase.rag_context(model, str(location.path)) as db:
+        assert await db.get_manual_section(["Doc", "alpha"]) == "alpha"
 
 
 @pytest.mark.asyncio
