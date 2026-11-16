@@ -12,12 +12,8 @@ replaced by the logical id the request was built from before anything downstream
 Bedrock has no Files API, so binary documents travel inline as base64 in every request
 that carries them, and Bedrock caps a request at 20 MB. Two byte budgets, measured on the
 serialized request, keep a run under that cap (see :mod:`composer.llm.bedrock_inline`):
-
-- ``AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES`` (default 8,000,000): the largest base64 body one
-  document may have;
-- ``AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES`` (default 16,000,000): the largest serialized
-  request body. The margin below 20 MB absorbs request headers and the difference between
-  this estimate and what the SDK sends.
+:data:`MAX_DOCUMENT_BYTES` for the base64 body of one document, and
+:data:`MAX_REQUEST_BYTES` for the whole serialized request.
 
 A document over budget is replaced by a short text block naming it, never an error.
 
@@ -61,8 +57,8 @@ _BEDROCK_VENDOR = "anthropic"
 
 def llm_backend() -> LLMBackend:
     """The backend ``AUTOPROVER_LLM_BACKEND`` selects; unset or empty means ``anthropic``.
-    Read on every call rather than once, so the value in force when a model is built is
-    the one that model uses. Raises ``ValueError`` for any other value."""
+    The variable is read on every call, so a model uses the value in force when it is
+    built. Raises ``ValueError`` for any other value."""
     raw = os.environ.get(BACKEND_ENV_VAR, "").strip().lower()
     if not raw:
         return _DEFAULT_BACKEND
@@ -88,10 +84,13 @@ def bedrock_region() -> str:
     )
 
 
-MAX_DOCUMENT_BYTES_ENV_VAR = "AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES"
-MAX_REQUEST_BYTES_ENV_VAR = "AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES"
-DEFAULT_MAX_DOCUMENT_BYTES = 8_000_000
-DEFAULT_MAX_REQUEST_BYTES = 16_000_000
+MAX_DOCUMENT_BYTES = 8_000_000
+"""The base64 size above which one inline document is left out of a Bedrock request."""
+
+MAX_REQUEST_BYTES = 16_000_000
+"""The serialized request size above which inline documents are left out of a Bedrock
+request. The margin below Bedrock's 20 MB cap absorbs request headers and the difference
+between this estimate and what the SDK sends."""
 
 
 def _positive_setting(var: str, default: int, unit: str) -> int:
@@ -105,22 +104,6 @@ def _positive_setting(var: str, default: int, unit: str) -> int:
     if value <= 0:
         raise ValueError(f"{var}={os.environ[var]!r} is not a positive number of {unit}")
     return value
-
-
-def _byte_budget(var: str, default: int) -> int:
-    return _positive_setting(var, default, "bytes")
-
-
-def max_document_bytes() -> int:
-    """The base64 size above which one inline document is left out of a Bedrock request.
-    Raises ``ValueError`` for a value that is not a positive integer."""
-    return _byte_budget(MAX_DOCUMENT_BYTES_ENV_VAR, DEFAULT_MAX_DOCUMENT_BYTES)
-
-
-def max_request_bytes() -> int:
-    """The serialized request size above which inline documents are left out of a Bedrock
-    request. Raises ``ValueError`` for a value that is not a positive integer."""
-    return _byte_budget(MAX_REQUEST_BYTES_ENV_VAR, DEFAULT_MAX_REQUEST_BYTES)
 
 
 MAX_TOKENS_ENV_VAR = "AUTOPROVER_BEDROCK_MAX_TOKENS"

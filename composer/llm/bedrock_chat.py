@@ -20,6 +20,7 @@ build requests and parse responses applies unchanged. This subclass changes six 
 import asyncio
 import logging
 import random
+from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any, override
 
@@ -35,11 +36,12 @@ from langchain_anthropic._client_utils import (
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatResult
-from pydantic import Field, PrivateAttr
+from langchain_core.runnables.config import ensure_config
+from pydantic import PrivateAttr
 
 from composer.llm.bedrock import (
     TRANSIENT_CREDENTIAL_ERROR_CODES, BedrockCredentialRefreshError, BedrockCredentialsError,
-    max_request_bytes, retry_delay_seconds, to_bedrock_model_id,
+    MAX_REQUEST_BYTES, retry_delay_seconds, to_bedrock_model_id,
 )
 from composer.llm.bedrock_inline import (
     DocumentKey, fit_request_to_budget, serialized_request_size,
@@ -214,20 +216,38 @@ _logger = logging.getLogger(__name__)
 _TOO_LARGE_RETRIES = 3
 
 
+@dataclass
+class _ConversationState:
+    """What a chat model learns about one conversation from its requests. Every request of a
+    conversation carries the whole history, so it applies to the later requests too."""
+
+    omitted_documents: set[DocumentKey] = field(default_factory=set)
+    """The inline documents already warned about, so a document left out of every request
+    is warned about once."""
+    lowered_request_bytes: int | None = None
+    """The request budget after Bedrock rejected a request as too large; ``None`` until
+    then."""
+
+
 class ChatAnthropicBedrock(ChatAnthropic):
     """``ChatAnthropic`` whose requests go to Bedrock Mantle in ``aws_region``.
 
     ``model`` holds the logical id; only the request payload carries the Bedrock id."""
 
     aws_region: str
-    max_request_bytes: int = Field(default_factory=max_request_bytes)
+    max_request_bytes: int = MAX_REQUEST_BYTES
     """The serialized request size above which inline documents are left out."""
 
-    # The inline documents this model has warned about leaving out, so a document dropped
-    # from every request of a conversation is warned about once.
-    _omitted_documents: set[DocumentKey] = PrivateAttr(default_factory=set)
-    # The request budget after Bedrock rejected a request as too large; ``None`` until then.
-    _lowered_request_bytes: int | None = PrivateAttr(default=None)
+    # One model can serve several conversations at once, such as the parallel threads of a
+    # graph built from one builder, so the state is kept per conversation: per LangGraph
+    # thread id, read from the runnable config of the current call. Calls made outside a
+    # graph have no thread id and share one state.
+    _conversations: dict[str | None, _ConversationState] = PrivateAttr(default_factory=dict)
+
+    def _conversation(self) -> _ConversationState:
+        thread_id = ensure_config().get("configurable", {}).get("thread_id")
+        key = None if thread_id is None else str(thread_id)
+        return self._conversations.setdefault(key, _ConversationState())
 
     def _mantle_params(self) -> dict[str, Any]:
         """The parent's client settings (timeout, retries, default headers) minus the
@@ -285,10 +305,13 @@ class ChatAnthropicBedrock(ChatAnthropic):
     ) -> dict:
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         payload["model"] = to_bedrock_model_id(payload["model"])
-        return fit_request_to_budget(payload, self._request_budget(), self._omitted_documents)
+        conversation = self._conversation()
+        return fit_request_to_budget(
+            payload, self._request_budget(conversation), conversation.omitted_documents
+        )
 
-    def _request_budget(self) -> int:
-        return self._lowered_request_bytes or self.max_request_bytes
+    def _request_budget(self, conversation: _ConversationState) -> int:
+        return conversation.lowered_request_bytes or self.max_request_bytes
 
     def _refit_after_too_large(
         self, payload: dict, exc: anthropic.RequestTooLargeError
@@ -297,16 +320,19 @@ class ChatAnthropicBedrock(ChatAnthropic):
         large, or ``None`` when it holds no inline document left to drop. The budget becomes
         three quarters of the smaller of the current budget and the rejected request's size,
         so at least one more document is left out. It stays lowered for the later requests
-        of this model, which carry the same history."""
-        budget = min(self._request_budget(), serialized_request_size(payload)) * 3 // 4
-        refitted = fit_request_to_budget(payload, budget, self._omitted_documents)
+        of the same conversation, which carry the same history."""
+        conversation = self._conversation()
+        budget = min(
+            self._request_budget(conversation), serialized_request_size(payload)
+        ) * 3 // 4
+        refitted = fit_request_to_budget(payload, budget, conversation.omitted_documents)
         if refitted is payload:
             return None
         _logger.warning(
             "Bedrock rejected a request as too large (%s); lowering the request budget for "
             "inline documents to %d bytes and sending it again", exc, budget,
         )
-        self._lowered_request_bytes = budget
+        conversation.lowered_request_bytes = budget
         return refitted
 
     @override

@@ -20,6 +20,8 @@ import json
 import logging
 from typing import Any, Callable, TypeGuard
 
+from anthropic.types import CacheControlEphemeralParam
+
 from composer.llm.bedrock import BACKEND_ENV_VAR
 
 logger = logging.getLogger(__name__)
@@ -34,7 +36,8 @@ def base64_size(raw_size: int) -> int:
 
 
 def omitted_document_block(
-    name: str, reason: str, *, cache_control: Any = None, log_level: int = logging.WARNING
+    name: str, reason: str, *, cache_control: CacheControlEphemeralParam | None = None,
+    log_level: int = logging.WARNING,
 ) -> dict[str, Any]:
     """A text block that stands in for a document left out of the request, telling the model
     which document is missing and why, logged at ``log_level``. ``cache_control`` is carried

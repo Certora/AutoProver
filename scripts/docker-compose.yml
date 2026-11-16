@@ -96,8 +96,6 @@ services:
       AWS_BEARER_TOKEN_BEDROCK:
       ANTHROPIC_AWS_API_KEY:
       ANTHROPIC_BEDROCK_MANTLE_BASE_URL:
-      AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES:
-      AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES:
       AUTOPROVER_BEDROCK_MAX_TOKENS:
       # Cloud Certora Prover credentials. CERTORAKEY drives certoraRun job
       # submission; the CERTORA_* OAuth tokens are used to fetch job results.

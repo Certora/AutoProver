@@ -9,6 +9,7 @@ import base64
 from functools import cache
 
 import anthropic
+from anthropic.types import CacheControlEphemeralParam
 import httpx
 
 from composer.input.files import (
@@ -22,8 +23,8 @@ from composer.llm.provider import (
 )
 from composer.llm.pricing import PriceProvider, price_provider_for
 from composer.llm.bedrock import (
-    MAX_TOKENS_ENV_VAR, llm_backend, bedrock_region, max_document_bytes, max_output_tokens,
-    max_request_bytes, aws_error_type, is_transient_error_type,
+    MAX_DOCUMENT_BYTES, MAX_TOKENS_ENV_VAR, llm_backend, bedrock_region, max_output_tokens,
+    aws_error_type, is_transient_error_type,
 )
 from composer.llm.bedrock_inline import INLINE_MEDIA_TYPES, base64_size, omitted_document_block
 from .types import CacheLevel
@@ -101,7 +102,7 @@ def _model_parser(model_name: str) -> ModelFeatures:
 def matches(model: str) -> bool:
     return model.split("-", 1)[0] == "claude"
 
-def level_to_ttl(c: CacheLevel) -> str | None:
+def level_to_ttl(c: CacheLevel) -> Literal["5m", "1h"] | None:
     match c:
         case CacheLevel.NONE:
             return None
@@ -169,23 +170,15 @@ class AnthropicRenderer:
         self, basename: str, contents: bytes, mime: str,
         *, cache_level: CacheLevel = CacheLevel.NONE
     ) -> dict:
-        # ``title`` names the document to the model, and lets a request that has to drop
-        # the block for size say which document it dropped.
-        to_ret: dict[str, Any] = {
-            "type": "document",
-            "source": {
-                "type": "base64",
-                "media_type": mime,
-                "data": base64.b64encode(contents).decode("ascii"),
-            },
-            "title": basename,
-        }
-        if (ttl := level_to_ttl(cache_level)) is not None:
-            to_ret["cache_control"] = {
-                "type": "ephemeral",
-                "ttl": ttl
-            }
-        return to_ret
+        raise NotImplementedError(
+            "Anthropic content is uploaded to the Files API, not inlined."
+        )
+
+
+def _cache_control(cache_level: CacheLevel) -> CacheControlEphemeralParam | None:
+    if (ttl := level_to_ttl(cache_level)) is None:
+        return None
+    return {"type": "ephemeral", "ttl": ttl}
 
 
 @dataclass
@@ -194,7 +187,7 @@ class BedrockRenderer(AnthropicRenderer):
     per-document byte budget. A document that cannot be inlined, being over budget or of a
     type a ``document`` block does not accept, becomes a text block that names it."""
 
-    max_document_bytes: int = field(default_factory=max_document_bytes)
+    max_document_bytes: int = MAX_DOCUMENT_BYTES
 
     @override
     def file_block(
@@ -210,10 +203,7 @@ class BedrockRenderer(AnthropicRenderer):
         self, basename: str, contents: bytes, mime: str,
         *, cache_level: CacheLevel = CacheLevel.NONE
     ) -> dict:
-        cache_control = (
-            {"type": "ephemeral", "ttl": ttl}
-            if (ttl := level_to_ttl(cache_level)) is not None else None
-        )
+        cache_control = _cache_control(cache_level)
         if mime not in INLINE_MEDIA_TYPES:
             return omitted_document_block(
                 basename,
@@ -228,7 +218,20 @@ class BedrockRenderer(AnthropicRenderer):
                 "per-document budget for Claude on Bedrock",
                 cache_control=cache_control,
             )
-        return super().inline_file_block(basename, contents, mime, cache_level=cache_level)
+        # ``title`` names the document to the model, and lets a request that has to drop
+        # the block for size say which document it dropped.
+        block: dict[str, Any] = {
+            "type": "document",
+            "source": {
+                "type": "base64",
+                "media_type": mime,
+                "data": base64.b64encode(contents).decode("ascii"),
+            },
+            "title": basename,
+        }
+        if cache_control is not None:
+            block["cache_control"] = cache_control
+        return block
 
 @cache
 def _get_service():
@@ -434,12 +437,10 @@ class AnthropicModelProvider:
         from langchain_anthropic import ChatAnthropic
 
         # Read first so a bad AUTOPROVER_LLM_BACKEND (or, for Bedrock, a missing region or a
-        # malformed request budget) fails here, when the model is built, rather than on its
-        # first request.
+        # malformed max_tokens cap) fails when the model is built.
         backend = llm_backend()
         bedrock_settings = (
-            (bedrock_region(), max_request_bytes(), max_output_tokens())
-            if backend == "bedrock" else None
+            (bedrock_region(), max_output_tokens()) if backend == "bedrock" else None
         )
 
         opts = self.options
@@ -470,12 +471,33 @@ class AnthropicModelProvider:
             {"cache_control": {"type": "ephemeral", "ttl": ttl}} if ttl is not None else {}
         )
 
-        callbacks = standard_callbacks(
-            self.price_provider, long_cache=cache_level == CacheLevel.LONG
+        # The arguments both backends share.
+        common: dict[str, Any] = dict(
+            model_name=self.model_name,
+            # An explicit None DISABLES the SDK's timeouts (None != not-given), so a
+            # socket that dies silently mid-stream hangs the session forever. A float
+            # is a per-phase httpx timeout — for a streamed response, the max silence
+            # between chunks, not a cap on the whole turn.
+            timeout=300.0,
+            # Stream every request: a long authoring turn (Opus + thinking on a large
+            # prompt) can exceed the SDK's 600s non-streaming ceiling, and a silent
+            # 10-minute wait is long enough for NAT/idle killers to drop the socket
+            # (surfaces as APIConnectionError mid-run). Streaming keeps bytes flowing.
+            streaming=True,
+            max_retries=8,
+            stop=None,
+            # None rather than an empty list: with no betas the request goes to the
+            # plain messages endpoint instead of the beta one.
+            betas=betas or None,
+            thinking=thinking,
+            model_kwargs=model_kwargs,
+            callbacks=standard_callbacks(
+                self.price_provider, long_cache=cache_level == CacheLevel.LONG
+            ),
         )
         if bedrock_settings is not None:
             from composer.llm.bedrock_chat import ChatAnthropicBedrock
-            aws_region, request_budget, token_cap = bedrock_settings
+            aws_region, token_cap = bedrock_settings
             # Bedrock counts max_tokens against the token quota when it admits a request, so
             # it is capped here; see composer.llm.bedrock.DEFAULT_MAX_TOKENS.
             max_tokens = min(opts.tokens, token_cap)
@@ -491,43 +513,10 @@ class AnthropicModelProvider:
                     "the other two"
                 )
             return ChatAnthropicBedrock(
-                aws_region=aws_region,
-                max_request_bytes=request_budget,
-                model_name=self.model_name,
-                max_tokens_to_sample=max_tokens,
-                # The same transport settings as the Anthropic API path below; see there.
-                timeout=300.0,
-                streaming=True,
-                max_retries=8,
-                stop=None,
-                # None rather than an empty list: with no betas the request goes to the
-                # plain messages endpoint instead of the beta one.
-                betas=betas or None,
-                thinking=thinking,
-                model_kwargs=model_kwargs,
-                callbacks=callbacks,
+                aws_region=aws_region, max_tokens_to_sample=max_tokens, **common
             )
 
-        return ChatAnthropic(
-            model_name=self.model_name,
-            max_tokens_to_sample=opts.tokens,
-            # An explicit None DISABLES the SDK's timeouts (None != not-given), so a
-            # socket that dies silently mid-stream hangs the session forever. A float
-            # is a per-phase httpx timeout — for a streamed response, the max silence
-            # between chunks, not a cap on the whole turn.
-            timeout=300.0,
-            # Stream every request: a long authoring turn (Opus + thinking on a large
-            # prompt) can exceed the SDK's 600s non-streaming ceiling, and a silent
-            # 10-minute wait is long enough for NAT/idle killers to drop the socket
-            # (surfaces as APIConnectionError mid-run). Streaming keeps bytes flowing.
-            streaming=True,
-            max_retries=8,
-            stop=None,
-            betas=betas,
-            thinking=thinking,
-            model_kwargs=model_kwargs,
-            callbacks=callbacks,
-        )
+        return ChatAnthropic(max_tokens_to_sample=opts.tokens, **common)
 
 ANTHROPIC_SPEC = ProviderSpec(
     matches=matches,

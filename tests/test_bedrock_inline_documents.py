@@ -12,17 +12,14 @@ import anthropic
 import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableLambda
 
 from composer.llm import bedrock_chat
 from composer.input.files import InMemoryBytesFile
 from composer.llm.anthropic import (
-    AnthropicModelProvider, BedrockFileUploader, BedrockRenderer,
+    AnthropicModelProvider, AnthropicRenderer, BedrockFileUploader, BedrockRenderer,
 )
-from composer.llm.bedrock import (
-    BACKEND_ENV_VAR, DEFAULT_MAX_DOCUMENT_BYTES, DEFAULT_MAX_REQUEST_BYTES,
-    MAX_DOCUMENT_BYTES_ENV_VAR, MAX_REQUEST_BYTES_ENV_VAR, max_document_bytes,
-    max_request_bytes,
-)
+from composer.llm.bedrock import BACKEND_ENV_VAR, MAX_DOCUMENT_BYTES, MAX_REQUEST_BYTES
 from composer.llm.bedrock_chat import ChatAnthropicBedrock
 from composer.llm.bedrock_inline import (
     FilesApiReferenceError, base64_size, fit_request_to_budget,
@@ -51,7 +48,6 @@ def bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in (
         "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_AWS_API_KEY",
         "ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "ANTHROPIC_API_KEY",
-        MAX_DOCUMENT_BYTES_ENV_VAR, MAX_REQUEST_BYTES_ENV_VAR,
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -83,43 +79,19 @@ def _size(payload: dict[str, Any]) -> int:
 
 
 def test_budgets_default(bedrock_env) -> None:
-    assert max_document_bytes() == DEFAULT_MAX_DOCUMENT_BYTES
-    assert max_request_bytes() == DEFAULT_MAX_REQUEST_BYTES
     # The request budget leaves room under Bedrock's 20 MB request cap.
-    assert DEFAULT_MAX_DOCUMENT_BYTES < DEFAULT_MAX_REQUEST_BYTES < 20_000_000
-
-
-def test_budgets_read_from_env(bedrock_env, monkeypatch) -> None:
-    monkeypatch.setenv(MAX_DOCUMENT_BYTES_ENV_VAR, "1000")
-    monkeypatch.setenv(MAX_REQUEST_BYTES_ENV_VAR, " 5000 ")
-    assert max_document_bytes() == 1000
-    assert max_request_bytes() == 5000
-    assert BedrockRenderer().max_document_bytes == 1000
-
-
-@pytest.mark.parametrize("value", ["0", "-5", "lots", "1.5"])
-def test_malformed_request_budget_fails_when_the_model_is_built(
-    bedrock_env, monkeypatch, value: str
-) -> None:
-    monkeypatch.setenv(MAX_REQUEST_BYTES_ENV_VAR, value)
-    provider = AnthropicModelProvider.create(_MODEL, _Options())
-    with pytest.raises(ValueError, match=MAX_REQUEST_BYTES_ENV_VAR):
-        provider.builder_for()
-
-
-def test_malformed_document_budget_fails_when_the_uploader_is_built(
-    bedrock_env, monkeypatch
-) -> None:
-    monkeypatch.setenv(MAX_DOCUMENT_BYTES_ENV_VAR, "0")
-    with pytest.raises(ValueError, match=MAX_DOCUMENT_BYTES_ENV_VAR):
-        BedrockFileUploader()
-
-
-def test_builder_passes_request_budget(bedrock_env, monkeypatch) -> None:
-    monkeypatch.setenv(MAX_REQUEST_BYTES_ENV_VAR, "12345")
+    assert MAX_DOCUMENT_BYTES < MAX_REQUEST_BYTES < 20_000_000
+    assert BedrockRenderer().max_document_bytes == MAX_DOCUMENT_BYTES
     llm = AnthropicModelProvider.create(_MODEL, _Options()).builder_for()
     assert isinstance(llm, ChatAnthropicBedrock)
-    assert llm.max_request_bytes == 12345
+    assert llm.max_request_bytes == MAX_REQUEST_BYTES
+
+
+def test_anthropic_renderer_does_not_inline() -> None:
+    """On the Anthropic API binary documents go through the Files API, so only the Bedrock
+    renderer inlines them, with its size checks."""
+    with pytest.raises(NotImplementedError):
+        AnthropicRenderer().inline_file_block("a.pdf", _pdf(100), "application/pdf")
 
 
 # --- rendering ---------------------------------------------------------------------
@@ -179,13 +151,13 @@ def test_unsupported_binary_type_is_omitted_not_sent() -> None:
 
 
 @pytest.mark.asyncio
-async def test_oversized_document_keeps_its_bytes(bedrock_env, monkeypatch, tmp_path) -> None:
+async def test_oversized_document_keeps_its_bytes(bedrock_env, tmp_path) -> None:
     """The budget applies when the document is rendered; the document itself, which digests
     and audit records read, keeps the real bytes."""
-    monkeypatch.setenv(MAX_DOCUMENT_BYTES_ENV_VAR, "10")
     contents = _pdf(100)
     (tmp_path / "big.pdf").write_bytes(contents)
-    doc = await BedrockFileUploader().get_document(tmp_path / "big.pdf")
+    uploader = BedrockFileUploader(renderer=BedrockRenderer(max_document_bytes=10))
+    doc = await uploader.get_document(tmp_path / "big.pdf")
     assert doc is not None
     assert doc.bytes_contents == contents
     assert doc.to_dict()["type"] == "text"
@@ -474,6 +446,39 @@ async def test_chat_model_warns_once_about_a_document_every_request_omits(
     ]
 
 
+async def _ainvoke_in_thread(llm: ChatAnthropicBedrock, messages: list[Any], thread_id: str) -> Any:
+    """Calls ``llm`` as a graph node does: from a runnable whose config carries the LangGraph
+    thread id of the conversation."""
+    async def call(m: list[Any]) -> Any:
+        return await llm.ainvoke(m)
+    return await RunnableLambda(call).ainvoke(
+        messages, {"configurable": {"thread_id": thread_id}}
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_model_warns_once_per_conversation(
+    bedrock_env, monkeypatch, tmp_path, caplog
+) -> None:
+    """Each conversation a model serves warns about a document it leaves out, even when
+    another conversation already left out the same document."""
+    _mock_mantle(monkeypatch)
+    (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
+    tool_msg = await _read_document_message(tmp_path, "spec.pdf")
+    system = {"type": "text", "text": "You are a verifier."}
+
+    llm = ChatAnthropicBedrock(
+        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        max_request_bytes=20_000, streaming=True,
+    )
+    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
+        for thread_id in ("a", "b", "a", "b"):
+            await _ainvoke_in_thread(llm, _conversation(system, tool_msg), thread_id)
+    assert _omission_logs(caplog, "spec.pdf") == [
+        logging.WARNING, logging.WARNING, logging.DEBUG, logging.DEBUG,
+    ]
+
+
 @pytest.mark.asyncio
 async def test_resumed_checkpoint_with_file_id_fails_before_sending(
     bedrock_env, monkeypatch
@@ -544,6 +549,31 @@ async def test_request_rejected_as_too_large_is_sent_again_with_fewer_documents(
     await llm.ainvoke(conversation)
     assert len(requests) == 3
     assert len(requests[2].content) <= 20_000
+
+
+@pytest.mark.asyncio
+async def test_lowered_request_budget_is_kept_per_conversation(
+    bedrock_env, monkeypatch, tmp_path
+) -> None:
+    """A request rejected as too large lowers the budget of its own conversation only."""
+    requests = _mock_mantle_with_cap(monkeypatch, cap=20_000)
+    (tmp_path / "design.pdf").write_bytes(_pdf(2000))
+    (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
+    design = await BedrockFileUploader().get_document(tmp_path / "design.pdf")
+    assert design is not None
+    tool_msg = await _read_document_message(tmp_path, "spec.pdf")
+    llm = ChatAnthropicBedrock(
+        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        max_request_bytes=1_000_000, streaming=True,
+    )
+    conversation = _conversation(design.to_dict(CacheLevel.LONG), tool_msg)
+
+    await _ainvoke_in_thread(llm, conversation, "a")
+    await _ainvoke_in_thread(llm, conversation, "b")
+    await _ainvoke_in_thread(llm, conversation, "a")
+    # Thread "a": rejected, then sent again smaller. Thread "b" starts from the full
+    # budget, so it is rejected too. Thread "a" then fits at once.
+    assert [len(r.content) > 20_000 for r in requests] == [True, False, True, False, False]
 
 
 @pytest.mark.asyncio

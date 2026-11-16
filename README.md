@@ -191,8 +191,6 @@ Anthropic API, so `ANTHROPIC_API_KEY` is required with either backend.
 | `AUTOPROVER_LLM_BACKEND` | `anthropic` | `anthropic` or `bedrock`. Case and surrounding spaces are ignored; any other value stops the run when a model is built. |
 | `AWS_REGION` (or `AWS_DEFAULT_REGION`) | none | The Bedrock region. Required for `bedrock`: without it the run stops when a model is built. |
 | `AUTOPROVER_BEDROCK_MAX_TOKENS` | `128000` | Upper limit on `max_tokens` in a Bedrock request. A lower value is used unchanged. |
-| `AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES` | `8000000` | Largest base64 size of one document sent inline. |
-| `AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES` | `16000000` | Largest size of a whole serialized request. |
 
 **Credentials.** Requests are signed with AWS SigV4, using the default AWS credential chain: environment variables, the
 shared config and credentials files (profiles, SSO), the task role of an ECS or AWS Batch container, or an EC2
@@ -221,11 +219,11 @@ After that, the run-wide retry policy takes over, as on the Anthropic API.
 **PDFs and other files.** Bedrock has no Files API. On Bedrock, a PDF design document (or any other binary file the
 pipeline gives the model) is sent inline as base64 in every request of the conversation that carries it, with its
 prompt-cache marker kept. Bedrock rejects a request over 20 MB, and base64 makes a file about a third larger. A
-document over `AUTOPROVER_BEDROCK_MAX_DOCUMENT_BYTES` is replaced by a short text note naming it. When a request is
-over `AUTOPROVER_BEDROCK_MAX_REQUEST_BYTES`, documents are replaced the same way, latest first, until it fits. If
-Bedrock still rejects a request as too large, the request is sent again with more documents replaced, up to 3 times,
-and the lower limit stays for the rest of that conversation. The first replacement of each document is logged as a
-warning, later ones of the same document at DEBUG. Binary files other than PDFs are always replaced by such a note on
+document over 8,000,000 bytes as base64 is replaced by a short text note naming it. When a serialized request is
+over 16,000,000 bytes, documents are replaced the same way, latest first, until it fits. If Bedrock still rejects a
+request as too large, the request is sent again with more documents replaced, up to 3 times, and the lower limit stays
+for the rest of that conversation. In each conversation, the first replacement of a document is logged as a warning,
+and later ones of the same document at DEBUG. Binary files other than PDFs are always replaced by such a note on
 Bedrock. A thread started on the Anthropic API that refers to a Files API upload cannot continue on Bedrock: its first
 Bedrock request fails with an error naming the file.
 
