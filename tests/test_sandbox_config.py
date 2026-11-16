@@ -126,6 +126,17 @@ def test_rust_build_policy_shape(tmp_path, monkeypatch):
     assert pol.cpu_seconds == 900
 
 
+def test_rust_build_policy_sets_fixed_variables_but_not_over_the_ones_it_owns(tmp_path):
+    """A caller can choose the toolchain. It cannot point the build at the shared cargo home or
+    the shared temp dir, which is what the private ones exist to prevent."""
+    policy = rust_build_policy(
+        tmp_path, env={"RUSTUP_TOOLCHAIN": "1.90.0", "CARGO_HOME": "/shared", "TMPDIR": "/tmp"}
+    )
+    assert policy.env_allowlist["RUSTUP_TOOLCHAIN"] == "1.90.0"
+    assert policy.env_allowlist["CARGO_HOME"] != "/shared"
+    assert policy.env_allowlist["TMPDIR"] != "/tmp"
+
+
 def test_rust_build_policy_offline_sets_cargo_net_offline(tmp_path):
     """Default (offline) forces every cargo — incl. a nested one a checker spawns — offline via
     CARGO_NET_OFFLINE; opting out drops it.
@@ -177,6 +188,12 @@ def test_rust_build_policy_grants_the_platform_tools_root(tmp_path, monkeypatch)
 
     pol = rust_build_policy(tmp_path / "work")
     assert root.resolve() in pol.ro_paths
+
+
+@pytest.mark.parametrize("environ", [{}, {"CERTORA_PLATFORM_TOOLS_ROOT": ""}])
+def test_an_unset_platform_tools_root_is_where_the_tool_installs(environ):
+    """Empty reads as unset. The Solana image sets the variable when its tools live elsewhere."""
+    assert recipes.platform_tools_root(environ) == Path.home() / ".cache" / "solana"
 
 
 def test_shared_cargo_ro_paths_excludes_credentials(tmp_path):

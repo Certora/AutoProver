@@ -12,9 +12,11 @@ by default; override with ``COMPOSER_SANDBOX_PROVIDER=none`` for trusted-input d
 """
 
 import os
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from importlib.metadata import entry_points
 from pathlib import Path
+from types import MappingProxyType
 from typing import Annotated, NotRequired, Self, TypedDict, Unpack
 
 # A three-file, zero-dependency package (and already a transitive dep via pydantic):
@@ -56,6 +58,7 @@ class SandboxArgs(TypedDict):
     extra_ro: NotRequired[tuple[Path, ...]]
     extra_rw: NotRequired[tuple[Path, ...]]
     env_passthrough: NotRequired[tuple[str, ...]]
+    env: NotRequired[Mapping[str, str]]
     offline: NotRequired[bool]
     mem_bytes: NotRequired[int | None]
     cpu_seconds: NotRequired[int | None]
@@ -71,6 +74,8 @@ class SandboxConfig:
     extra_ro: tuple[Path, ...] = ()
     extra_rw: tuple[Path, ...] = ()
     env_passthrough: tuple[str, ...] = DEFAULT_ENV_PASSTHROUGH
+    #: Variables set in every confined child, on top of ``env_passthrough``.
+    env: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}), hash=False)
     offline: bool = True  # sandbox has no network → force cargo offline (§5)
     mem_bytes: int | None = None
     cpu_seconds: int | None = None
@@ -110,6 +115,7 @@ class SandboxConfig:
             extra_ro=self.extra_ro,
             extra_rw=self.extra_rw,
             env_passthrough=self.env_passthrough,
+            env=self.env,
             offline=self.offline,
             mem_bytes=self.mem_bytes,
             cpu_seconds=self.cpu_seconds,

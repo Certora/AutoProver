@@ -1344,9 +1344,9 @@ def _evaluate_report() -> AutoProverReport:
     })
 
 
-def test_schema_3_3_round_trips():
+def test_schema_3_4_round_trips():
     report = _evaluate_report()
-    assert report.schema_version == "3.3"
+    assert report.schema_version == "3.4"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
