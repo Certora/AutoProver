@@ -75,11 +75,13 @@ predefined property sets. Work since 2026-11-02 is assigned in
 (`fa53f242`): +837 −203 code, +1,031 −188 tests and 91 of fixtures. Beyond the four review commits
 listed above, it took a second review (`23e2a64f`) and the `cvlr-solana` 0.4.7, 0.5.2 and 0.6.1 pins
 (`87277a65`); see [What the merge and later work carry](#what-the-merge-and-later-work-carry).
-`eric/solana-staging` has not merged master after #299 yet. The merge conflicts in 19 files, every
-one of them a P1b file, and each resolution starts from #299's side. It comes before the next cut,
-because the next cut takes `reference.py` and `scaffold.py` from the branch. **The next PR is P1c**,
-the Pinocchio and jiminy program kinds; see [P1c](#p1c--pinocchio-and-jiminy-programs). C7b is
-unblocked too, and the forks follow-up can go once the merge is done. #295 and #298 are still drafts.
+`eric/solana-staging` merged master after #299 the same day (`72ffb12d`), resolving the P1b files
+against #299's first cut (`b5033eb0`) as the base, so that only the review and the branch's later
+work met. It keeps the held `BASE_CONF` settings that `ccbe963c` took out of #299, and master's
+report schema 3.4 (`false_witness`, #310) is 4.1 here. **P1c**, the Pinocchio and jiminy program
+kinds, was then cut as [#311](https://github.com/Certora/AutoProver/pull/311), a draft; see
+[P1c](#p1c--pinocchio-and-jiminy-programs). C7b and the forks follow-up are unblocked. #295 and
+#298 are still drafts.
 
 The branch was rebased onto master after #258 (`709293a9`): 291 commits, 195 files, about 100,000
 inserted lines. P1 changed a lot in review, and the branch carries 727 lines of later work on files
@@ -297,7 +299,7 @@ it is not.
 | **P4** The Anchor surface and the worked example | +831 | +720 | Read an Anchor program's account and handler surface, and render the worked example an author is shown against that program rather than against a generic one. |
 | **P5** The munge editor | ≈ +1,460 | ≈ +470 | Ask an agent to edit the program as text in the unit's own overlay, gated on the unit's feature, and have a second one accept or reject it; the judge sees the edits and the report gives one patch per unit. |
 | **P1b** SDK 3 targets, a follow-up to master — [#299](https://github.com/Certora/AutoProver/pull/299), **merged** `fa53f242` | +837 | +1,031, and 91 of fixtures | Point preflight at a workspace on the split `solana-*` 3.x crates, or on `solana-program` 1.18, and it picks that platform generation, scaffolds the `cvlr-solana` release for it, checks the harness for the SBF target, and builds with platform-tools v1.53 under one host toolchain. See [What the merge and later work carry](#what-the-merge-and-later-work-carry). |
-| **P1c** Pinocchio and jiminy programs, a follow-up to master — next | ≈ +410, and 311 of harness templates | ≈ +350 | Point preflight at a program on jiminy or on Pinocchio 0.8–0.12 and it picks that platform generation, writes the harness module that binds the CVLR core to the framework's account type, and turns off a `no_std` program's own panic handler under the `certora` feature. See [P1c](#p1c--pinocchio-and-jiminy-programs). |
+| **P1c** Pinocchio and jiminy programs, a follow-up to master — [#311](https://github.com/Certora/AutoProver/pull/311), draft | +326 −54, and 311 of harness templates | +343 | Point preflight at a program on jiminy or on Pinocchio 0.8–0.12 and it picks that platform generation, writes the harness module that binds the CVLR core to the framework's account type, and turns off a `no_std` program's own panic handler under the `certora` feature. See [P1c](#p1c--pinocchio-and-jiminy-programs). |
 | **C7b** The CVLR API corpus | +1,580 | +700, and 19,751 of fixtures | Generate the CVLR API reference from the pinned crates' rustdoc, ingest it as `cvlr_api_kb`, and search it with three tools that say they outrank the manual. |
 | **P6** The authoring loop | ≈ +2,150 | ≈ +2,250 | Give the author a program and get CVLR rules, judged, with a research sub-agent over both CVLR corpora behind the author and the judge. |
 | **P7** The backend, the pipeline and the CLI | +1,300 | +1,600 | `console-solana` / `tui-solana` on a real target. |
@@ -1065,7 +1067,7 @@ Changes that touch only an unlanded slice's own files are not listed: the author
 | A verdict stamp leaves out the skips (U42, `5e605105`) | `composer/authoring/state.py`, `tests/test_rustapp_gate.py` *(hunks)* | **master now**. The stamp is P3b2b's, and the Crucible gate test exercises it |
 | graphcore summarizes with the tools bound, and never resumes from an empty summary (`67871fbe`) | `graphcore` | **Held** until the graphcore PR branch `eric/summary-nonempty` merges, then a re-pin on master |
 | `certora-cvlr`, the commands the Solana skill runs: `toolchain`, `setup`, `check`, `prove`, `wait`, `vacuity` (`e24568aa`, `932f6320`, `974966ed`, `27fa4bee`, `1aa3c5fb`) | `composer/cli/certora_cvlr.py`, `composer/spec/cvlr/{skill,skill_interface}.py`, `composer/templates/cvlr/skill_reference.j2`, `tests/test_cvlr_skill.py`, `pyproject.toml` *(hunk: the console script)*, `composer/prover/core.py` *(hunk: the poll `wait` uses)*, and hunks in `harness.py` (`SHARED_INVARIANTS`), `preflight.py`, `prover.py`, `tuning.py`, `verify.py` and `kb_context.py` | **A new slice, P10**: see [Order](#order-and-what-is-forced). It imports P6's author renderers, P3b3's vacuity, P4's guidance and K1's bundle, and none of P7 |
-| Pinocchio and jiminy programs (#309, `e8bb7ccd`; U57/U58) | `composer/spec/cvlr/{reference,scaffold}.py` *(hunks: `HarnessShim`)*, `composer/spec/cvlr/harness_files/{jiminy,pinocchio_0_8,pinocchio_0_10,pinocchio_0_11}.template.rs`, `tests/test_cvlr_{reference,scaffold}.py` *(hunks)*, `tests/conftest.py` *(hunk)*; `composer/templates/cvlr_reaching_{jiminy,pinocchio,pinocchio_info,pinocchio_view}_handler.j2` and the `author.py` hunk | **P1c**, the next PR: see [P1c](#p1c--pinocchio-and-jiminy-programs). Its files are P1's and P1b's. `AuthorSection`, the reaching templates and `author.py` ride **P6**, `pipeline.py` **P7** and `skill.py` **P10** |
+| Pinocchio and jiminy programs (#309, `e8bb7ccd`; U57/U58) | `composer/spec/cvlr/{reference,scaffold}.py` *(hunks: `HarnessShim`)*, `composer/spec/cvlr/harness_files/{jiminy,pinocchio_0_8,pinocchio_0_10,pinocchio_0_11}.template.rs`, `tests/test_cvlr_{reference,scaffold}.py` *(hunks)*, `tests/conftest.py` *(hunk)*; `composer/templates/cvlr_reaching_{jiminy,pinocchio,pinocchio_info,pinocchio_view}_handler.j2` and the `author.py` hunk | **P1c**, [#311](https://github.com/Certora/AutoProver/pull/311): see [P1c](#p1c--pinocchio-and-jiminy-programs). Its files are P1's and P1b's. `AuthorSection`, the reaching templates and `author.py` ride **P6**, `pipeline.py` **P7** and `skill.py` **P10** |
 | `cvlr-solana` 0.4.7, 0.5.2 and 0.6.1, whose account flags no longer cost a 2³ path split each (`0b48cdb8`) | `composer/spec/cvlr/reference.py`, `tests/test_cvlr_{reference,scaffold,api_docs}.py` *(hunks)* | **Merged** in #299 (`87277a65`) |
 | The API corpus admits an earlier patch release of the pinned line (`28b9d064`) | `composer/tools/cvlr_api_rag.py`, `tests/test_cvlr_research.py` *(hunk)* | **C7b**. The `cvlr_research.py` hunk rides P6 |
 | Anchor copies are judged by what the target links (`31c81906`) | `composer/spec/cvlr/forks.py`, `scaffold.py` *(hunk)*, `tests/test_cvlr_forks.py` | P1's files: a **follow-up to master**, now that P1b has merged. #299's `23e2a64f` rewrote the fork list in `forks.py` and its tests, so `31c81906` is re-applied onto that rather than taken by file |
@@ -1075,7 +1077,8 @@ Changes that touch only an unlanded slice's own files are not listed: the author
 
 The report's `schema_version` went from 3.1 to 4.0 on the branch, one step per change: 3.8
 `run_scoped` (beside master's evaluate fields, which master numbers 3.2), 3.9 `run_failure`, 3.10
-`prioritization` (master's 3.3), and 4.0 `unit_deliverables`.
+`prioritization` (master's 3.3), 4.0 `unit_deliverables`, and 4.1 `false_witness` (master's 3.4,
+#310).
 Each PR that changes the schema bumps it once, from whatever master has.
 
 **#273's predefined property sets replaced pinned runs.** Since `489f8423`, master has
@@ -1085,7 +1088,8 @@ moved the pin's two remaining features onto it and deleted pinned runs; see
 
 ### P1c — Pinocchio and jiminy programs
 
-The next PR, a follow-up to master like P1b. Its source is #309 (`e8bb7ccd`) on `feature/solana`,
+**Cut 2026-11-16 as [#311](https://github.com/Certora/AutoProver/pull/311)**, `eric/cvlr-pinocchio`,
+a draft, as planned below. A follow-up to master like P1b. Its source is #309 (`e8bb7ccd`) on `feature/solana`,
 the U57/U58 work. A program on jiminy or Pinocchio links none of the SDK's platform crates, so
 master's preflight places it on no platform generation and refuses it. With P1c it can: point it at
 such a program and it picks the generation, scaffolds a harness that compiles for SBF, and the SBF
@@ -1658,7 +1662,7 @@ already local to the functions that need them.
 | P1 *(merged)* | `composer/cargo/{__init__,features,manifest,metadata,session}.py` `composer/spec/cvlr/{__init__,conf,crates,env_paths,forks,preflight,reference,scaffold,tuning}.py` `composer/spec/cvlr/envs/` `composer/spec/cvlr/harness_files/` `composer/prover/conf.py` `composer/spec/source/{prover,author,artifacts}.py` *(hunks)* `composer/spec/natspec/task_description.py` *(hunks)* `tests/test_cvlr_{env_paths,forks,plumbing,preflight,reference,scaffold}.py` `tests/test_prover_conf.py` `tests/test_rules_striping.py` *(hunks)* `tests/test_stuck_rule_warnings.py` *(hunks)* `tests/data/vault_sbf_symbols.txt` `pyproject.toml` `uv.lock` |
 | P1b *(merged, #299 `fa53f242`; adds 1.18, the SBF check, the rustc 1.89 allocator names, split-table manifest edits)* | `composer/spec/cvlr/{reference,scaffold,preflight,crates,env_paths,conf}.py` `composer/spec/cvlr/envs/cvlr_inlining_core.txt` *(hunk: the allocator names)* `composer/cargo/manifest.py` *(hunk: split tables)* `composer/prover/results.py` *(hunk: frame dropping)* `tests/conftest.py` *(hunks: `read_from_commit`, `CVLR_SOLANA_0_5_1_COMMIT`)* `tests/test_solana_cex_trace.py` *(hunk)* `tests/data/{solana_1_18,anchor_1_2_1}_sbf_symbols.txt` *(hunks: SDK 3, platform-tools v1.53, the host toolchain, Prover master, the writable cargo home)* `composer/cargo/{metadata,sbf,sbf_build_script,session}.py` *(hunks)* `composer/sandbox/{config,recipes}.py` *(hunks)* `tests/test_cvlr_{reference,scaffold,preflight,forks,env_paths,plumbing,end_to_end}.py` *(hunks)* `tests/test_sandbox_config.py` *(hunks)* `tests/data/stake_sdk3_sbf_symbols.txt` `tests/data/vault_sbf_symbols.txt` |
 | P1 follow-up, to master now | `composer/spec/cvlr/preflight.py` *(hunk: `check(manifest_dir=…)`)* `composer/spec/cvlr/crates.py` *(hunk: drop `roots()`)* — plus the regression test, still to write |
-| P1c, to master next *(Pinocchio and jiminy, #309)* | `composer/spec/cvlr/{reference,scaffold}.py` *(hunks: `HarnessShim` without `author_section`, the program kinds, `heap_opt_out`, `SourceEdit`)* `composer/spec/cvlr/harness_files/{jiminy,pinocchio_0_8,pinocchio_0_10,pinocchio_0_11}.template.rs` `tests/test_cvlr_{reference,scaffold}.py` *(hunks)* `tests/conftest.py` *(hunk)* |
+| P1c, to master *(draft, #311; from #309)* | `composer/spec/cvlr/{reference,scaffold}.py` *(hunks: `HarnessShim` without `author_section`, the program kinds, `heap_opt_out`, `SourceEdit`)* `composer/spec/cvlr/harness_files/{jiminy,pinocchio_0_8,pinocchio_0_10,pinocchio_0_11}.template.rs` `tests/test_cvlr_{reference,scaffold}.py` *(hunks)* `tests/conftest.py` *(hunk)* |
 | Forks follow-up, to master *(re-applied onto #299's `forks.py`)* | `composer/spec/cvlr/forks.py` `composer/spec/cvlr/scaffold.py` *(hunk)* `tests/test_cvlr_forks.py` *(`31c81906`)* |
 | P2 *(merged)* | `composer/cargo/sbf.py` `composer/spec/cvlr/prover.py` `tests/test_cvlr_end_to_end.py` `tests/test_cvlr_plumbing.py` *(split: `sbf_argv`, the build script, `write_submission`)* |
 | Toolchains *(superseded: landed in P1b)* | `composer/spec/cvlr/conf.py` *(hunks: `PLATFORM_TOOLS_VERSION`, `HOST_RUST_TOOLCHAIN`)* `composer/cargo/{metadata,sbf,sbf_build_script,session}.py` *(hunks: the host toolchain)* `composer/sandbox/{config,recipes}.py` *(hunks: the host toolchain)* `composer/spec/cvlr/preflight.py` *(hunk: the host toolchain)* `tests/data/vault_sbf_symbols.txt` `tests/test_cvlr_env_paths.py` *(hunk: the v1.53 coverage counts, not the directive counts)* `tests/test_cvlr_plumbing.py` `tests/test_cvlr_scaffold.py` `tests/test_sandbox_config.py` *(hunks: the host toolchain)* |
