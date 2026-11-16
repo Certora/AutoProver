@@ -42,6 +42,7 @@ from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES
 from composer.spec.cvlr.reference import (
     SOLANA_JIMINY,
     SOLANA_PINOCCHIO_0_8,
+    SOLANA_PINOCCHIO_0_9,
     SOLANA_PINOCCHIO_0_10,
     SOLANA_PINOCCHIO_0_11,
     SOLANA_V1_18,
@@ -1190,11 +1191,12 @@ def test_a_project_reading_the_crate_from_elsewhere_is_refused(tmp_path):
         ("solana-program", "1.18.26", "solana-program 1.18"),
         ("solana-program", "1.17.18", None),
         ("jiminy-entrypoint", "0.1.0", "jiminy"),
-        ("pinocchio", "0.12.0", "pinocchio 0.11+"),
-        ("pinocchio", "0.11.2", "pinocchio 0.11+"),
+        ("pinocchio", "0.13.0", None),
+        ("pinocchio", "0.12.0", "pinocchio 0.11-0.12"),
+        ("pinocchio", "0.11.2", "pinocchio 0.11-0.12"),
         ("pinocchio", "0.10.2", "pinocchio 0.10"),
-        ("pinocchio", "0.9.3", "pinocchio 0.8-0.9"),
-        ("pinocchio", "0.8.4", "pinocchio 0.8-0.9"),
+        ("pinocchio", "0.9.3", "pinocchio 0.9"),
+        ("pinocchio", "0.8.4", "pinocchio 0.8"),
         ("pinocchio", "0.7.1", None),
     ],
 )
@@ -1405,7 +1407,8 @@ def _pinocchio_project(
     [
         ("0.12.0", SOLANA_PINOCCHIO_0_11, "(*raw).padding"),
         ("0.10.2", SOLANA_PINOCCHIO_0_10, "(*raw).resize_delta == 0"),
-        ("0.9.3", SOLANA_PINOCCHIO_0_8, "transmute::<*mut u8, AccountInfo>"),
+        ("0.9.3", SOLANA_PINOCCHIO_0_9, "const NOT_BORROWED: u8 = u8::MAX;"),
+        ("0.8.4", SOLANA_PINOCCHIO_0_8, "const NOT_BORROWED: u8 = 0;"),
     ],
 )
 def test_a_pinocchio_program_gets_its_lines_account_helpers(
@@ -1430,15 +1433,16 @@ def test_a_pinocchio_program_linking_two_lines_is_on_neither(tmp_path):
     one along, so the program is refused rather than set up for half of its graph."""
     workspace, package = _pinocchio_project(tmp_path, cvlr_resolved={"pinocchio": "0.12.0"})
     assert scaffold.select_generation(workspace, package, generations("solana")) is None
-    (blocked,) = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8).blocked
+    (blocked,) = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9).blocked
     assert "pinocchio 0.12.0" in blocked.problem
+    assert blocked.resolution == "move the project to pinocchio 0.9"
 
 
 def test_a_pinocchio_program_scaffolds_once(tmp_path):
     workspace, package = _pinocchio_project(tmp_path)
-    apply(plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8), workspace.root)
+    apply(plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9), workspace.root)
     assert (tmp_path / HARNESS_DIR / "pinocchio.rs").is_file()
-    assert plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8).changes == ()
+    assert plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9).changes == ()
 
 
 def test_a_pinocchio_program_that_does_not_declare_pinocchio_is_refused(tmp_path):
@@ -1446,7 +1450,7 @@ def test_a_pinocchio_program_that_does_not_declare_pinocchio_is_refused(tmp_path
     reaching Pinocchio only through another crate cannot compile it."""
     manifest = PINOCCHIO_MANIFEST.replace('pinocchio = "0.9"', 'pinocchio-token = "0.4"')
     workspace, package = _pinocchio_project(tmp_path, manifest=manifest)
-    (blocked,) = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8).blocked
+    (blocked,) = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9).blocked
     assert blocked.resolution.startswith("add pinocchio to prog's [dependencies]")
 
 
@@ -1454,11 +1458,15 @@ def test_a_no_std_program_builds_with_std_under_the_feature(tmp_path):
     """cvlr links `std`, whose panic handler collides with the crate's own (E0152). The handler and
     `no_std` are gated off under the feature, as Certora's P-Token specs do by hand."""
     workspace, package = _pinocchio_project(tmp_path)
-    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8)
+    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9)
     (edit,) = [c for c in plan.changes if isinstance(c, scaffold.SourceEdit)]
     assert edit.path == Path("src/lib.rs")
     assert '#![cfg_attr(not(feature = "certora"), no_std)]' in edit.after
     assert '#[cfg(not(feature = "certora"))]\nnostd_panic_handler!();' in edit.after
+
+    assert not [
+        c for c in plan.changes if isinstance(c, scaffold.AppendSection) and c.path == edit.path
+    ]
 
     apply(plan, workspace.root)
     lib = (tmp_path / "src" / "lib.rs").read_text()
@@ -1472,7 +1480,7 @@ def test_a_panic_handler_beside_the_entrypoint_is_gated_too(tmp_path):
         '#[cfg(target_os = "solana")]\n#[panic_handler]\nfn panic(_: &core::panic::PanicInfo) -> ! {\n'
         "    loop {}\n}\n"
     )
-    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8)
+    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9)
     edits = {c.path: c.after for c in plan.changes if isinstance(c, scaffold.SourceEdit)}
     assert edits[Path("src/entrypoint.rs")].startswith(
         '#[cfg(target_os = "solana")]\n#[cfg(not(feature = "certora"))]\n#[panic_handler]'
@@ -1487,7 +1495,7 @@ def test_a_conditional_no_std_keeps_its_condition():
 
 def test_a_source_edit_over_a_changed_file_is_stale(tmp_path):
     workspace, package = _pinocchio_project(tmp_path)
-    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_8)
+    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9)
     (tmp_path / "src" / "lib.rs").write_text(PINOCCHIO_PROGRAM + "// edited\n")
     with pytest.raises(scaffold.ScaffoldStale, match="src/lib.rs"):
         apply(plan, workspace.root)

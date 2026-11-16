@@ -1,4 +1,4 @@
-//! Nondet accounts for a Pinocchio program (Pinocchio 0.8 and 0.9).
+//! Nondet accounts for a Pinocchio program (Pinocchio 0.8).
 //!
 //! `cvlr-solana` builds the SDK's `AccountInfo`, which a Pinocchio handler cannot take. These
 //! helpers build Pinocchio's own `AccountInfo`, over the same kind of input region the Prover gives
@@ -10,9 +10,9 @@
 //!
 //! | offset | field                                                      |
 //! |--------|------------------------------------------------------------|
-//! | 0      | borrow state (the runtime's duplicate marker)              |
+//! | 0      | borrow state                                               |
 //! | 1..4   | `is_signer`, `is_writable`, `executable`                   |
-//! | 4      | four bytes: original data length (0.8), resize delta (0.9) |
+//! | 4      | original data length, set on first use                     |
 //! | 8      | key, owner, lamports, data length                          |
 
 use cvlr::prelude::*;
@@ -30,9 +30,9 @@ const HEADER_SIZE: usize = 88;
 
 const REGION_SIZE: usize = HEADER_SIZE + MAX_DATA_LEN + MAX_PERMITTED_DATA_INCREASE + 8;
 
-/// What the runtime puts in the borrow-state byte of an account that is not a duplicate, which
-/// Pinocchio reads as "not borrowed".
-const NOT_BORROWED: u8 = u8::MAX;
+/// What the 0.8 entrypoint stores over the runtime's non-duplicate marker: any bit set reads as a
+/// borrow.
+const NOT_BORROWED: u8 = 0;
 
 /// One account with arbitrary contents, in a region of its own.
 ///

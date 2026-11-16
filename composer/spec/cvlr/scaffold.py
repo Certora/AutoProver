@@ -32,10 +32,13 @@ AutoProver's files are rewritten whenever they differ from what the scaffold wou
 (:class:`Write`), so a harness left by an earlier run or by hand is replaced, and a newer
 starting configuration reaches the build. Nothing else under ``src/certora/`` is touched.
 
-The project's files are edited, never replaced. Each edit is planned only when what it adds is
-missing, so a second run changes nothing. A manifest is edited as a TOML document
+The project's manifests are edited, never replaced. Each edit is planned only when what it adds
+is missing, so a second run changes nothing. A manifest is edited as a TOML document
 (:class:`~composer.cargo.manifest.ManifestEditor`): keys go into the tables that already hold
-them, and everything the scaffold does not add comes back as it was, comments included.
+them, and everything the scaffold does not add comes back as it was, comments included. A
+``no_std`` source file is the exception: it is rewritten whole to build with ``std`` under the
+feature (:class:`SourceEdit`), and :func:`apply` writes that rewrite only over the text it was
+planned against.
 
 ``sources`` includes ``Cargo.toml``. ``.certora_sources`` is what the report and the counterexample
 analyzer read, and a source tree with no manifest cannot be rebuilt. CVLR versions come from the
@@ -448,7 +451,8 @@ class _OnGeneration:
 
 @dataclass(frozen=True)
 class _OffGeneration:
-    """The package links a copy of ``witness`` from another generation."""
+    """The package links a copy of ``witness`` from another generation. ``witness`` is the crate at
+    the newest line the generation accepts, which is what a refusal tells the author to move to."""
 
     witness: CrateRequirement
     builds: tuple[str, ...]
@@ -890,43 +894,45 @@ def _plan_harness(
         else:
             plan.add_change(replace(file, path=relative / file.path))
 
-    if package.lib is not None:
-        lib_rel = _project_relative(package.lib.src_path, package.root)
-        # cargo metadata reports a `[lib] path` without checking the file exists.
-        if not package.lib.src_path.is_file():
-            plan.add_blocked(
-                Blocked(
-                    path=relative / "Cargo.toml",
-                    problem=(
-                        f"{package.name}'s library source, {relative / lib_rel}, does not exist, "
-                        f"so there is no crate to add the harness to"
-                    ),
-                    resolution=(
-                        "point `[lib] path` at the program's source, or scaffold the package that "
-                        "has it"
-                    ),
-                )
-            )
-        elif _MOD_CERTORA.search(package.lib.src_path.read_text()):
-            plan.add_satisfied(f"{relative / lib_rel} already declares the harness module")
-        else:
-            plan.add_change(
-                AppendSection(
-                    path=relative / lib_rel,
-                    contents=_lib_declaration(),
-                    why="pull the harness into the crate, gated on the feature",
-                )
-            )
+
+_STD_WHY = (
+    "gate no_std and the panic handler off under the feature: cvlr links std, whose panic handler "
+    "would be a second one (E0152)"
+)
+_DECLARATION_WHY = "pull the harness into the crate, gated on the feature"
 
 
-def _plan_std(package: CratePackage, relative: Path, plan: _PlanBuilder) -> None:
-    """Make a ``no_std`` crate build with ``std`` under the feature, as hand-written Pinocchio
-    verification projects do. Every file of the library is read: a program may install its panic
-    handler beside its entrypoint rather than in ``lib.rs``."""
-    if package.lib is None or not package.lib.src_path.is_file():
+def _plan_sources(package: CratePackage, relative: Path, plan: _PlanBuilder) -> None:
+    """The changes to the library's own sources: the harness module's declaration in its root, and
+    for a ``no_std`` crate, building with ``std`` under the feature, as hand-written Pinocchio
+    verification projects do.
+
+    Every file of the library is read for the second: a program may install its panic handler
+    beside its entrypoint rather than in the root. A root that needs both gets one
+    :class:`SourceEdit` that carries the declaration too.
+    """
+    if package.lib is None:
         return
-    for source in sorted(package.lib.src_path.parent.rglob("*.rs")):
-        if HARNESS_DIR in source.relative_to(package.root).parents:
+    lib = package.lib.src_path
+    lib_rel = relative / _project_relative(lib, package.root)
+    # cargo metadata reports a `[lib] path` without checking the file exists.
+    if not lib.is_file():
+        plan.add_blocked(
+            Blocked(
+                path=relative / "Cargo.toml",
+                problem=(
+                    f"{package.name}'s library source, {lib_rel}, does not exist, so there is no "
+                    f"crate to add the harness to"
+                ),
+                resolution=(
+                    "point `[lib] path` at the program's source, or scaffold the package that has it"
+                ),
+            )
+        )
+        return
+
+    for source in sorted(lib.parent.rglob("*.rs")):
+        if source == lib or HARNESS_DIR in source.relative_to(package.root).parents:
             continue
         before = source.read_text()
         after = _with_std(before)
@@ -936,9 +942,28 @@ def _plan_std(package: CratePackage, relative: Path, plan: _PlanBuilder) -> None
                     path=relative / _project_relative(source, package.root),
                     before=before,
                     after=after,
-                    why="build with std under the feature: cvlr links it, and its panic handler",
+                    why=_STD_WHY,
                 )
             )
+
+    before = lib.read_text()
+    after = _with_std(before)
+    declared = _MOD_CERTORA.search(before) is not None
+    if declared:
+        plan.add_satisfied(f"{lib_rel} already declares the harness module")
+    if after != before:
+        plan.add_change(
+            SourceEdit(
+                path=lib_rel,
+                before=before,
+                after=after if declared else after + _lib_declaration(),
+                why=_STD_WHY if declared else f"{_STD_WHY}; {_DECLARATION_WHY}",
+            )
+        )
+    elif not declared:
+        plan.add_change(
+            AppendSection(path=lib_rel, contents=_lib_declaration(), why=_DECLARATION_WHY)
+        )
 
 
 def _check_shim_dependency(
@@ -1087,10 +1112,8 @@ def plan_scaffold(
     dialect = dialect_for(workspace, package, reference)
 
     _plan_workspace_manifest(reference, plan)
-    # Before the harness: a source edit is checked against the file as planned, and the harness
-    # appends its declaration to `lib.rs`.
-    _plan_std(package, relative, plan)
     _plan_harness(package, relative, dialect, reference.shim, plan)
+    _plan_sources(package, relative, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, plan)
     _plan_forks(workspace, reference, plan)

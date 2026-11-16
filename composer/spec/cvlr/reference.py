@@ -6,17 +6,21 @@ not depend on any chain: the specification language, plus the parametric-rule ma
 supplies the helpers that work with that chain's platform types. Specializations are narrower
 crates that go with one chain crate. Most of them model a single on-chain program rather than the
 whole chain: ``cvlr-spl-token`` models SPL token accounts and ``cvlr-solana-stake`` models the
-stake program. Soroban's derive-macro crate is counted here as well. A project declares the core,
-its chain's crate, and that chain's specializations. A platform generation is the release line of
-the chain's own SDK that a chain crate is built against, such as ``solana-program`` 2.x or
-``soroban-sdk`` 22.x.
+stake program. Soroban's derive-macro crate is counted here as well. A platform generation is the
+release line of the chain's own SDK, or of a framework that replaces it, that a project is built
+against, such as ``solana-program`` 2.x, ``soroban-sdk`` 22.x or Pinocchio 0.10. A generation binds
+the core to its account type either with a published chain crate, which the project declares with
+the core and that chain's specializations, or with a harness module the scaffold writes
+(:class:`HarnessShim`), and then the project declares the core alone.
 
 Exact versions, not ranges. The core and the chain crates are versioned separately, so "latest"
 can pair a new core with an old chain crate. A bump is an edit here, and it moves every project
 this build sets up. Each platform generation has one CVLR line.
 :mod:`composer.spec.cvlr.scaffold` refuses a project that is already on a different line.
 
-A chain crate is bound to one platform generation, and each generation has its own ``AccountInfo``.
+A chain crate is bound to one platform generation, and each generation has its own account type:
+the SDK's ``AccountInfo``, jiminy's ``AccountHandle``, Pinocchio's ``AccountInfo`` or
+``AccountView``.
 ``cvlr-solana`` 0.4.x goes with ``solana-program`` 1.18, 0.5.x with 2.2, and 0.6.x with the
 ``solana-*`` v3 crates. A helper from one generation cannot be passed an account from another, so
 :attr:`ChainReference.platform` is part of the reference, not a detail of one target, and a chain
@@ -150,7 +154,8 @@ class PlatformGeneration:
     #: These are read from a target's resolved graph, never declared. The scaffold's platform gate
     #: takes the first one the target resolves and compares its version against this generation.
     #: A crate listed at several lines is on the generation at any of them: a framework whose
-    #: account type kept its shape across releases is one generation over all of them.
+    #: account header kept both its layout and what the entrypoint leaves in it across releases is
+    #: one generation over all of them.
     witnesses: tuple[CrateRequirement, ...]
     #: How this generation spells the paths in the starting tuning files.
     #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
@@ -234,7 +239,8 @@ class ChainReference:
     unpublished: tuple[UnpublishedCapability, ...] = ()
 
     def line(self) -> str:
-        """The supported line as a refusal names it to a project author: core and chain crate."""
+        """The supported line as a refusal names it to a project author: the core, and the chain
+        crate or harness module that binds it."""
         match self.binding:
             case CrateRelease(name=name, version=version):
                 bound = f"{name} {version}"
@@ -446,16 +452,17 @@ SOLANA_JIMINY = ChainReference(
 #: account type has changed shape across 0.x releases, so the account helpers are a module the
 #: scaffold writes against the program's own copy rather than a chain crate pinned to one release.
 #: Each generation below is a shape of the account header the module has to describe: the type,
-#: and what the entrypoint leaves in the four bytes after the flags.
+#: what the entrypoint leaves in the borrow-state byte, and what it leaves in the four bytes after
+#: the flags.
 #:
-#: 0.11 onwards: ``AccountView`` (``solana-account-view``). Under the ``account-resize`` feature the
+#: 0.11 and 0.12: ``AccountView`` (``solana-account-view``). Under the ``account-resize`` feature the
 #: entrypoint stores the original data length in those bytes, and nothing reads them otherwise.
 SOLANA_PINOCCHIO_0_11 = ChainReference(
     core=_CORE,
     binding=HarnessShim(module="pinocchio", template="pinocchio_0_11", requires="pinocchio"),
     forks=(FIXED_FORK,),
     platform=PlatformGeneration(
-        label="pinocchio 0.11+",
+        label="pinocchio 0.11-0.12",
         sdk_crates=(),
         witnesses=(CrateRequirement("pinocchio", "0.12"), CrateRequirement("pinocchio", "0.11")),
         # Pinocchio's `entrypoint!` installs its allocator unconditionally.
@@ -476,17 +483,33 @@ SOLANA_PINOCCHIO_0_10 = ChainReference(
     ),
 )
 
-#: 0.8 and 0.9: ``pinocchio::account_info::AccountInfo``, whose header is private to Pinocchio, so
-#: the module builds it by layout. The four bytes are zero at entry: 0.8 reads them as an unset
-#: original length, 0.9 as a resize delta.
+#: 0.9: ``pinocchio::account_info::AccountInfo``, whose header is private to Pinocchio, so the
+#: module builds it by layout. The entrypoint leaves the runtime's non-duplicate marker, all bits
+#: set, in the borrow-state byte, and a set bit means "not borrowed". The four bytes are a resize
+#: delta, zero at entry.
+SOLANA_PINOCCHIO_0_9 = ChainReference(
+    core=_CORE,
+    binding=HarnessShim(module="pinocchio", template="pinocchio_0_9", requires="pinocchio"),
+    forks=(FIXED_FORK,),
+    platform=PlatformGeneration(
+        label="pinocchio 0.9",
+        sdk_crates=(),
+        witnesses=(CrateRequirement("pinocchio", "0.9"),),
+        heap_opt_out=None,
+    ),
+)
+
+#: 0.8: the same ``AccountInfo`` and layout as 0.9, with the borrow state inverted. The entrypoint
+#: stores zero over the non-duplicate marker, and a set bit means "borrowed". The four bytes are an
+#: original data length, zero until first read.
 SOLANA_PINOCCHIO_0_8 = ChainReference(
     core=_CORE,
     binding=HarnessShim(module="pinocchio", template="pinocchio_0_8", requires="pinocchio"),
     forks=(FIXED_FORK,),
     platform=PlatformGeneration(
-        label="pinocchio 0.8-0.9",
+        label="pinocchio 0.8",
         sdk_crates=(),
-        witnesses=(CrateRequirement("pinocchio", "0.9"), CrateRequirement("pinocchio", "0.8")),
+        witnesses=(CrateRequirement("pinocchio", "0.8"),),
         heap_opt_out=None,
     ),
 )
@@ -521,6 +544,7 @@ REFERENCE_SET: dict[str, tuple[ChainReference, ...]] = {
         SOLANA_JIMINY,
         SOLANA_PINOCCHIO_0_11,
         SOLANA_PINOCCHIO_0_10,
+        SOLANA_PINOCCHIO_0_9,
         SOLANA_PINOCCHIO_0_8,
         SOLANA_V3,
         SOLANA_V2,
