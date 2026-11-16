@@ -558,8 +558,15 @@ class Refused(BaseModel):
 
 
 class Interrupted(BaseModel):
-    """The run was stopped from outside — a cancel, or the stall guard — before it finished."""
+    """The run was stopped from outside — cancelled, or interrupted from the keyboard — before it
+    finished."""
     kind: Literal["interrupted"] = "interrupted"
+
+
+class OutOfBudget(BaseModel):
+    """The run spent the time or token budget it was started with before it finished."""
+    kind: Literal["out_of_budget"] = "out_of_budget"
+    budget: Literal["time", "token"]
 
 
 class InternalError(BaseModel):
@@ -568,9 +575,10 @@ class InternalError(BaseModel):
     kind: Literal["internal_error"] = "internal_error"
 
 
-type RunFailure = Refused | Interrupted | InternalError
-"""Why a run produced no report of its own. A report carrying one has no properties, rules or groups:
-it stands in for the report the run did not get to write."""
+type RunFailure = Refused | Interrupted | OutOfBudget | InternalError
+"""Why a run produced no report of its own. A report carrying one stands in for the report the run
+did not write: it names the contract, backend and run mode, and has no properties, rules or
+groups."""
 
 
 class AutoProverReport(BaseModel):
@@ -626,6 +634,8 @@ class AutoProverReport(BaseModel):
     scene: SceneAssessment | None = None
     #: Mutation testing of the specs (evaluate run, when mutation ran). None otherwise.
     mutation: MutationReport | None = None
-    #: Set only on the report written in place of one the run failed to produce; every other field
-    #: is then empty. ``None`` on every report a run built, and on reports written before schema 3.3.
+    #: Set only on the report written in place of one the run did not produce — because it ended
+    #: before its report phase, or because building its report failed. That report carries the
+    #: run's identity and nothing else. ``None`` on every report a run built, and on reports written
+    #: before schema 3.3.
     run_failure: RunFailure | None = Field(default=None, discriminator="kind")

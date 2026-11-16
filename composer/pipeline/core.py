@@ -963,8 +963,9 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
         if report_build.RERAISE_REPORT_FAILURES:
             raise
         _log.warning("report phase failed (continuing)", exc_info=True)
-        # Continuing, because the run's other deliverables are already on disk; but without a report
-        # nothing would say that the run behind them went wrong.
+        # Continuing, because the run's verified deliverables are already on disk. The stand-in
+        # report says the run could not report its results, so a reader of report.json does not
+        # take a missing report for a run still in progress.
         backend.artifact_store.write_report(failure_report(
             contract_name=source.contract_name, backend=formalizer.backend_tag,
             run_mode=run.run_mode.value, failure=run_failure(exc),
