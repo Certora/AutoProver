@@ -108,9 +108,9 @@ def read_manifest(path: Path) -> Manifest:
 #: A table's name, one key per level: ``("package", "metadata", "certora")``.
 type TablePath = tuple[str, ...]
 
-#: What a table path can lead to. A table whose sub-tables are declared apart from it, as
-#: ``[package]`` is when ``[package.metadata.solana]`` follows ``[lints]``, reads back as an
-#: ``OutOfOrderTableProxy``; edits made through it land in the fragment that holds the key.
+#: ``Table``, ``InlineTable``, or an ``OutOfOrderTableProxy``. A table whose sub-tables are declared
+#: apart from it, as ``[package]`` is when ``[package.metadata.solana]`` follows ``[lints]``, reads
+#: back as the proxy. An edit through the proxy lands in the fragment that holds the key.
 _Table = Table | InlineTable | OutOfOrderTableProxy
 
 #: A value :class:`ManifestEditor` writes. A mapping is written as an inline table.

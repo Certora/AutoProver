@@ -144,7 +144,9 @@ type SceneConcern = Literal[
     "sound", "over_approximation", "under_approximation", "vacuity_risk",
     "unresolved_or_havoc", "wrong_resolution",
 ]
-type SceneEffect = Literal["false_proof", "false_violation", "vacuity", "timeout_or_cost", "none"]
+type SceneEffect = Literal[
+    "false_proof", "false_witness", "false_violation", "vacuity", "timeout_or_cost", "none",
+]
 
 
 class SceneFinding(BaseModel):
@@ -159,7 +161,8 @@ class SceneFinding(BaseModel):
         "havocked, a risk when that call is expected to have a real effect on the rule's correctness; "
         "wrong_resolution = linked/dispatched to the wrong implementation."))
     effect: SceneEffect = Field(description=(
-        "false_proof = a rule could be VERIFIED that should not be (the dangerous case); "
+        "false_proof = an assert rule could be VERIFIED that should not be; false_witness = a "
+        "satisfy rule could be SATISFIED by a witness the real code cannot reach; "
         "false_violation = a spurious counterexample; vacuity = a rule passes proving nothing; "
         "timeout_or_cost = a tractability risk only; none = no soundness consequence."))
     properties_at_risk: list[str] = Field(
@@ -173,15 +176,14 @@ class SceneAssessment(BaseModel):
     when scene judging is enabled; absent otherwise."""
     overall: Literal["sound", "minor_concerns", "unsound"] = Field(
         default="sound",
-        description="unsound if any finding is false_proof; minor_concerns if only "
-        "false_violation / vacuity / timeout; else sound.")
+        description="unsound if any finding is false_proof or false_witness; else sound.")
     summary: str = Field(default="", description="A short plain-English verdict on the scene.")
     findings: list[SceneFinding] = Field(default_factory=list)
     false_proof_findings: int = Field(
-        default=0, description="How many findings have effect=false_proof.")
+        default=0, description="How many findings have effect false_proof or false_witness.")
     at_risk_properties: list[str] = Field(
         default_factory=list,
-        description="Titles of the properties endangered by a false-proof finding.")
+        description="Titles of the properties endangered by a false_proof or false_witness finding.")
     tractability: list["TractabilityFinding"] = Field(
         default_factory=list,
         description="Predicted prover-friendliness of the scene's constructs, with proposed "
@@ -697,8 +699,8 @@ it stands in for the report the run did not get to write."""
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
     schema_version: Literal[
-        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9", "3.10", "4.0"
-    ] = "4.0"
+        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9", "3.10", "4.0", "4.1"
+    ] = "4.1"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written

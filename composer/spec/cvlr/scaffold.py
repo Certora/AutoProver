@@ -99,8 +99,12 @@ NO_ENTRYPOINT_FEATURE = CargoFeature("no-entrypoint")
 #: installs an allocator the calling crate can switch off
 #: (:attr:`~composer.spec.cvlr.reference.PlatformGeneration.heap_opt_out`), ``certora`` turns that
 #: switch on for a package that calls the macro and has no ``no-entrypoint`` to turn off: stake's
-#: program calls ``entrypoint!`` unconditionally.
-_ENTRYPOINT_MACRO = re.compile(r"\bentrypoint(?:_no_alloc)?![ \t]*[(\[{]")
+#: program calls ``entrypoint!`` unconditionally. Searched with comments removed (:data:`_COMMENT`).
+_ENTRYPOINT_MACRO = re.compile(r"\bentrypoint(?:_no_alloc)?!\s*[(\[{]")
+
+#: A Rust line or block comment. Block comments nest in Rust; a nested one leaves its tail behind,
+#: which only matters if that tail spells a macro call.
+_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -452,16 +456,15 @@ class _OffGeneration:
 def _read_platform(
     workspace: Workspace, package: CratePackage, reference: ChainReference
 ) -> _OnGeneration | _OffGeneration | None:
-    """Which generation ``package`` is on, as far as ``reference`` can tell; ``None`` when it links
+    """Which generation ``package`` is on, as far as ``reference`` can tell. ``None`` when it links
     none of the reference's witnesses.
 
-    The first witness the project resolves decides. Later ones are not consulted. The list is
-    most-specific first because a target on a newer generation resolves only the specific crate.
-    Falling through to a broader witness after a specific one has answered would undo that order.
-    A crate listed at several lines is one witness, on the generation at any of them. Every copy of
-    that witness linked into ``package`` has to be on the generation: one that is not still meets
-    CVLR's types wherever its dependents hand an account to a helper. A copy only another member
-    links, or only a dev-dependency pulls in, is never compiled with the harness.
+    The first witness the package resolves decides, and later witnesses are not consulted. The list
+    is most-specific first, because a newer generation resolves only the specific crate. A crate
+    listed at several lines is one witness, on the generation at any of them. Every copy of that
+    witness linked into ``package`` has to be on the generation. A copy from another generation
+    still meets CVLR's types when a dependent passes an account to a helper. A copy that only
+    another member links, or that only a dev-dependency pulls in, is not compiled with the harness.
     """
     linked = workspace.linked_into(package)
     witnesses = reference.platform.witnesses
@@ -479,12 +482,10 @@ def _read_platform(
 def select_generation(
     workspace: Workspace, package: CratePackage, candidates: Sequence[ChainReference]
 ) -> ChainReference | None:
-    """The reference set in ``candidates`` for the platform generation ``package`` is on, or
-    ``None`` when it is on none of them.
+    """The reference set in ``candidates`` for the platform generation ``package`` is on.
 
-    Evidence is required: a package that links none of a reference's witnesses is not on that
-    generation. ``candidates`` come in :data:`~composer.spec.cvlr.reference.REFERENCE_SET`'s order,
-    and the first match wins.
+    ``None`` when the package links none of their witnesses. ``candidates`` are newest first
+    (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`), and the first match wins.
     """
     return next(
         (
@@ -501,12 +502,11 @@ def _check_platform(
 ) -> None:
     """Refuse to pin a CVLR release the project's platform generation cannot use.
 
-    A target on ``solana-program`` 1.18 given ``cvlr-solana`` 0.5.x does not warn. It fails to
-    compile, because the two generations have different ``AccountInfo`` types and the chain
-    crate's helpers return the other one. The reference set already records which generation a
-    chain crate requires (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This is
-    where a project that is on a different one is caught, and it has to be caught before the pin
-    is written. :func:`_read_platform` is how the generation is read.
+    ``solana-program`` 1.18 and ``cvlr-solana`` 0.5.x have different ``AccountInfo`` types, and the
+    chain crate's helpers return the other generation's type, so that combination does not compile.
+    The reference records the generation a chain crate requires
+    (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This check runs before the pin is
+    written. :func:`_read_platform` reads the generation.
     """
     match _read_platform(workspace, package, reference):
         case _OffGeneration(witness=witness, builds=builds):
@@ -575,13 +575,12 @@ def _check_pins(
 ) -> None:
     """Refuse a project that is on a CVLR release other than the one this build is pinned to.
 
-    One line is supported per platform generation, and ``reference`` is the one for this project's
-    (:func:`select_generation`). Everything this scaffold writes belongs to it: the pins, the specializations added beside
-    them, and the env files :mod:`composer.spec.cvlr.tuning` composes. A project already on
-    another line cannot be given those without putting two CVLR generations in one graph, which
-    does not compile. This scaffold used to resolve that by deferring to the project's pin and
-    withholding the specializations; a run set up that way is on a configuration nothing else
-    here is built for, so it is refused instead.
+    One line is supported per platform generation, and ``reference`` is the set
+    :func:`select_generation` picked for this project. Everything this scaffold writes belongs to
+    it: the pins, the specializations added beside them, and the env files
+    :mod:`composer.spec.cvlr.tuning` composes. A project already on another line cannot be given
+    those without putting two CVLR generations in one graph, which does not compile, so it is
+    refused.
 
     Two readings, because neither alone covers the project. The resolved graph is exact and
     settles a crate some member already depends on. The manifests settle a crate declared in
@@ -674,10 +673,13 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
 
 
 def _calls_entrypoint(package: CratePackage) -> bool:
-    """Whether ``package``'s own sources invoke the SDK's entrypoint macro."""
+    """Whether ``package``'s sources call ``entrypoint!`` or ``entrypoint_no_alloc!``.
+
+    ``src/certora`` is the harness, so those files are skipped.
+    """
     source = package.root / "src"
     return any(
-        _ENTRYPOINT_MACRO.search(path.read_text(errors="replace"))
+        _ENTRYPOINT_MACRO.search(_COMMENT.sub(" ", path.read_text(errors="replace")))
         for path in source.rglob("*.rs")
         if not path.is_relative_to(source / "certora")
     )
@@ -999,17 +1001,16 @@ def _plan_forks(
 
 
 def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
-    """Add ``[patch.crates-io]`` entries reading the reference set's unpublished releases from the
-    commits they were cut from (:class:`~composer.spec.cvlr.reference.GitCommit`).
+    """Add ``[patch.crates-io]`` entries for releases cargo reads from a commit
+    (:class:`~composer.spec.cvlr.reference.GitCommit`).
 
-    Only for the crates the project is given, and the crates each was released with. A patch for a
-    crate nothing depends on is one cargo warns about on every build.
+    The patches are the crates :meth:`~composer.spec.cvlr.reference.ChainReference.scaffold_crates`
+    gives the project. A patch for a crate nothing depends on makes cargo warn on every build.
 
-    A crate the project's patch table already names is checked against the resolved graph rather
-    than redirected again: a second entry for one crate is a manifest cargo refuses. The pinned
-    commit is satisfied. So is a crate the graph does not resolve yet, because the graph can
-    predate the table. Any other source blocks, since replacing the project's entry would replace
-    somebody's decision, and building on it would verify against a release this build does not pin.
+    A crate the project's patch table already names is checked against the resolved graph. Cargo
+    refuses a second entry for one crate. The pinned commit is recorded as satisfied. So is a crate
+    the graph does not resolve yet, because the graph can be older than the table. Any other source
+    blocks: replacing the project's entry would verify a release this build does not pin.
     """
     path = Path("Cargo.toml")
     patched = forks.already_patched(plan.read(path))
@@ -1023,7 +1024,7 @@ def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _Pl
             plan.add_manifest_edit(
                 path,
                 AddTable(("patch", "crates-io", patch.name), (*preamble, *commit.patch_body())),
-                f"read {patch.name} {patch.version} from {commit.repo} at {commit.rev[:12]} "
+                f"read {patch.name} {patch.version} from {commit.repo} at {commit.rev} "
                 f"until it is on crates.io",
             )
             preamble = ()
@@ -1039,7 +1040,7 @@ def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _Pl
         ):
             plan.add_satisfied(
                 f"{patch.name} {patch.version} is already read from {commit.repo} at "
-                f"{commit.rev[:12]}"
+                f"{commit.rev}"
             )
         else:
             elsewhere = ", ".join(
@@ -1087,7 +1088,7 @@ def plan_scaffold(
     relative = _project_relative(package.root, workspace.root)
     plan = _PlanBuilder(workspace.root)
     inherit = plan.read(Path("Cargo.toml")).workspace is not None
-    dialect = dialect_for(workspace, reference)
+    dialect = dialect_for(workspace, package, reference)
 
     _plan_workspace_manifest(reference, plan)
     # Before the harness: a source edit is checked against the file as planned, and the harness

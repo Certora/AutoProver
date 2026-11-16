@@ -602,9 +602,9 @@ def read_from_commit(reference: ChainReference, commit: GitCommit) -> ChainRefer
     assert isinstance(reference.binding, CrateRelease)
     return dataclasses.replace(
         reference,
-        binding=dataclasses.replace(reference.binding, unpublished=commit),
+        binding=dataclasses.replace(reference.binding, commit=commit),
         models=tuple(
-            dataclasses.replace(m, release=dataclasses.replace(m.release, unpublished=commit))
+            dataclasses.replace(m, release=dataclasses.replace(m.release, commit=commit))
             for m in reference.models
         ),
     )

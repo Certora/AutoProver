@@ -116,7 +116,7 @@ def research_cache_ns(crates: Iterable[CrateRelease]) -> tuple[str, ...]:
     of a release's identity while it is unpublished: the release it stands in for has not been cut.
     """
     pins = sorted(
-        f"{c.name}={c.version}" + (f"@{c.unpublished.rev}" if c.unpublished else "")
+        f"{c.name}={c.version}" + (f"@{c.commit.rev}" if c.commit else "")
         for c in crates
     )
     return (*DEFAULT_CVLR_AGENT_INDEX_NS, hashlib.sha256("|".join(pins).encode()).hexdigest())

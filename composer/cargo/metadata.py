@@ -26,14 +26,15 @@ from urllib.parse import parse_qs, urlsplit, urlunsplit
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from composer.cargo.features import CargoFeature
+from composer.cargo.rustup import require_toolchain, toolchain_env
 
 #: Crate types that make a target the library of its package. Bins, tests, and
 #: examples are never the verification target.
 _LIB_CRATE_TYPES = frozenset({"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"})
 
-#: On a cold cache this resolves (and may download) the whole dependency graph, so it gets as long
-#: as a cold ``cargo fetch`` (:data:`composer.cargo.session.WARM_TIMEOUT_S`). A confined run reads
-#: into a fresh per-run ``CARGO_HOME``, so every run's first read is cold: klend's took 435s.
+#: A cold read resolves the graph and may download it. A confined run uses a fresh per-run
+#: ``CARGO_HOME``, so the first read of a run is cold, and a large program can take more than five
+#: minutes. Same budget as :data:`composer.cargo.session.WARM_TIMEOUT_S`.
 METADATA_TIMEOUT_S = 900
 
 
@@ -310,7 +311,8 @@ class Workspace:
         naming one.
 
         ``toolchain`` is the rustup toolchain to run cargo with, in place of the project's pin, as
-        :attr:`~composer.cargo.session.CargoSession.toolchain` is for a session.
+        :attr:`~composer.cargo.session.CargoSession.toolchain` is for a session. Raises
+        :class:`~composer.cargo.rustup.ToolchainMissing` when rustup does not have it.
 
         ``cargo_home`` is where cargo fetches the graph's crates to, in place of the process's
         ``CARGO_HOME``, which a confined install may not let the runtime user write
@@ -432,13 +434,15 @@ def _cargo_metadata(
         raise CargoUnavailable(
             "cargo is not on PATH; a Rust chain's toolchain cannot be resolved without it"
         )
+    if toolchain is not None:
+        require_toolchain(toolchain)
     args = ["cargo", "metadata", "--format-version", "1"]
     if offline:
         args.append("--offline")
     if features:
         args += ["--features", ",".join(features)]
     overrides = {
-        **({"RUSTUP_TOOLCHAIN": toolchain} if toolchain is not None else {}),
+        **toolchain_env(toolchain),
         **({"CARGO_HOME": str(cargo_home)} if cargo_home is not None else {}),
     }
     if cargo_home is not None:

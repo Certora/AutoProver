@@ -210,10 +210,16 @@ class ForkRefused:
 
 
 #: Anchor. Branch names taken from the fork. Listed, not derived, so a release the fork has not
-#: been updated for is reported as uncovered. The fork has nothing before 0.26.0 or after 1.2.1.
+#: been updated for is reported as uncovered. The fork has nothing before 0.26.0 and nothing after
+#: 1.2.1.
+#:
+#: From 1.1.0, ``anchor_lang::error`` is the separate ``anchor-lang-error`` crate. The fork's
+#: ``anchor-lang`` takes it from its own workspace, so redirecting ``anchor-lang`` redirects it too.
+#: It is listed for a project that also names it directly: that copy would otherwise stay on
+#: crates.io, beside the fork's, with an ``Error`` type of its own.
 ANCHOR_FORK = ForkOverride(
     repo="https://github.com/Certora/anchor.git",
-    crates=("anchor-lang", "anchor-spl"),
+    crates=("anchor-lang", "anchor-spl", "anchor-lang-error"),
     branches={
         "0.26.0": "certora-v0.26.0",
         "0.27.0": "certora-v0.27.0",

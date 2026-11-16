@@ -390,7 +390,7 @@ def test_an_unpublished_release_is_keyed_by_its_commit():
 
     def at(rev: str) -> tuple[str, ...]:
         return cvlr_research.research_cache_ns(
-            [CrateRelease("cvlr-solana", "0.5.1", unpublished=GitCommit("https://x", rev))]
+            [CrateRelease("cvlr-solana", "0.5.1", commit=GitCommit("https://x", rev))]
         )
 
     assert at("aaa") != at("bbb")

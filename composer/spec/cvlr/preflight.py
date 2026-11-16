@@ -9,6 +9,9 @@ run's CPU budget (``PipelineRun.cpu_runner``), the same split as
 :mod:`composer.rustapp.adapter`. One function that did both could not be placed on either side
 of that line.
 
+Solana only for now. :data:`~composer.spec.cvlr.reference.SOROBAN` has a reference set, but the
+compile gate is the Solana platform tools' SBF check.
+
 Three outcomes are refusals, all :class:`~composer.spec.cvlr.scaffold.Blocked`: a package that
 builds no loadable object, a project on a CVLR release other than the one this build is pinned to,
 and a CVLR pin that does not match the platform generation the project is already on.
@@ -21,11 +24,12 @@ from pathlib import Path
 
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
+from composer.cargo.rustup import ToolchainMissing
 from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, CompileVerdict, WarmFailed
 from composer.pipeline.refusal import RunRefusal
 from composer.sandbox.config import SandboxConfig
-from composer.sandbox.recipes import sandbox_cargo_home
+from composer.sandbox.recipes import prepare_sandbox_cargo_home
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.crates import CvlrSources, Divergence
 from composer.spec.cvlr.scaffold import (
@@ -158,6 +162,7 @@ async def select_package(
     reference = select_generation(workspace, member, candidates)
     if reference is None:
         linked = workspace.linked_into(member)
+        # An ordered set: the refusal names the witnesses in candidate order.
         witnesses = dict.fromkeys(w.name for r in candidates for w in r.platform.witnesses)
         builds = [
             f"{name} {', '.join(c.version for c in copies)}"
@@ -166,7 +171,7 @@ async def select_package(
         ]
         supported = "; ".join(f"{r.platform.label} ({r.line()})" for r in candidates)
         raise PreflightFailed(
-            f"{member.name} is on no Solana platform generation this build supports. It builds "
+            f"{member.name} is on no platform generation this build supports. It builds "
             f"{', '.join(builds) or 'none of the platform crates that identify one'}. Supported: "
             f"{supported}."
         )
@@ -185,7 +190,7 @@ async def _workspace_at(
         workspace = await Workspace.read(
             root, features=features, toolchain=HOST_RUST_TOOLCHAIN, cargo_home=cargo_home
         )
-    except CargoUnavailable as exc:
+    except (CargoUnavailable, ToolchainMissing) as exc:
         raise PreflightFailed(str(exc)) from exc
     if not isinstance(workspace, Workspace):
         raise PreflightFailed(
@@ -213,9 +218,11 @@ async def prepare_workspace(
     (:meth:`~composer.spec.cvlr.reference.ChainReference.withholding`). Every function this calls
     already takes the set, so passing it in removes a lookup rather than adding an argument.
     """
-    # The cargo home the gate's warm step fills (CargoSession.cargo_home), so what these reads fetch
-    # is not fetched again.
-    cargo_home = sandbox_cargo_home(project_root) if sandbox.enabled else None
+    # The cargo home the gate's warm fills (:attr:`composer.cargo.session.CargoSession.cargo_home`),
+    # so these reads reuse the registry crates it fetched. Git sources are fetched again: these
+    # reads use the host cargo, and the platform-tools cargo does not see the host cargo's git
+    # checkouts (:func:`composer.cargo.sbf.platform_tools_cargos`).
+    cargo_home = prepare_sandbox_cargo_home(project_root) if sandbox.enabled else None
     workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     member = _pick_package(workspace, package)
 
@@ -271,9 +278,10 @@ async def gate_workspace(
 ) -> None:
     """Check that the scaffolded project compiles with the harness in, or fail the run.
 
-    ``cargo check`` for the SBF target (:func:`~composer.cargo.sbf.sbf_check`), not the build.
-    What this has to catch is a scaffold that does not compile. The build is a later gate, and
-    running it here would cost more than the failure it would be catching.
+    ``cargo check`` for the SBF target (:func:`~composer.cargo.sbf.sbf_check`). The full build
+    runs at a later gate.
+
+    Solana only: a Soroban target would need a check for its own target.
     """
     verdict = await check_package(
         pre.workspace_root, pre.package_dir, sandbox=sandbox, features=features
