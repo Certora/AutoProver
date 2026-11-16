@@ -165,9 +165,11 @@ remedy, not the first. Recipe K4 gives the remedies in order.
 
 ## Asking for a munge
 
-When the program's own data is what the analysis cannot follow (`[3005]`, `[3308]`, an internal
-error out of `ScalarDomain`, or a job that fails with no per-rule verdicts), the remedy is usually a
-munge; recipe K11 says which.
+When the program's own data is what the analysis cannot follow (`[3005]`, a `[3308]` on account
+state that the `data_len()` assumption above did not clear, an internal error out of `ScalarDomain`,
+or a job that fails with no per-rule verdicts), the remedy is usually a munge; recipe K11 says which.
+A `[3308]` whose trace runs through error formatting — the program's `#[error_code]` enum building
+its message — is not about the data, and recipe K10 covers it.
 
 **A munge is the most consequential thing in this run, so treat asking for one that way.** It changes
 the program the verdicts are about. Prefer, in order: a different rule; a summary, if the code in the

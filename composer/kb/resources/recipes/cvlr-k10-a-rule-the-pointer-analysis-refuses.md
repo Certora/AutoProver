@@ -4,7 +4,9 @@
 
 **Trigger:** a rule ends in an error rather than a verdict, with `[3308]` illegal dereference of an
 absolute address (most often a program's own `#[error_code]` enum formatting its `#[msg]` string) or
-`[3006]` illegal store of a stack pointer, on a path the rule reaches.
+`[3006]` illegal store of a stack pointer, on a path the rule reaches. A `[3308]` whose trace is in
+the program's account state rather than in formatting is recipe K11's case: first constrain the
+account's `data_len()`, then see K11.
 
 Work down these in order:
 

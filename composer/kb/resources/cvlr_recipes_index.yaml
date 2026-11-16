@@ -107,8 +107,8 @@ recipes:
 - id: K10
   name: A rule the pointer analysis refuses
   triggers:
-  - A rule ends in `[3308]` illegal dereference of an absolute address, or `[3006]` illegal store of
-    a stack pointer
+  - A rule ends in `[3308]` illegal dereference of an absolute address with error formatting in the
+    trace, or in `[3006]` illegal store of a stack pointer
   - You are about to write a `summarize_for_prover` directive
   channel: [MOCK, SKIP]
   file: recipes/cvlr-k10-a-rule-the-pointer-analysis-refuses.md
@@ -116,6 +116,8 @@ recipes:
   name: State the analysis cannot size, variable-length collections and `swap_derive`
   triggers:
   - A rule ends in `[3005]` memcpy with dynamically sized length
+  - A rule ends in `[3308]` on the program's account state, and a `data_len()` assumption did not
+    clear it
   - An internal error out of `ScalarDomain`
   - A submission that fails with no per-rule verdicts at all
   - You are about to ask the editor for a `swap_derive`

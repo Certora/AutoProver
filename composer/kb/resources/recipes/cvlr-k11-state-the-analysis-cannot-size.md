@@ -2,8 +2,10 @@
 
 ### K11. State the analysis cannot size: variable-length collections and `swap_derive` `[EDIT]` `[SKIP]`
 
-**Trigger:** `[3005]` memcpy with dynamically sized length; an internal error out of
-`sbf.domains.ScalarDomain`; a submission that fails with no per-rule verdicts at all.
+**Trigger:** `[3005]` memcpy with dynamically sized length; a `[3308]` on the program's account
+state that a `data_len()` assumption did not clear; an internal error out of
+`sbf.domains.ScalarDomain`; a submission that fails with no per-rule verdicts at all. A `[3308]`
+with error formatting in its trace is recipe K10's case, not this one.
 
 Four symptoms, one family, and none of them names its cause:
 
