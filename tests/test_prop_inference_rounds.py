@@ -19,6 +19,7 @@ from langchain_core.outputs import ChatResult
 from langchain_core.runnables import Runnable, RunnableLambda
 from langchain_core.tools import BaseTool
 from langgraph.store.memory import InMemoryStore
+from pydantic import BaseModel
 
 import composer.spec.prop_inference as pi
 from composer.pipeline.keys import FINAL_PROPERTIES_KEY
@@ -158,6 +159,13 @@ async def test_stops_at_the_first_round_that_adds_nothing(script) -> None:
     titles = await _run(_Env(_no_restatements(2)), max_rounds=5)
     assert titles == ["a", "b", "c"]
     assert s.runs == 3
+
+
+async def test_a_first_round_that_finds_nothing_yields_no_properties(script) -> None:
+    s = script(_round())
+    titles = await _run(_Env(_no_restatements(0)), max_rounds=5)
+    assert titles == []
+    assert s.runs == 1
 
 
 async def test_stops_at_the_round_limit(script) -> None:
@@ -428,6 +436,7 @@ async def test_driver_passes_the_round_limit_and_flags_evaluate_runs(monkeypatch
         ctx = _ctx()
         env = None
         run_mode = RunMode(mode)
+        property_generator = None
         source = type("S", (), {"content": None})()
 
         async def runner(self, _info, job):
@@ -441,6 +450,10 @@ async def test_driver_passes_the_round_limit_and_flags_evaluate_runs(monkeypatch
     assert [p.title for b in got.batches for p in b.props] == ["a"]
     assert seen["max_rounds"] == 4
     assert seen["existing_specs"] is expected
+
+
+class _Analyzed(BaseModel):
+    """Stands in for the analyzed model; the driver only records its dump."""
 
 
 async def test_driver_records_final_properties_under_the_round_limit(monkeypatch) -> None:
@@ -460,7 +473,7 @@ async def test_driver_records_final_properties_under_the_round_limit(monkeypatch
             [],
         )
 
-    async def fake_analysis(*_a, **_kw): return "analyzed"
+    async def fake_analysis(*_a, **_kw): return _Analyzed()
     async def fake_report(*_a, **_kw): return object()
 
     monkeypatch.setattr(core, "run_component_analysis", fake_analysis)

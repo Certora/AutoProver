@@ -14,7 +14,9 @@ was and wasn't granted).
 
 import os
 import shutil
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 from composer.layout import INTERNAL_DIR
 from composer.sandbox.policy import SandboxPolicy
@@ -45,8 +47,17 @@ SANDBOX_INTERNAL_DIR = INTERNAL_DIR / "sandbox"
 SANDBOX_CARGO_DIR = SANDBOX_INTERNAL_DIR / "cargo"
 SANDBOX_TMP_DIR = SANDBOX_INTERNAL_DIR / "tmp"
 
-#: Where ``cargo certora-sbf`` installs the Solana platform tools by default.
-PLATFORM_TOOLS_ROOT = Path.home() / ".cache" / "solana"
+def platform_tools_root(environ: Mapping[str, str]) -> Path:
+    """Where the Solana platform tools are: ``$CERTORA_PLATFORM_TOOLS_ROOT``, else where
+    ``cargo certora-sbf`` installs them by default.
+
+    An image sets the variable when its tools live in a root-owned tree outside a world-writable
+    ``$HOME``. Empty reads as unset.
+    """
+    return Path(environ.get("CERTORA_PLATFORM_TOOLS_ROOT") or Path.home() / ".cache" / "solana")
+
+
+PLATFORM_TOOLS_ROOT = platform_tools_root(os.environ)
 
 # Read-only system directories the toolchain + its dynamic linker need. ``/etc`` is
 # included because glibc NSS (``getpwuid`` via ``getuser``, CA-cert lookup) reads
@@ -87,6 +98,27 @@ def sandbox_cargo_home(workdir: str | Path) -> Path:
     (command-sandbox.md §11 item 5).
     """
     return Path(workdir).resolve() / SANDBOX_CARGO_DIR
+
+
+def prepare_sandbox_cargo_home(workdir: str | Path) -> Path:
+    """:func:`sandbox_cargo_home`, created, with the user's global cargo config copied in.
+
+    Every cargo command that uses the private home calls this first, unconfined ones included:
+    the first is usually an online read or fetch, and without the config it would go without
+    registry mirrors, ``[source]`` replacement, or ``net.git-fetch-with-cli``.
+
+    ``credentials.toml`` is not copied. The private home is under the workdir, which a confined
+    build can read, so a token copied there is a token handed to its ``build.rs``. A registry
+    that needs one cannot be fetched from under confinement.
+    """
+    cargo_home = sandbox_cargo_home(workdir)
+    cargo_home.mkdir(parents=True, exist_ok=True)
+    shared_cargo = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    for cfg in ("config.toml", "config"):
+        src = shared_cargo / cfg
+        if src.is_file() and not (cargo_home / cfg).exists():
+            shutil.copy(src, cargo_home / cfg)
+    return cargo_home
 
 
 def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
@@ -147,6 +179,7 @@ def rust_build_policy(
     extra_ro: tuple[Path, ...] = (),
     extra_rw: tuple[Path, ...] = (),
     env_passthrough: tuple[str, ...] = DEFAULT_ENV_PASSTHROUGH,
+    env: Mapping[str, str] = MappingProxyType({}),
     offline: bool = True,
     mem_bytes: int | None = None,
     cpu_seconds: int | None = None,
@@ -154,6 +187,9 @@ def rust_build_policy(
     fsize_bytes: int | None = None,
 ) -> SandboxPolicy:
     """Build a network-off policy for compiling/running Rust in ``workdir``.
+
+    ``env`` sets variables in the child on top of ``env_passthrough``. The ones this policy
+    owns (``CARGO_HOME``, the temp dirs, ``CARGO_NET_OFFLINE``) cannot be overridden.
 
     Grants: ``workdir`` + the device nodes (+ ``extra_rw``) read-write; the Rust
     toolchain (``RUSTUP_HOME``), the shared cargo **bin/** only (not the cargo-home
@@ -195,9 +231,10 @@ def rust_build_policy(
     wd = Path(workdir).resolve()
     rw_paths = (wd, *dev, *(p.resolve() for p in extra_rw))
 
-    env = {name: os.environ[name] for name in env_passthrough if name in os.environ}
+    child_env = {name: os.environ[name] for name in env_passthrough if name in os.environ}
+    child_env |= env
     if offline:
-        env["CARGO_NET_OFFLINE"] = "true"
+        child_env["CARGO_NET_OFFLINE"] = "true"
     # A private temp dir UNDER the (writable) workdir, so tools that need scratch space
     # — notably the linker, which writes to $TMPDIR (default /tmp) during `cargo build` —
     # work without granting the shared /tmp (which may hold host/other-run secrets and
@@ -205,26 +242,15 @@ def rust_build_policy(
     sandbox_tmp = wd / SANDBOX_TMP_DIR
     sandbox_tmp.mkdir(parents=True, exist_ok=True)
     for var in ("TMPDIR", "TMP", "TEMP"):
-        env[var] = str(sandbox_tmp)
+        child_env[var] = str(sandbox_tmp)
 
-    # Point CARGO_HOME at a PRIVATE per-run cargo home under the workdir (see
-    # sandbox_cargo_home for the reasoning). The shared ~/.cargo root is *not*
-    # granted RO; only bin/ is (above). Copy the user's global cargo config into
-    # the private home so registry mirrors / build settings still apply — that
-    # copy is trusted-host code, not a Landlock grant of the secrets file.
-    cargo_home = sandbox_cargo_home(wd)
-    cargo_home.mkdir(parents=True, exist_ok=True)
-    shared_cargo = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
-    for cfg in ("config.toml", "config"):
-        src = shared_cargo / cfg
-        if src.is_file() and not (cargo_home / cfg).exists():
-            shutil.copy(src, cargo_home / cfg)
-    env["CARGO_HOME"] = str(cargo_home)
+    # The shared ~/.cargo root is *not* granted RO; only bin/ is (above).
+    child_env["CARGO_HOME"] = str(prepare_sandbox_cargo_home(wd))
 
     return SandboxPolicy(
         rw_paths=rw_paths,
         ro_paths=ro_paths,
-        env_allowlist=env,
+        env_allowlist=child_env,
         network=False,
         mem_bytes=mem_bytes,
         cpu_seconds=cpu_seconds,

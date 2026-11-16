@@ -224,6 +224,7 @@ async def _resolve_formalization_key(
             xc_digest,
             run_mode_name(tags.run_mode),
             max_rounds=tags.max_bug_rounds,
+            property_generator=tags.property_generator,
         )
     ).cache_get(FinalProperties)
     if final is not None:

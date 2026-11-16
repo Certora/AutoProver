@@ -15,22 +15,27 @@ dependency graph, which needs a warm cache or the network; see
 """
 
 import asyncio
+import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit, urlunsplit
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
 from composer.cargo.features import CargoFeature
+from composer.cargo.rustup import require_toolchain, toolchain_env
 
 #: Crate types that make a target the library of its package. Bins, tests, and
 #: examples are never the verification target.
 _LIB_CRATE_TYPES = frozenset({"lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"})
 
-#: On a cold cache this resolves (and may download) the whole dependency graph.
-METADATA_TIMEOUT_S = 300
+#: A cold read resolves the graph and may download it. A confined run uses a fresh per-run
+#: ``CARGO_HOME``, so the first read of a run is cold, and a large program can take more than five
+#: minutes. Same budget as :data:`composer.cargo.session.WARM_TIMEOUT_S`.
+METADATA_TIMEOUT_S = 900
 
 
 class CargoUnavailable(RuntimeError):
@@ -97,6 +102,26 @@ class CargoPackageJson(_CargoJson):
     source: str | None = None
 
 
+class CargoDepKindJson(_CargoJson):
+    #: ``None`` for a normal dependency; otherwise ``"dev"`` or ``"build"``.
+    kind: str | None = None
+
+
+class CargoNodeDepJson(_CargoJson):
+    pkg: str
+    #: Cargos before 1.41 omit it. Read as normal, so a dependency is never dropped from a graph.
+    dep_kinds: tuple[CargoDepKindJson, ...] = (CargoDepKindJson(),)
+
+
+class CargoNodeJson(_CargoJson):
+    id: str
+    deps: tuple[CargoNodeDepJson, ...] = ()
+
+
+class CargoResolveJson(_CargoJson):
+    nodes: tuple[CargoNodeJson, ...] = ()
+
+
 class CargoMetadataJson(_CargoJson):
     """The parts of ``cargo metadata --format-version 1`` output this module reads."""
 
@@ -104,6 +129,7 @@ class CargoMetadataJson(_CargoJson):
     workspace_root: Path
     workspace_members: tuple[str, ...] = ()
     target_directory: Path | None = None
+    resolve: CargoResolveJson | None = None
 
 
 @dataclass(frozen=True)
@@ -252,6 +278,9 @@ class Workspace:
     members: tuple[CratePackage, ...]
     #: Every package the graph resolves, members included.
     packages: tuple[CratePackage, ...]
+    #: Each package's normal dependencies, as the resolved graph links them. Dev and build
+    #: dependencies are left out: neither is linked into the package's library.
+    links: Mapping[CratePackage, tuple[CratePackage, ...]] = field(default_factory=dict)
 
     @classmethod
     async def read(
@@ -260,6 +289,8 @@ class Workspace:
         *,
         offline: bool = False,
         features: tuple[CargoFeature, ...] = (),
+        toolchain: str | None = None,
+        cargo_home: Path | None = None,
         timeout_s: int = METADATA_TIMEOUT_S,
     ) -> "Workspace | MetadataFailure":
         """The workspace containing ``project_root``, or why there is none.
@@ -278,12 +309,22 @@ class Workspace:
         then reports them as absent. Features resolve against the package cargo
         considers current, so pass the package directory as ``project_root`` when
         naming one.
+
+        ``toolchain`` is the rustup toolchain to run cargo with, in place of the project's pin, as
+        :attr:`~composer.cargo.session.CargoSession.toolchain` is for a session. Raises
+        :class:`~composer.cargo.rustup.ToolchainMissing` when rustup does not have it.
+
+        ``cargo_home`` is where cargo fetches the graph's crates to, in place of the process's
+        ``CARGO_HOME``, which a confined install may not let the runtime user write
+        (:attr:`~composer.cargo.session.CargoSession.cargo_home`).
         """
         payload = await asyncio.to_thread(
             _cargo_metadata,
             project_root,
             offline=offline,
             features=features,
+            toolchain=toolchain,
+            cargo_home=cargo_home,
             timeout_s=timeout_s,
         )
         return parse_metadata(payload) if isinstance(payload, CargoMetadataJson) else payload
@@ -309,6 +350,22 @@ class Workspace:
         releases, or the same release from different sources, and cargo builds each.
         """
         return tuple(p for p in self.packages if p.name == name)
+
+    def linked_into(self, package: CratePackage) -> tuple[CratePackage, ...]:
+        """``package`` and every package its library links, transitively.
+
+        Narrower than :attr:`packages`, which also holds what other members and every dev and
+        build dependency resolve: a copy that is only a sibling member's dev-dependency is never
+        compiled into this package, and cannot meet its types.
+        """
+        seen = {package: None}
+        frontier = [package]
+        while frontier:
+            for dep in self.links.get(frontier.pop(), ()):
+                if dep not in seen:
+                    seen[dep] = None
+                    frontier.append(dep)
+        return tuple(seen)
 
     def family(self, prefix: str) -> tuple[CratePackage, ...]:
         """Every resolved package named ``prefix`` or ``prefix-*``.
@@ -345,29 +402,59 @@ def parse_metadata(payload: CargoMetadataJson) -> Workspace:
     """Build a :class:`Workspace` from validated ``cargo metadata --format-version 1`` output."""
     by_id = {raw.id: _package(raw) for raw in payload.packages}
     root = payload.workspace_root
+    nodes = payload.resolve.nodes if payload.resolve is not None else ()
+    links = {
+        by_id[node.id]: tuple(
+            by_id[dep.pkg]
+            for dep in node.deps
+            if dep.pkg in by_id and any(k.kind is None for k in dep.dep_kinds)
+        )
+        for node in nodes
+        if node.id in by_id
+    }
     return Workspace(
         root=root,
         target_directory=payload.target_directory or root / "target",
         members=tuple(by_id[i] for i in payload.workspace_members if i in by_id),
         packages=tuple(by_id.values()),
+        links=links,
     )
 
 
 def _cargo_metadata(
-    project_root: Path, *, offline: bool, features: tuple[CargoFeature, ...], timeout_s: int
+    project_root: Path,
+    *,
+    offline: bool,
+    features: tuple[CargoFeature, ...],
+    toolchain: str | None,
+    cargo_home: Path | None,
+    timeout_s: int,
 ) -> CargoMetadataJson | MetadataFailure:
     if shutil.which("cargo") is None:
         raise CargoUnavailable(
             "cargo is not on PATH; a Rust chain's toolchain cannot be resolved without it"
         )
+    if toolchain is not None:
+        require_toolchain(toolchain)
     args = ["cargo", "metadata", "--format-version", "1"]
     if offline:
         args.append("--offline")
     if features:
         args += ["--features", ",".join(features)]
+    overrides = {
+        **toolchain_env(toolchain),
+        **({"CARGO_HOME": str(cargo_home)} if cargo_home is not None else {}),
+    }
+    if cargo_home is not None:
+        cargo_home.mkdir(parents=True, exist_ok=True)
     try:
         completed = subprocess.run(
-            args, cwd=project_root, capture_output=True, text=True, timeout=timeout_s
+            args,
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            env={**os.environ, **overrides} if overrides else None,
         )
     except subprocess.TimeoutExpired:
         return CargoTimedOut(timeout_s)
