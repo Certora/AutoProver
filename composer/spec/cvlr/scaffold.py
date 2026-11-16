@@ -67,7 +67,12 @@ from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.env_paths import PathDialect, dialect_for
 from composer.spec.cvlr import forks
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
-from composer.spec.cvlr.reference import ChainReference, CrateRequirement, commit_patches
+from composer.spec.cvlr.reference import (
+    ChainReference,
+    CrateRequirement,
+    HarnessShim,
+    commit_patches,
+)
 
 #: Where the harness module goes in the target package.
 HARNESS_DIR = Path("src") / "certora"
@@ -91,17 +96,11 @@ SHARED_OBJECT_TYPE = "cdylib"
 #: ``first_example`` has ``certora = []``.
 NO_ENTRYPOINT_FEATURE = CargoFeature("no-entrypoint")
 
-#: Keeps the SDK's ``entrypoint!`` from installing its global allocator. The macro's
-#: ``custom_heap_default!`` checks the calling crate's ``custom-heap`` feature, in ``solana-program``
-#: 2.x and in ``solana-program-entrypoint`` 3.x. ``certora`` enables it when the package calls the
-#: macro and does not declare ``no-entrypoint``. The stake program calls ``entrypoint!`` with no
-#: feature gate. The bump allocator writes the heap at a fixed address. A rule that also allocates
-#: through ``__rust_alloc`` then fails with Prover error 3309, "Conflicting allocation/usage of heap
-#: memory".
-CUSTOM_HEAP_FEATURE = CargoFeature("custom-heap")
-
-#: An invocation of the SDK's ``entrypoint!`` or ``entrypoint_no_alloc!``, which both install the
-#: allocator. Searched with comments removed (:data:`_COMMENT`).
+#: An invocation of an ``entrypoint!`` or ``entrypoint_no_alloc!`` macro. On a platform whose macro
+#: installs an allocator the calling crate can switch off
+#: (:attr:`~composer.spec.cvlr.reference.PlatformGeneration.heap_opt_out`), ``certora`` turns that
+#: switch on for a package that calls the macro and has no ``no-entrypoint`` to turn off: stake's
+#: program calls ``entrypoint!`` unconditionally. Searched with comments removed (:data:`_COMMENT`).
 _ENTRYPOINT_MACRO = re.compile(r"\bentrypoint(?:_no_alloc)?!\s*[(\[{]")
 
 #: A Rust line or block comment. Block comments nest in Rust; a nested one leaves its tail behind,
@@ -135,6 +134,20 @@ class AppendSection:
 
 
 @dataclass(frozen=True)
+class SourceEdit:
+    """One of the project's own source files, rewritten.
+
+    The whole file is recorded as planned and as it will be, so :func:`apply` writes ``after`` only
+    over the text that was planned against and is :class:`ScaffoldStale` otherwise.
+    """
+
+    path: Path
+    before: str
+    after: str
+    why: str
+
+
+@dataclass(frozen=True)
 class Addition:
     """One thing the plan adds to a manifest, and why."""
 
@@ -154,7 +167,7 @@ class EditManifest:
     additions: tuple[Addition, ...]
 
 
-type Change = Write | AppendSection | EditManifest
+type Change = Write | AppendSection | SourceEdit | EditManifest
 
 
 @dataclass(frozen=True)
@@ -191,6 +204,8 @@ class ScaffoldPlan:
                     lines.append(f"  write {path} — {why}")
                 case AppendSection(path=path, why=why):
                     lines.append(f"  extend {path} — {why}")
+                case SourceEdit(path=path, why=why):
+                    lines.append(f"  rewrite {path} — {why}")
                 case EditManifest(path=path, additions=additions):
                     lines += [f"  edit {path} {a.edit.describe()} — {a.why}" for a in additions]
         lines += [f"  ok {note}" for note in self.satisfied]
@@ -199,7 +214,8 @@ class ScaffoldPlan:
 
 
 class ScaffoldStale(RuntimeError):
-    """A manifest the plan edits gained, after planning, something the plan adds."""
+    """A file the plan edits changed after planning: a manifest gained something the plan adds,
+    or a source file the plan rewrites is no longer the text it was planned against."""
 
 
 class ScaffoldBlocked(RuntimeError):
@@ -231,23 +247,36 @@ def _harness_source(relative: Path) -> str:
     return files(__package__).joinpath("harness_files", *template.parts).read_text()
 
 
-def _harness_files(dialect: PathDialect) -> tuple[Write, ...]:
+def _harness_files(dialect: PathDialect, shim: HarnessShim | None) -> tuple[Write, ...]:
     """AutoProver's files, with paths relative to the package root.
 
     ``mod.rs`` declares ``specs`` as ``pub``. ``cvlr::mock_fn(with = crate::certora::specs::…)``
     expands in the program's own file, outside ``certora``, so the path has to be visible from
     there. ``certora`` itself stays private. Under the feature gate the module exists only in a
-    verification build, and it adds nothing to the crate's public API.
+    verification build, and it adds nothing to the crate's public API. A ``shim`` is declared the
+    same way, beside ``specs``, for the same reason.
 
     ``specs/mod.rs`` is written empty so the module exists before any rule file does. A module
     created later is one a later step can forget to declare.
     """
+    root = _harness_source(Path("mod.rs"))
+    shim_files: tuple[Write, ...] = ()
+    if shim is not None:
+        root += f"pub mod {shim.module};\n"
+        shim_files = (
+            Write(
+                path=HARNESS_DIR / f"{shim.module}.rs",
+                contents=_harness_source(Path(f"{shim.template}.rs")),
+                why=f"the {shim.module} account helpers, which no published CVLR crate provides",
+            ),
+        )
     return (
         Write(
             path=HARNESS_DIR / "mod.rs",
-            contents=_harness_source(Path("mod.rs")),
+            contents=root,
             why="the harness module root",
         ),
+        *shim_files,
         Write(
             path=SPECS_DIR / "mod.rs",
             contents=_harness_source(Path("specs") / "mod.rs"),
@@ -262,6 +291,42 @@ def _harness_files(dialect: PathDialect) -> tuple[Write, ...]:
             for family in ENV_FAMILIES
         ),
     )
+
+
+_CERTORA_OFF = f'not(feature = "{DEFAULT_FEATURE}")'
+
+_NO_STD = re.compile(r"^#!\[no_std\]", re.MULTILINE)
+_NO_STD_WHEN = re.compile(r"^#!\[cfg_attr\((?P<cond>.+), no_std\)\]", re.MULTILINE)
+#: A panic handler of the crate's own: the `#[panic_handler]` attribute, or Pinocchio's macro that
+#: defines one. Not matched when the line before already gates it on the feature.
+_PANIC_HANDLER = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<item>#\[panic_handler\]|(?:pinocchio::)?nostd_panic_handler!)",
+    re.MULTILINE,
+)
+_GATE = f"#[cfg({_CERTORA_OFF})]"
+
+
+def _with_std(source: str) -> str:
+    """``source`` as it has to be to compile with the harness, which links ``std`` through cvlr.
+
+    ``std`` brings its own panic handler, so a handler the crate defines is a duplicate of it and is
+    gated off. ``no_std`` is gated off too, so a rule can use what ``std`` has.
+    """
+    source = _NO_STD.sub(f"#![cfg_attr({_CERTORA_OFF}, no_std)]", source)
+    source = _NO_STD_WHEN.sub(
+        lambda m: m.group(0)
+        if _CERTORA_OFF in m.group("cond")
+        else f"#![cfg_attr(all({m.group('cond')}, {_CERTORA_OFF}), no_std)]",
+        source,
+    )
+
+    def gate(match: re.Match[str]) -> str:
+        preceding = source[: match.start()].rstrip("\n").rsplit("\n", 1)[-1].strip()
+        if preceding == _GATE:
+            return match.group(0)
+        return f"{match.group('indent')}{_GATE}\n{match.group(0)}"
+
+    return _PANIC_HANDLER.sub(gate, source)
 
 
 def _lib_declaration() -> str:
@@ -396,19 +461,22 @@ def _read_platform(
     none of the reference's witnesses.
 
     The first witness the package resolves decides, and later witnesses are not consulted. The list
-    is most-specific first, because a newer generation resolves only the specific crate. Every copy
-    of that witness linked into ``package`` has to be on the generation. A copy from another
-    generation still meets CVLR's types when a dependent passes an account to a helper. A copy that
-    only another member links, or that only a dev-dependency pulls in, is not compiled with the
-    harness.
+    is most-specific first, because a newer generation resolves only the specific crate. A crate
+    listed at several lines is one witness, on the generation at any of them. Every copy of that
+    witness linked into ``package`` has to be on the generation. A copy from another generation
+    still meets CVLR's types when a dependent passes an account to a helper. A copy that only
+    another member links, or that only a dev-dependency pulls in, is not compiled with the harness.
     """
     linked = workspace.linked_into(package)
-    for witness in reference.platform.witnesses:
-        copies = [c for c in linked if c.name == witness.name]
+    witnesses = reference.platform.witnesses
+    for name in dict.fromkeys(w.name for w in witnesses):
+        copies = [c for c in linked if c.name == name]
         if not copies:
             continue
-        off = tuple(c.version for c in copies if _generation(c.version) != _generation(witness.line))
-        return _OffGeneration(witness, off) if off else _OnGeneration()
+        lines = [w for w in witnesses if w.name == name]
+        on = {_generation(w.line) for w in lines}
+        off = tuple(c.version for c in copies if _generation(c.version) not in on)
+        return _OffGeneration(lines[0], off) if off else _OnGeneration()
     return None
 
 
@@ -618,12 +686,16 @@ def _calls_entrypoint(package: CratePackage) -> bool:
     )
 
 
-def _entrypoint_switch(package: CratePackage) -> CargoFeature | None:
-    """The feature that keeps this package's entrypoint allocator out of a verification build."""
+def _entrypoint_switch(package: CratePackage, reference: ChainReference) -> CargoFeature | None:
+    """The feature that keeps ``package``'s entrypoint, and the allocator it installs, out of a
+    verification build: ``no-entrypoint`` when the package declares it, else the platform's
+    :attr:`~composer.spec.cvlr.reference.PlatformGeneration.heap_opt_out` when it calls
+    ``entrypoint!``, else nothing."""
     if NO_ENTRYPOINT_FEATURE in package.features:
         return NO_ENTRYPOINT_FEATURE
-    if _calls_entrypoint(package):
-        return CUSTOM_HEAP_FEATURE
+    heap_opt_out = reference.platform.heap_opt_out
+    if heap_opt_out is not None and _calls_entrypoint(package):
+        return heap_opt_out
     return None
 
 
@@ -631,7 +703,7 @@ def _certora_feature(package: CratePackage, reference: ChainReference) -> list[s
     """What ``package``'s ``certora`` feature turns on within ``package`` itself: the CVLR
     crates, and the entrypoint switch (:func:`_entrypoint_switch`)."""
     enables = [f"dep:{c.name}" for c in reference.scaffold_crates()]
-    if (switch := _entrypoint_switch(package)) is not None:
+    if (switch := _entrypoint_switch(package, reference)) is not None:
         enables.insert(0, switch)
     return enables
 
@@ -762,11 +834,12 @@ def _plan_package_manifest(
         enables = _certora_feature(package, reference) + [
             f"{dep.name}/{DEFAULT_FEATURE}" for dep in local_dependencies(workspace, package)
         ]
-        # A feature cargo does not know cannot be enabled, so `custom-heap` is declared when the
+        # A feature cargo does not know cannot be enabled, so the heap opt-out is declared when the
         # package has not declared it.
+        heap_opt_out = reference.platform.heap_opt_out
         declared: tuple[tuple[str, TomlValue], ...] = (
-            ((CUSTOM_HEAP_FEATURE, []),)
-            if CUSTOM_HEAP_FEATURE in enables and CUSTOM_HEAP_FEATURE not in features
+            ((heap_opt_out, []),)
+            if heap_opt_out is not None and heap_opt_out in enables and heap_opt_out not in features
             else ()
         )
         plan.add_manifest_edit(
@@ -802,9 +875,15 @@ def _plan_package_manifest(
 
 
 def _plan_harness(
-    package: CratePackage, relative: Path, dialect: PathDialect, plan: _PlanBuilder
+    package: CratePackage,
+    relative: Path,
+    dialect: PathDialect,
+    shim: HarnessShim | None,
+    plan: _PlanBuilder,
 ) -> None:
-    for file in _harness_files(dialect):
+    if shim is not None:
+        _check_shim_dependency(package, relative, shim, plan)
+    for file in _harness_files(dialect, shim):
         on_disk = package.root / file.path
         if on_disk.is_file() and on_disk.read_text() == file.contents:
             plan.add_satisfied(f"{relative / file.path} is current")
@@ -838,6 +917,51 @@ def _plan_harness(
                     why="pull the harness into the crate, gated on the feature",
                 )
             )
+
+
+def _plan_std(package: CratePackage, relative: Path, plan: _PlanBuilder) -> None:
+    """Make a ``no_std`` crate build with ``std`` under the feature, as hand-written Pinocchio
+    verification projects do. Every file of the library is read: a program may install its panic
+    handler beside its entrypoint rather than in ``lib.rs``."""
+    if package.lib is None or not package.lib.src_path.is_file():
+        return
+    for source in sorted(package.lib.src_path.parent.rglob("*.rs")):
+        if HARNESS_DIR in source.relative_to(package.root).parents:
+            continue
+        before = source.read_text()
+        after = _with_std(before)
+        if after != before:
+            plan.add_change(
+                SourceEdit(
+                    path=relative / _project_relative(source, package.root),
+                    before=before,
+                    after=after,
+                    why="build with std under the feature: cvlr links it, and its panic handler",
+                )
+            )
+
+
+def _check_shim_dependency(
+    package: CratePackage, relative: Path, shim: HarnessShim, plan: _PlanBuilder
+) -> None:
+    """Refuse a package whose manifest does not name the crate ``shim``'s ``use`` lines name.
+
+    A crate can only name its own dependencies, so a framework the package reaches only through
+    another crate leaves the shim unable to compile. The manifest is read rather than the graph:
+    the graph does not say under which name the package declares the crate.
+    """
+    if shim.requires in plan.read(relative / "Cargo.toml").dependencies:
+        return
+    plan.add_blocked(
+        Blocked(
+            path=relative / "Cargo.toml",
+            problem=(
+                f"{package.name} does not declare {shim.requires} as a dependency of its own, and "
+                f"{shim.describe()} names it"
+            ),
+            resolution=f"add {shim.requires} to {package.name}'s [dependencies], unrenamed",
+        )
+    )
 
 
 def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
@@ -963,7 +1087,10 @@ def plan_scaffold(
     dialect = dialect_for(workspace, package, reference)
 
     _plan_workspace_manifest(reference, plan)
-    _plan_harness(package, relative, dialect, plan)
+    # Before the harness: a source edit is checked against the file as planned, and the harness
+    # appends its declaration to `lib.rs`.
+    _plan_std(package, relative, plan)
+    _plan_harness(package, relative, dialect, reference.shim, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, plan)
     _plan_forks(workspace, reference, plan)
@@ -1025,6 +1152,10 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
                 existing = target.read_text() if target.is_file() else ""
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(existing + contents)
+            case SourceEdit(before=before, after=after):
+                if target.read_text() != before:
+                    raise ScaffoldStale(f"{change.path} changed after the scaffold was planned")
+                target.write_text(after)
             case EditManifest(additions=additions):
                 edited = ManifestEditor.read(target)
                 for addition in additions:

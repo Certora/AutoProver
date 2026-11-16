@@ -32,7 +32,16 @@ the tuning files.
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 
+from composer.cargo.features import CargoFeature
 from composer.spec.cvlr.forks import ANCHOR_FORK, FIXED_FORK, ForkOverride
+
+
+#: What keeps the Solana SDK's ``entrypoint!`` from installing its global allocator. The macro's
+#: ``custom_heap_default!`` checks the calling crate's ``custom-heap`` feature, in
+#: ``solana-program`` 2.x and in ``solana-program-entrypoint`` 3.x. The bump allocator writes the
+#: heap at a fixed address. A rule that also allocates through ``__rust_alloc`` then fails with
+#: Prover error 3309, "Conflicting allocation/usage of heap memory".
+CUSTOM_HEAP_FEATURE = CargoFeature("custom-heap")
 
 
 @dataclass(frozen=True)
@@ -140,11 +149,18 @@ class PlatformGeneration:
     #:
     #: These are read from a target's resolved graph, never declared. The scaffold's platform gate
     #: takes the first one the target resolves and compares its version against this generation.
+    #: A crate listed at several lines is on the generation at any of them: a framework whose
+    #: account type kept its shape across releases is one generation over all of them.
     witnesses: tuple[CrateRequirement, ...]
     #: How this generation spells the paths in the starting tuning files.
     #: :mod:`composer.spec.cvlr.env_paths` applies these. Empty when this generation's spelling
     #: is already the one the starting layers use, which is the monolith's.
     path_aliases: tuple[PathAlias, ...] = ()
+    #: The feature of the calling crate that keeps this generation's ``entrypoint!`` macro from
+    #: installing its global allocator, or ``None`` when the macro has no such switch. The scaffold
+    #: turns it on for a program that calls the macro and has no ``no-entrypoint`` feature
+    #: (:func:`composer.spec.cvlr.scaffold._entrypoint_switch`).
+    heap_opt_out: CargoFeature | None = None
 
 
 @dataclass(frozen=True)
@@ -165,18 +181,48 @@ class UnpublishedCapability:
 
 
 @dataclass(frozen=True)
+class HarnessShim:
+    """A module of the harness that binds the CVLR core to a framework's account type, written by
+    the scaffold because no CVLR chain crate is published for the framework.
+
+    The scaffold writes it from ``harness_files/<template>.template.rs`` into
+    ``src/certora/<module>.rs``, beside ``specs``. It compiles against the program's own copy of
+    the framework, so it follows whatever release the program resolves, which a published crate
+    could not do for a framework that is distributed as git dependencies.
+    """
+
+    #: The module's name under ``src/certora/``: what a rule's ``use`` line names.
+    module: str
+    #: The stem of the module's template under ``harness_files/``. Generations of one framework
+    #: share a module name and differ in what the module assumes of an account's header.
+    template: str
+    #: The crate the module's ``use`` lines name. The program must depend on it directly: a crate
+    #: can only name its own dependencies.
+    requires: str
+
+    def describe(self) -> str:
+        return f"the scaffold's {self.module} harness module"
+
+
+#: What binds the CVLR core to a platform's account type: a published chain crate, or a module the
+#: scaffold writes.
+type ChainBinding = CrateRelease | HarnessShim
+
+
+@dataclass(frozen=True)
 class ChainReference:
     """What current CVLR means for one chain."""
 
     core: CrateRelease
-    #: The cvlr chain crate every project on this chain declares.
-    chain_crate: CrateRelease
+    #: The cvlr chain crate every project on this generation declares, or the harness module that
+    #: stands in for one.
+    binding: ChainBinding
     platform: PlatformGeneration
     #: Certora's forks of crates this chain's programs depend on, which a target is redirected at
     #: when it resolves them (:mod:`composer.spec.cvlr.forks`). Empty for a chain with none.
     forks: tuple[ForkOverride, ...]
     #: Chain crates that model one on-chain program rather than the chain itself: the SPL token
-    #: account model, the stake program's state. Narrower than :attr:`chain_crate`, and still
+    #: account model, the stake program's state. Narrower than :attr:`binding`, and still
     #: declared. :meth:`scaffold_crates` includes them.
     #:
     #: They are optional crates behind the ``certora`` feature, so a project that never calls them
@@ -189,14 +235,22 @@ class ChainReference:
 
     def line(self) -> str:
         """The supported line as a refusal names it to a project author: core and chain crate."""
-        return (
-            f"{self.core.name} {self.core.version} with "
-            f"{self.chain_crate.name} {self.chain_crate.version}"
-        )
+        match self.binding:
+            case CrateRelease(name=name, version=version):
+                bound = f"{name} {version}"
+            case HarnessShim() as shim:
+                bound = shim.describe()
+        return f"{self.core.name} {self.core.version} with {bound}"
+
+    @property
+    def shim(self) -> HarnessShim | None:
+        """The harness module the scaffold writes for this generation, if its binding is one."""
+        return self.binding if isinstance(self.binding, HarnessShim) else None
 
     def crates(self) -> tuple[CrateRelease, ...]:
         """Every CVLR crate in the reference set: the line this build supports."""
-        return (self.core, self.chain_crate, *self.specializations)
+        chain = (self.binding,) if isinstance(self.binding, CrateRelease) else ()
+        return (self.core, *chain, *self.specializations)
 
     def scaffold_crates(self) -> tuple[CrateRelease, ...]:
         """What a fresh project declares in its ``Cargo.toml``.
@@ -231,7 +285,7 @@ _CORE = CrateRelease("cvlr", "0.6.2")
 #: version.
 SOLANA_V2 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.5.2"),
+    binding=CrateRelease("cvlr-solana", "0.5.2"),
     specializations=(
         CrateRelease("cvlr-solana-stake", "0.5.2"),
         # The SPL token account model: nondet token accounts and mints, and the token instruction
@@ -250,6 +304,7 @@ SOLANA_V2 = ChainReference(
             CrateRequirement("solana-account-info", "2.3"),
             CrateRequirement("solana-program", "2.2"),
         ),
+        heap_opt_out=CUSTOM_HEAP_FEATURE,
         # Checked against a demangled symbol table. ``solana-program`` is a partial facade, so
         # which side of the split a symbol lives on is per symbol, not per module.
         path_aliases=(
@@ -293,7 +348,7 @@ SOLANA_V2 = ChainReference(
 #: ``cvlr-solana`` 0.6.1, for the split ``solana-*`` 3.x crates: 0.5.2 ported to them.
 SOLANA_V3 = replace(
     SOLANA_V2,
-    chain_crate=CrateRelease("cvlr-solana", "0.6.1"),
+    binding=CrateRelease("cvlr-solana", "0.6.1"),
     specializations=(
         CrateRelease("cvlr-solana-stake", "0.6.1"),
         CrateRelease("cvlr-spl-token", "0.6.1"),
@@ -303,6 +358,7 @@ SOLANA_V3 = replace(
         label="solana-* 3.x",
         sdk_crates=(CrateRequirement("solana-account-info", "3"),),
         witnesses=(CrateRequirement("solana-account-info", "3.0"),),
+        heap_opt_out=CUSTOM_HEAP_FEATURE,
         path_aliases=(
             PathAlias("solana_program::account_info", ("solana_account_info",)),
             # `Pubkey` is `solana-address`'s `Address`, which `solana-pubkey` re-exports. The
@@ -350,7 +406,7 @@ SOLANA_V3 = replace(
 #: crate.
 SOLANA_V1_18 = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-solana", "0.4.7"),
+    binding=CrateRelease("cvlr-solana", "0.4.7"),
     # No specializations. The 0.4 line has no stake model, and its token helpers are in the chain
     # crate. It has no SPL Token CPI model either: a token CPI reaches ``invoke_signed_unchecked``,
     # which the core summaries make opaque.
@@ -359,13 +415,85 @@ SOLANA_V1_18 = ChainReference(
         label="solana-program 1.18",
         sdk_crates=(CrateRequirement("solana-program", "1.18"),),
         witnesses=(CrateRequirement("solana-program", "1.18"),),
+        heap_opt_out=CUSTOM_HEAP_FEATURE,
         # No aliases: the monolith's spelling is the one the starting tuning files use.
+    ),
+)
+
+#: Programs written on igneous-labs' jiminy (https://github.com/igneous-labs/jiminy), a framework
+#: that replaces the SDK: its own entrypoint, its own account type (``AccountHandle``, read through
+#: the ``Abr`` borrow registry) and its own syscall bindings. It is distributed as git dependencies
+#: only, and the ``jiminy`` crates on crates.io are an unrelated project. A published chain crate
+#: could not name its types, so the account helpers are a module the scaffold writes against the
+#: program's own copy, reached through ``jiminy-entrypoint``'s re-export of ``jiminy-account``.
+SOLANA_JIMINY = ChainReference(
+    core=_CORE,
+    binding=HarnessShim(module="jiminy", template="jiminy", requires="jiminy-entrypoint"),
+    forks=(FIXED_FORK,),
+    platform=PlatformGeneration(
+        label="jiminy",
+        # jiminy is not published, so there is no requirement a probe crate could declare.
+        sdk_crates=(),
+        # Every jiminy program declares its entrypoint crate, which links `jiminy-account`.
+        witnesses=(CrateRequirement("jiminy-entrypoint", "0.1"),),
+        # jiminy's `entrypoint!` installs its allocator unconditionally.
+        heap_opt_out=None,
+    ),
+)
+
+#: Programs written on Pinocchio (https://github.com/anza-xyz/pinocchio), a framework that replaces
+#: the SDK: its own entrypoint, account type and syscall bindings. It is on crates.io, but its
+#: account type has changed shape across 0.x releases, so the account helpers are a module the
+#: scaffold writes against the program's own copy rather than a chain crate pinned to one release.
+#: Each generation below is a shape of the account header the module has to describe: the type,
+#: and what the entrypoint leaves in the four bytes after the flags.
+#:
+#: 0.11 onwards: ``AccountView`` (``solana-account-view``). Under the ``account-resize`` feature the
+#: entrypoint stores the original data length in those bytes, and nothing reads them otherwise.
+SOLANA_PINOCCHIO_0_11 = ChainReference(
+    core=_CORE,
+    binding=HarnessShim(module="pinocchio", template="pinocchio_0_11", requires="pinocchio"),
+    forks=(FIXED_FORK,),
+    platform=PlatformGeneration(
+        label="pinocchio 0.11+",
+        sdk_crates=(),
+        witnesses=(CrateRequirement("pinocchio", "0.12"), CrateRequirement("pinocchio", "0.11")),
+        # Pinocchio's `entrypoint!` installs its allocator unconditionally.
+        heap_opt_out=None,
+    ),
+)
+
+#: 0.10: ``AccountView`` with a ``resize_delta`` the runtime hands over at zero.
+SOLANA_PINOCCHIO_0_10 = ChainReference(
+    core=_CORE,
+    binding=HarnessShim(module="pinocchio", template="pinocchio_0_10", requires="pinocchio"),
+    forks=(FIXED_FORK,),
+    platform=PlatformGeneration(
+        label="pinocchio 0.10",
+        sdk_crates=(),
+        witnesses=(CrateRequirement("pinocchio", "0.10"),),
+        heap_opt_out=None,
+    ),
+)
+
+#: 0.8 and 0.9: ``pinocchio::account_info::AccountInfo``, whose header is private to Pinocchio, so
+#: the module builds it by layout. The four bytes are zero at entry: 0.8 reads them as an unset
+#: original length, 0.9 as a resize delta.
+SOLANA_PINOCCHIO_0_8 = ChainReference(
+    core=_CORE,
+    binding=HarnessShim(module="pinocchio", template="pinocchio_0_8", requires="pinocchio"),
+    forks=(FIXED_FORK,),
+    platform=PlatformGeneration(
+        label="pinocchio 0.8-0.9",
+        sdk_crates=(),
+        witnesses=(CrateRequirement("pinocchio", "0.9"), CrateRequirement("pinocchio", "0.8")),
+        heap_opt_out=None,
     ),
 )
 
 SOROBAN = ChainReference(
     core=_CORE,
-    chain_crate=CrateRelease("cvlr-soroban", "0.4.0"),
+    binding=CrateRelease("cvlr-soroban", "0.4.0"),
     # The derive crate is a companion of the chain crate. A target uses it when it writes the
     # attribute macros. It is declared the same way as a specialization.
     specializations=(CrateRelease("cvlr-soroban-derive", "0.4.0"),),
@@ -381,17 +509,30 @@ SOROBAN = ChainReference(
 #: Keyed by ``composer.pipeline.ecosystem.ChainTag``, minus ``evm``. CVLR is the Rust-side
 #: specification language and has no EVM line.
 #:
-#: One reference set per platform generation, newest first. A chain crate works only with its own
-#: generation's ``AccountInfo``, so a target is set up with the generation it is on
-#: (:func:`composer.spec.cvlr.scaffold.select_generation`).
+#: One reference set per platform generation, each framework's newest first. A chain crate works
+#: only with its own generation's ``AccountInfo``, so a target is set up with the generation it is
+#: on (:func:`composer.spec.cvlr.scaffold.select_generation`).
+#:
+#: A framework's generations come before the SDK's. A program that links a framework's entrypoint
+#: takes that framework's account type in its handlers, whatever SDK crates its dependencies also
+#: link.
 REFERENCE_SET: dict[str, tuple[ChainReference, ...]] = {
-    "solana": (SOLANA_V3, SOLANA_V2, SOLANA_V1_18),
+    "solana": (
+        SOLANA_JIMINY,
+        SOLANA_PINOCCHIO_0_11,
+        SOLANA_PINOCCHIO_0_10,
+        SOLANA_PINOCCHIO_0_8,
+        SOLANA_V3,
+        SOLANA_V2,
+        SOLANA_V1_18,
+    ),
     "soroban": (SOROBAN,),
 }
 
 
 def generations(chain: str) -> tuple[ChainReference, ...]:
-    """The reference sets for ``chain``, one per supported platform generation, newest first.
+    """The reference sets for ``chain``, one per supported platform generation, in the order
+    :data:`REFERENCE_SET` gives.
 
     Raises when ``chain`` has none. Callers need an answer to proceed, and a missing chain is a
     registration bug. The error names the chains that have a set. CVLR has no EVM line."""

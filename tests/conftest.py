@@ -37,7 +37,7 @@ from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
 
 import composer.diagnostics.timing as timing_mod
 from composer.prover.core import ProverOptions, ProverReport
-from composer.spec.cvlr.reference import ChainReference, GitCommit
+from composer.spec.cvlr.reference import ChainReference, CrateRelease, GitCommit
 from composer.spec.source.prover import get_prover_tool, in_situ_project, LLM
 
 if TYPE_CHECKING:
@@ -567,9 +567,10 @@ def read_from_commit(reference: ChainReference, commit: GitCommit) -> ChainRefer
     For the tests of the git-commit path, which should not depend on whether any release the
     shipping reference sets pin is unpublished at the moment.
     """
+    assert isinstance(reference.binding, CrateRelease)
     return dataclasses.replace(
         reference,
-        chain_crate=dataclasses.replace(reference.chain_crate, commit=commit),
+        binding=dataclasses.replace(reference.binding, commit=commit),
         specializations=tuple(
             dataclasses.replace(c, commit=commit) for c in reference.specializations
         ),
