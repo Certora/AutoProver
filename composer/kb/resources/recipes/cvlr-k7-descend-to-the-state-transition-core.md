@@ -9,9 +9,9 @@ Descend to **the program's own state-transition function** — the accounting co
 handler wraps — and drive it with `nondet()` domain structs rather than accounts:
 
 ```rust,ignore
-// The accounting core, driven directly. Only the fields this transition reads need to be
-// nondeterministic — `nondet()` is implemented for scalars, not for `Pubkey`.
-let mut vault = VaultState { authority: Pubkey::default(), balance: nondet(), bump: nondet() };
+// The accounting core, driven directly. `nondet()` does not produce a `Pubkey`;
+// `cvlr_nondet_pubkey()` does. A fixed key is right only when the transition never reads it.
+let mut vault = VaultState { authority: cvlr_nondet_pubkey(), balance: nondet(), bump: nondet() };
 let amount: u64 = nondet();
 let before = vault.balance;
 let split = crate::vault_accounting::apply_withdrawal(&mut vault, amount, true).unwrap();

@@ -225,7 +225,9 @@ the property is not about state the program can be left in.
 One thing this makes *more* important rather than less: if an unchecked operation can **wrap** rather
 than panic, that is a genuine state-integrity bug and it is checkable — assert the post-state equals
 the mathematically correct value and the rule fails on the wrapping input. Whether a build wraps or
-panics is a profile setting (`overflow-checks`), so read it rather than assuming.
+panics is a profile setting, so read it rather than assuming. The Prover's build is a release build,
+so the setting is `overflow-checks` under `[profile.release]` in the *workspace root's*
+`Cargo.toml` (Cargo ignores a profile in a member crate's manifest), and it is off unless set.
 
 ## When the Prover cannot finish: nonlinear arithmetic
 

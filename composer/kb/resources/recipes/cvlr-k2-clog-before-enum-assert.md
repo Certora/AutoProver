@@ -11,18 +11,18 @@ with a counterexample whose value looks arbitrary rather than wrong.
 ```rust,ignore
 crate::pool_program::close_if_stale(ctx, stale).unwrap();
 
-// Without this, the comparison chain can be folded into a bitmask test, and the
-// solver then treats the result as a fresh unconstrained value.
+// The log the assertion's value needs; see below for what is and is not known about why.
 clog!(matches!(pool.status, Status::Closed));
 
 cvlr_assert!(matches!(pool.status, Status::Closed) == stale);
 ```
 
 **Why it is not only about legibility.** Logging every value an assertion depends on is already the
-standing habit, and this is a second reason for it: the log gives the value a use site, which
-defeats a compiler optimization that would otherwise fold the discriminant comparisons into a
-bitmask operation and lose the derivation the solver needs. The rule then fails on a value the
-program could never produce.
+standing habit, and this is a second reason for it: without the log, such a rule has been seen to
+fail on a value the program could never produce, and with it to verify. The likely mechanism is that
+the log gives the value a use site, which stops the compiler folding the discriminant comparisons
+into a bitmask operation that loses the derivation the solver needs; that is a hypothesis, not an
+established cause.
 
 **The part that is easy to get wrong:** log the expression the assertion reads, not a copy of it and
 not a differently-computed equivalent. A `clog!` on the wrong value is a no-op that looks like the
