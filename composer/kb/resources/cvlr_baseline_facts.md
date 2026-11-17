@@ -121,9 +121,10 @@ being able to help you. Three separate failures all come from it, and none of th
 So **constrain the shape of every account your property touches, before anything reads it**:
 
 ```rust
-// A mint with no Token-2022 extensions. One assumption, and the extension parser
-// inside the program now has a length it can reason about.
-cvlr_assume!(mint_info.data_len() == spl_token_2022::state::Mint::SIZE_OF);
+// A mint with no Token-2022 extensions (82 bytes). One assumption, and the extension
+// parser inside the program now has a length it can reason about. `Pack` is the SDK's
+// `program_pack::Pack`, which every spl-token-2022 release implements for `Mint`.
+cvlr_assume!(mint_info.data_len() == <spl_token_2022::state::Mint as Pack>::LEN);
 ```
 
 **Constrain the shape; let the program do the parsing.** The rule says how big the account is, and
