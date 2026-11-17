@@ -21,6 +21,7 @@ warnings.filterwarnings("ignore", message=r".*`ReadOnly` qualifier", category=Us
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, SbfVerdict
 from composer.cargo.session import Compiled, CompileFailed
 from composer.kb.kb_context import CvlrRecipe
+from composer.prover.cloud import CloudJobError
 from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
 from composer.prover.core import (
     JobFailed,
@@ -52,6 +53,7 @@ from composer.spec.cvlr.skill import (
     NotSetUp,
     Present,
     ProveRequest,
+    ResultsUnreadable,
     Running,
     SetupResult,
     check,
@@ -60,6 +62,7 @@ from composer.spec.cvlr.skill import (
     recipes_for,
     setup,
     vacuity,
+    violations,
     wait,
 )
 from composer.spec.cvlr.verify import externals_note
@@ -176,6 +179,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     vacuity_.add_argument("link", help="The job link prove printed.")
     vacuity_.add_argument("--rule", required=True, help="The rule reported SANITY_FAILED.")
+    cex = commands.add_parser(
+        "cex",
+        help="Print the counterexample of each violated instance of a rule in a finished job.",
+    )
+    cex.add_argument("link", help="The job link prove printed.")
+    cex.add_argument("--rule", required=True, help="The rule reported VIOLATED.")
     return parser
 
 
@@ -327,8 +336,13 @@ async def _wait(args: argparse.Namespace) -> int:
             return 0
         case ProverReport():
             print(f"FINISHED {outcome.link}")
-            for rule, status in sorted(outcome.rule_outcomes().items()):
+            outcomes = sorted(outcome.rule_outcomes().items())
+            for rule, status in outcomes:
                 print(f"  {status} {rule}")
+            if any(status == "VIOLATED" for _, status in outcomes):
+                print(
+                    f"\nA violated rule's counterexample: certora-cvlr cex {outcome.link} --rule <rule>"
+                )
             print()
             print(outcome.result_str)
             match outcome.alerts:
@@ -372,8 +386,36 @@ async def _vacuity(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cex(args: argparse.Namespace) -> int:
+    try:
+        found = await violations(args.link, args.rule, prover_opts=_prover_options())
+    except CloudJobError as exc:
+        print(f"certora-cvlr cex: the job has no results to read: {exc}", file=sys.stderr)
+        return 1
+    match found:
+        case ResultsUnreadable(reason=reason):
+            print(f"certora-cvlr cex: {reason}", file=sys.stderr)
+            return 1
+        case []:
+            print(f"No instance of {args.rule} is VIOLATED in this job.")
+            return 1
+        case [*instances]:
+            for instance in instances:
+                print(f"== {instance.path.pprint()}")
+                match instance.counterexample:
+                    case None:
+                        print("The Prover wrote no call trace for this instance.")
+                    case counterexample:
+                        print(counterexample.render())
+            return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
+    # The session's one warning says its builds run unconfined. Here they are the user's own
+    # project, built as the user would build it with cargo; the warning is for analyzing someone
+    # else's code, and the agent reading this output would take it as something to act on.
+    logging.getLogger("composer.cargo.session").setLevel(logging.ERROR)
     args = build_parser().parse_args(argv)
     match args.command:
         case "toolchain":
@@ -388,5 +430,7 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_wait(args))
         case "vacuity":
             return asyncio.run(_vacuity(args))
+        case "cex":
+            return asyncio.run(_cex(args))
         case _:
             raise AssertionError(args.command)

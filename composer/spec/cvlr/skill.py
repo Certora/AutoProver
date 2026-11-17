@@ -39,7 +39,7 @@ from composer.kb.kb_context import (
     recipe_index_document,
     recipes_pushed_on,
 )
-from composer.prover.cloud import parse_cloud_link, poll_job, results_api
+from composer.prover.cloud import cloud_results, parse_cloud_link, poll_job, results_api
 from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
 from composer.prover.core import (
     ProverCallbacks,
@@ -49,6 +49,8 @@ from composer.prover.core import (
     SubmittedJob,
     collect_prover_results,
 )
+from composer.prover.ptypes import RuleResult
+from composer.prover.results import read_and_format_run_result
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.author import render_author_system, render_judge_system
 from composer.spec.cvlr.conf import (
@@ -504,6 +506,32 @@ def recipes_for(outcome: ProverReport | ProverFailure) -> list[CvlrRecipe]:
             return recipes_pushed_on(symptoms(outcome))
         case _:
             return recipes_pushed_on(failure_symptoms(outcome))
+
+
+@dataclass(frozen=True)
+class ResultsUnreadable:
+    """The job's results were downloaded but could not be parsed."""
+
+    reason: str
+
+
+#: How long :func:`violations` waits for a job that has not finished. It reads a job ``wait``
+#: already reported finished, so this only bounds a mistaken call.
+_FINISHED_JOB_GRACE_SECONDS = 60.0
+
+
+async def violations(
+    link: str, rule: str, *, prover_opts: ProverOptions
+) -> list[RuleResult] | ResultsUnreadable:
+    """Every violated instance of ``rule`` in the finished job at ``link``, each carrying its
+    counterexample when the Prover wrote one.
+
+    Raises :class:`~composer.prover.cloud.CloudJobError` when the job did not finish."""
+    async with cloud_results(link, poll_timeout=_FINISHED_JOB_GRACE_SECONDS) as fetched:
+        parsed = read_and_format_run_result(fetched.root, prover_opts.app)
+    if isinstance(parsed, str):
+        return ResultsUnreadable(parsed)
+    return [r for r in parsed.values() if r.path.rule == rule and r.status == "VIOLATED"]
 
 
 @dataclass(frozen=True)

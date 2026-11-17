@@ -29,6 +29,7 @@ SUBCOMMANDS: dict[str, tuple[str, ...]] = {
     ),
     "wait": ("--for",),
     "vacuity": ("--rule",),
+    "cex": ("--rule",),
 }
 
 #: What ``wait`` prints first: the job is still running, or it finished and the verdicts follow,
