@@ -213,17 +213,13 @@ Use `NativeInt` (`cvlr::mathint`, an unsigned 256-bit integer) when you need ari
   check `is_u64()` or `is_u128()` yourself before converting.
 
 **"This handler cannot be made to panic" is not something you can check, and you should not try.**
-Two independent reasons, and the first is the one that matters:
-
-* **A panic reverts.** On Solana a panic — like a returned `Err` — aborts the instruction and the
-  runtime rolls back every account mutation. So a panicking path cannot violate an invariant: there
-  is no surviving state for the invariant to be false about. Pruning those paths is not a gap in the
-  analysis, it is the analysis agreeing with the runtime. A reachable panic is an *availability*
-  concern, not a state-integrity one, and it is not a finding you can produce from a rule.
-* **The switch is per-run, not per-rule.** Treating panics as assertion violations is a conf option,
-  and this backend writes one conf per unit. Turning it on to state one panic-freedom property would
-  make every *other* rule in the unit report its pruned panicking paths as violations. There is no
-  configuration in which one rule sees panics and its neighbours do not.
+A panic reverts: on Solana a panic — like a returned `Err` — aborts the instruction and the runtime
+rolls back every account mutation. So a panicking path cannot violate an invariant: there is no
+surviving state for the invariant to be false about. Pruning those paths is not a gap in the
+analysis, it is the analysis agreeing with the runtime. A reachable panic is an *availability*
+concern, not a state-integrity one, and it is not a finding you can produce from a rule. The
+Prover's switch for reporting panics as violations is off in this backend's conf, and the author's
+config tool cannot turn it on.
 
 So do not write a rule asserting a handler never panics, and do not report a panicking path as an
 attack. If a property in your batch asks for panic-freedom, skip it and say that a panic reverts, so
