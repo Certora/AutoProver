@@ -14,8 +14,8 @@ both is not. Fixed width makes it worse rather than better: a `u128` multiply is
 operation with an overflow check hanging off it, so the solver gets a hard multiply *and* a branch,
 on every call.
 
-`NativeInt` does not make a product linear. It removes the bit width, which is a real and separate
-win, but `a * b` over two symbolic `NativeInt`s is exactly as nonlinear as it was.
+`NativeInt` does not make a product linear. It takes the arithmetic off bitvectors, which is a real
+and separate win, but `a * b` over two symbolic `NativeInt`s is exactly as nonlinear as it was.
 
 Two things produce this, they are indistinguishable in the job report, and they take different
 answers. Work out which one you have before reaching for either.
@@ -42,8 +42,9 @@ impl SafeMath for u128 {
 ```
 
 Three separate things are happening there and each is deliberate: the arithmetic moves off
-bitvectors and into integers; partiality is **assumed** away rather than branched on, so the
-panicking path is removed instead of explored; and the widths that were not the problem keep their
+bitvectors and into integers; partiality is **assumed** away rather than branched on (`.into()`
+assumes the result fits in `u128`, and `safe_div` assumes a non-zero divisor), so the panicking path
+is removed instead of explored; and the widths that were not the problem keep their
 real implementations. Swapping only `u128` is normal and better than swapping all of them.
 
 Two consequences to state rather than discover. These helpers usually live in a **dependency crate**
@@ -60,8 +61,10 @@ of symbolic quantities — `supply * price` against `position * other_price` —
 in the statement you were asked to prove. There is nothing to abstract, because the multiplication
 *is* the property. Two moves, in this order.
 
-**Bound the operands — this is a soundness step, not a speed one.** Widening to `NativeInt` throws
-the program's own limits away, and the Prover will then explore states the program cannot reach. What
+**Bound the operands — this is a soundness step, not a speed one.** A `NativeInt` the rule creates
+itself — from `nondet()`, or as a lemma's free context — has none of the program's limits, and the
+Prover will then explore states the program cannot reach. (`NativeInt::from` of a stored `u64`
+keeps that value's bound; it is the operands the rule makes up that lose it.) What
 comes back is not "slow": it is a **counterexample you have no way to distinguish from a real
 defect**. A run that skipped this got a violation whose witness had a stored supply of ~2.7 x 10^62 —
 a number that cannot exist in a `u64` field — and cost a submission and a round of analysis to

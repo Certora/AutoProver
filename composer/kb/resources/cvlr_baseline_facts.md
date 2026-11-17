@@ -198,12 +198,16 @@ shipped.
 
 Arithmetic correctness is a real property class here, and a stronger one than on EVM: rules reason
 over exact integers, so "the fee is exactly one percent" or "supply is conserved" is stated directly.
-Use `NativeInt` (`cvlr::mathint`) when you need a value without the bit-width in the way — but treat
-widening and bounding as **one move, not two**. `NativeInt::from(x)` removes the bit width and does
-not put anything back: a quantity the program can only hold as a `u64` becomes, in your rule, a value
-with no upper limit at all. Widen it and re-state its bound in the same breath (`cvlr_assume!(x.is_u64())`),
-and convert back the same way. The section on nonlinear arithmetic below says what the missing half
-costs.
+Use `NativeInt` (`cvlr::mathint`, an unsigned 256-bit integer) when you need arithmetic without a
+`u64` or `u128` overflow in the way. Two things about it are easy to get wrong:
+
+* **Where a bound is lost.** `NativeInt::from(x)` of a `u64` keeps `x`'s value, and with it the
+  bound. A `NativeInt` the rule creates itself — from `nondet()`, or as a lemma's free context —
+  ranges up to 2^256, so a quantity the program stores as a `u64` needs `cvlr_assume!(x.is_u64())`
+  where it is created. The section on nonlinear arithmetic below says what leaving it out costs.
+* **Converting back assumes the fit.** `u64::from` and `.into()` to `u128` *assume* the value fits,
+  so an execution that would overflow is removed, not reported. Where overflow is the property,
+  check `is_u64()` or `is_u128()` yourself before converting.
 
 **"This handler cannot be made to panic" is not something you can check, and you should not try.**
 Two independent reasons, and the first is the one that matters:
@@ -235,16 +239,16 @@ A rule can be correct, compile, and still never produce a verdict: the job repor
 completion percentage — 1%, 4% — after splitting it into many sub-problems, and HALTs on its global
 timeout. Waiting will not change that. The usual cause is **nonlinear** arithmetic: a product or
 quotient of two values that are *both* symbolic, such as `price * amount` where the Prover chose
-both. One symbolic operand against a constant is fine. `NativeInt` removes the bit width but does
-not make a product linear.
+both. One symbolic operand against a constant is fine. `NativeInt` takes the arithmetic off
+bitvectors but does not make a product linear.
 
 There are two sources, and they take different answers (recipe K15):
 
 * **The program's arithmetic helpers** (a `SafeMath` trait, a `u256` module, fixed-point scaling):
   ask the editor to `redirect_module` them onto `NativeInt`. Overflow is then unreachable in the
   substitute, so a "cannot overflow" property is gone rather than proved.
-* **The property's own products** (solvency, exchange rates): bound every widened operand by what the
-  program enforces, then, if it still does not finish, prove the algebra once in a `cvlr_lemma!` and
+* **The property's own products** (solvency, exchange rates): bound every operand the rule creates
+  as a `NativeInt` by what the program enforces, then, if it still does not finish, prove the algebra once in a `cvlr_lemma!` and
   `apply` it in the heavy rule. An unbounded operand is a soundness problem, not a speed one: it
   yields counterexamples on states the program cannot reach.
 
