@@ -14,9 +14,11 @@ rule still drives the handler with its real `Context`, and through `try_accounts
 validation, which descending to the state-transition core (recipe K7) gives up.
 
 **What the stand-in costs.** The Prover's own model of a cross-program call already moves nothing:
-every value the call would change keeps its value from before it. So a stand-in returning `Ok(())`
-costs no fidelity against that model, and it removes what the call drags in. Under either, a
-property about the program's recorded state is sound. A property about the lamports or tokens the
+every value the call would change keeps its value from before it. Its result is unconstrained,
+though, so the call can fail. A stand-in returning `Ok(())` matches that model on account data and
+removes what the call drags in, but it drops every execution in which the call fails. If the
+property involves the handler's path after a failed CPI, put the result under the rule's control
+instead, as below. Under either model, a property about the program's recorded state is sound. A property about the lamports or tokens the
 CPI actually moved fails, and one that needs them *not* to have moved, or a total to stay constant
 across the call, passes having checked nothing. The same holds for a rule that drives the handler
 through its real `invoke` or `invoke_signed`, with no stand-in at all.
