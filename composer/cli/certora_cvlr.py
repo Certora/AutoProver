@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore", message=r".*`ReadOnly` qualifier", category=Us
 
 from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, Built, SbfVerdict
 from composer.cargo.session import Compiled, CompileFailed
+from composer.kb.kb_context import CvlrRecipe
 from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
 from composer.prover.core import (
     JobFailed,
@@ -56,6 +57,7 @@ from composer.spec.cvlr.skill import (
     check,
     check_toolchain,
     prove,
+    recipes_for,
     setup,
     vacuity,
     wait,
@@ -305,6 +307,7 @@ async def _prove(args: argparse.Namespace) -> int:
             return 1
         case SubmissionFailed(failure=failure):
             print(f"submission failed:\n{failure.render()}")
+            _print_recipes(recipes_for(failure))
             return 1
 
 
@@ -337,10 +340,20 @@ async def _wait(args: argparse.Namespace) -> int:
                 case AlertReport() as alerts:
                     if (note := externals_note(external_warnings(alerts).messages)) is not None:
                         print(f"\n{note}")
+            _print_recipes(recipes_for(outcome))
             return 0
         case JobFailed() | ResultsUnavailable() | RunFailed():
             print(f"FAILED\n{outcome.render()}")
+            _print_recipes(recipes_for(outcome))
             return 1
+
+
+def _print_recipes(recipes: list[CvlrRecipe]) -> None:
+    if not recipes:
+        return
+    print("\nRecipes in the reference directory for what this job ran into; read each before acting:")
+    for recipe in recipes:
+        print(f"  recipes/{recipe.id}.md: {recipe.name}")
 
 
 async def _vacuity(args: argparse.Namespace) -> int:

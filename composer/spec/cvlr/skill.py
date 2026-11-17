@@ -34,8 +34,10 @@ from composer.cargo.session import CompileVerdict
 from composer.kb.kb_context import (
     CVLR_BUNDLE,
     CVLR_RECIPES,
+    CvlrRecipe,
     recipe_bodies,
     recipe_index_document,
+    recipes_pushed_on,
 )
 from composer.prover.cloud import parse_cloud_link, poll_job, results_api
 from composer.prover.conf import ExcludeRules, InheritRules, RuleSelection, SelectRules
@@ -83,7 +85,7 @@ from composer.spec.cvlr.prover import (
 from composer.spec.cvlr.scaffold import ENVS_DIR, HARNESS_DIR, SPECS_DIR, declare_unit_features
 from composer.spec.cvlr.tuning import SUMMARIES, extend_composite, layer_patterns
 from composer.spec.cvlr.vacuity import CoreFinding, core_finding
-from composer.spec.cvlr.verify import inert_summaries_note
+from composer.spec.cvlr.verify import failure_symptoms, inert_summaries_note, symptoms
 from composer.spec.source.report_prover import fetch_unsat_cores
 from composer.spec.gen_types import CVLR_INTERNAL_DIR
 from composer.spec.util import slugify_rust_module
@@ -493,6 +495,15 @@ async def wait(link: str, *, seconds: float, prover_opts: ProverOptions) -> Wait
         ProverCallbacks(),
         None,
     )
+
+
+def recipes_for(outcome: ProverReport | ProverFailure) -> list[CvlrRecipe]:
+    """The recipes AutoProver's own rule author is handed with ``outcome``."""
+    match outcome:
+        case ProverReport():
+            return recipes_pushed_on(symptoms(outcome))
+        case _:
+            return recipes_pushed_on(failure_symptoms(outcome))
 
 
 @dataclass(frozen=True)

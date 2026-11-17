@@ -290,14 +290,15 @@ CVLR_BUNDLE = KnowledgeBundle[CvlrChannel, CvlrRecipe](label="CVLR", recipes=CVL
 CVLR_FACTS_BUNDLE = KnowledgeBundle[CvlrChannel, CvlrRecipe](label="CVLR", specs=_CVLR_SPECS)
 
 
+def recipes_pushed_on(symptoms: Collection[Symptom]) -> list[CvlrRecipe]:
+    """The CVLR recipes pushed on any of ``symptoms``, each once, in index order."""
+    return [r for r in _kb_model(CVLR_RECIPES).recipes if any(s in symptoms for s in r.pushed_on)]
+
+
 def pushed_recipes(symptoms: Collection[Symptom]) -> list[str]:
     """The bodies of the CVLR recipes pushed on any of ``symptoms``, each once, in index order."""
     kb_resource_dir = files() / "resources"
-    return [
-        (kb_resource_dir / r.file).read_text()
-        for r in _kb_model(CVLR_RECIPES).recipes
-        if any(s in symptoms for s in r.pushed_on)
-    ]
+    return [(kb_resource_dir / r.file).read_text() for r in recipes_pushed_on(symptoms)]
 
 
 def with_cvlr_context(prompt: "PromptInput") -> "PromptInput":
