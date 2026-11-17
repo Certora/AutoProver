@@ -13,7 +13,9 @@ import pytest
 
 from composer.cli import certora_cvlr
 from composer.cli.certora_cvlr import build_parser, main
-from composer.prover.core import ProverReport, RunFailed
+from prover_output_utility.models import JobStatus
+from composer.prover.core import JobFailed, ProverReport, RunFailed
+from composer.prover.ptypes import Counterexample, RulePath, RuleResult, UserAssertion
 from composer.spec.cvlr import skill_interface as interface
 from composer.spec.cvlr.conf import DEFAULT_FEATURE
 from composer.spec.cvlr.harness import SHARED_INVARIANTS, HarnessModule, declare_modules
@@ -104,6 +106,80 @@ def test_wait_prints_one_of_the_states_the_skill_loops_on(monkeypatch, capsys, o
     main(["wait", "https://prover.certora.com/output/1/2?anonymousKey=k", "--for", "1"])
     first = capsys.readouterr().out.split()[0]
     assert first == state and state in interface.WAIT_STATES
+
+
+@pytest.mark.parametrize(
+    ("outcome", "recipe"),
+    [
+        (
+            ProverReport(
+                raw_rule_status={RulePath("rule_a"): "SANITY_FAILED"},
+                result_str="",
+                link="L",
+                certora_run_stdout="",
+            ),
+            "K12",
+        ),
+        (JobFailed(status=JobStatus.HALTED, link="L"), "K9"),
+    ],
+)
+def test_wait_names_the_recipes_the_author_would_be_handed(monkeypatch, capsys, outcome, recipe):
+    async def fake_wait(link, *, seconds, prover_opts):
+        return outcome
+
+    monkeypatch.setattr(certora_cvlr, "wait", fake_wait)
+    main(["wait", "https://prover.certora.com/output/1/2?anonymousKey=k", "--for", "1"])
+    assert f"  recipes/{recipe}.md: " in capsys.readouterr().out
+
+
+def test_wait_points_at_cex_when_a_rule_is_violated(monkeypatch, capsys):
+    async def fake_wait(link, *, seconds, prover_opts):
+        return ProverReport(
+            raw_rule_status={RulePath("rule_a"): "VIOLATED"},
+            result_str="",
+            link="L",
+            certora_run_stdout="",
+        )
+
+    monkeypatch.setattr(certora_cvlr, "wait", fake_wait)
+    main(["wait", "https://prover.certora.com/output/1/2?anonymousKey=k", "--for", "1"])
+    assert "certora-cvlr cex L --rule <rule>" in capsys.readouterr().out
+
+
+def test_cex_prints_each_violated_instance_s_trace(monkeypatch, capsys):
+    async def fake_violations(link, rule, *, prover_opts):
+        return [
+            RuleResult(
+                path=RulePath(rule),
+                counterexample=Counterexample(trace="<trace>t</trace>", origin=UserAssertion()),
+                status="VIOLATED",
+            )
+        ]
+
+    monkeypatch.setattr(certora_cvlr, "violations", fake_violations)
+    assert main(["cex", "L", "--rule", "rule_a"]) == 0
+    out = capsys.readouterr().out
+    assert "== rule_a" in out and "<trace>t</trace>" in out
+
+
+def test_cex_on_a_rule_with_no_violation_exits_1(monkeypatch, capsys):
+    async def fake_violations(link, rule, *, prover_opts):
+        return []
+
+    monkeypatch.setattr(certora_cvlr, "violations", fake_violations)
+    assert main(["cex", "L", "--rule", "rule_a"]) == 1
+    assert "No instance of rule_a is VIOLATED" in capsys.readouterr().out
+
+
+def test_wait_names_no_recipe_for_a_clean_job(monkeypatch, capsys):
+    async def fake_wait(link, *, seconds, prover_opts):
+        return ProverReport(
+            raw_rule_status={RulePath("rule_a"): "VERIFIED"}, result_str="", link="L", certora_run_stdout=""
+        )
+
+    monkeypatch.setattr(certora_cvlr, "wait", fake_wait)
+    main(["wait", "https://prover.certora.com/output/1/2?anonymousKey=k", "--for", "1"])
+    assert "recipes/" not in capsys.readouterr().out
 
 
 @pytest.mark.parametrize(
