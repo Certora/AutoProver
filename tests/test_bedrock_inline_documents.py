@@ -552,6 +552,31 @@ async def test_request_rejected_as_too_large_is_sent_again_with_fewer_documents(
 
 
 @pytest.mark.asyncio
+async def test_conversation_state_forgets_the_least_recently_used(
+    bedrock_env, monkeypatch
+) -> None:
+    """A model keeps state for a bounded number of conversations, and forgets the one it
+    used least recently first."""
+    monkeypatch.setattr(bedrock_chat, "_MAX_CONVERSATIONS", 2)
+    llm = ChatAnthropicBedrock(aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024)
+
+    async def state(thread_id: str) -> Any:
+        async def call(_: Any) -> Any:
+            return llm._conversation()
+        return await RunnableLambda(call).ainvoke(
+            None, {"configurable": {"thread_id": thread_id}}
+        )
+
+    a = await state("a")
+    b = await state("b")
+    assert await state("a") is a  # "a" is now the most recently used
+    await state("c")  # forgets "b"
+    assert list(llm._conversations) == ["a", "c"]
+    assert await state("a") is a
+    assert await state("b") is not b
+
+
+@pytest.mark.asyncio
 async def test_lowered_request_budget_is_kept_per_conversation(
     bedrock_env, monkeypatch, tmp_path
 ) -> None:

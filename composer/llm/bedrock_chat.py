@@ -20,6 +20,8 @@ build requests and parse responses applies unchanged. This subclass changes six 
 import asyncio
 import logging
 import random
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any, override
@@ -229,6 +231,16 @@ class _ConversationState:
     then."""
 
 
+_MAX_CONVERSATIONS = 1024
+"""How many conversations a chat model keeps state for. Past that, the one used least
+recently is forgotten: a later request of it then warns again about a document it leaves
+out, and learns its lowered budget again from another 413."""
+
+# Guards every chat model's conversation table, which sync calls can reach from several
+# threads at once.
+_conversations_lock = threading.Lock()
+
+
 class ChatAnthropicBedrock(ChatAnthropic):
     """``ChatAnthropic`` whose requests go to Bedrock Mantle in ``aws_region``.
 
@@ -242,12 +254,23 @@ class ChatAnthropicBedrock(ChatAnthropic):
     # graph built from one builder, so the state is kept per conversation: per LangGraph
     # thread id, read from the runnable config of the current call. Calls made outside a
     # graph have no thread id and share one state.
-    _conversations: dict[str | None, _ConversationState] = PrivateAttr(default_factory=dict)
+    # Bounded by _MAX_CONVERSATIONS, least recently used first out.
+    _conversations: OrderedDict[str | None, _ConversationState] = PrivateAttr(
+        default_factory=OrderedDict
+    )
 
     def _conversation(self) -> _ConversationState:
         thread_id = ensure_config().get("configurable", {}).get("thread_id")
         key = None if thread_id is None else str(thread_id)
-        return self._conversations.setdefault(key, _ConversationState())
+        with _conversations_lock:
+            state = self._conversations.get(key)
+            if state is None:
+                state = self._conversations[key] = _ConversationState()
+                if len(self._conversations) > _MAX_CONVERSATIONS:
+                    self._conversations.popitem(last=False)
+            else:
+                self._conversations.move_to_end(key)
+            return state
 
     def _mantle_params(self) -> dict[str, Any]:
         """The parent's client settings (timeout, retries, default headers) minus the
