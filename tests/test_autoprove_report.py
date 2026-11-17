@@ -1401,9 +1401,9 @@ def test_pre_3_3_deprioritized_loads_without_critical_match():
 
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
 def test_older_reports_still_load_and_render(version):
-    # Written before the 3.2 fields existed: none of them is present in the JSON.
+    # Written before the 3.2 fields existed, so neither those nor 3.5's run_failure is in the JSON.
     data = _mini_report().model_dump(mode="json")
-    for key in ("rule_feedback", "conf_coverage", "coverage_scores"):
+    for key in ("rule_feedback", "conf_coverage", "coverage_scores", "run_failure"):
         del data[key]
     for prop in data["properties"]:
         del prop["coverage"]

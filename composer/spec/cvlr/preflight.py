@@ -27,6 +27,7 @@ from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
 from composer.cargo.rustup import ToolchainMissing
 from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
+from composer.pipeline.refusal import RunRefusal
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import prepare_sandbox_cargo_home
 from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
@@ -44,7 +45,7 @@ from composer.spec.cvlr.tree import ProjectSource
 _log = logging.getLogger(__name__)
 
 
-class PreflightFailed(RuntimeError):
+class PreflightFailed(RunRefusal):
     """The project cannot be prepared for verification, so the run stops.
 
     Separate from :class:`composer.rustapp.adapter.PreflightFailed`, which says the same thing
@@ -240,7 +241,10 @@ async def prepare_workspace(
     )
     fresh = resolved_in.member(member.name) or member
     if fresh.lib is None:
-        raise PreflightFailed(f"{fresh.name} has no library target to build")
+        raise PreflightFailed(
+            f"{fresh.name} has no library target to build. Point the run at the program's crate, "
+            "which needs a [lib] target."
+        )
 
     sources = CvlrSources.of(resolved_in)
     # The backstop behind the scaffold's gate. That gate reads the manifests and the pre-scaffold

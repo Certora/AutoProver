@@ -588,6 +588,38 @@ class Prioritization(BaseModel):
     pursued: list[PursuedProperty]
 
 
+class Refused(BaseModel):
+    """The run stopped on a problem with what it was given — a project this build cannot verify,
+    say. ``message`` is written for the person who started the run, and is what they need to act
+    on."""
+    kind: Literal["refused"] = "refused"
+    message: str
+
+
+class Interrupted(BaseModel):
+    """The run was stopped from outside — cancelled, or interrupted from the keyboard — before it
+    finished."""
+    kind: Literal["interrupted"] = "interrupted"
+
+
+class OutOfBudget(BaseModel):
+    """The run spent the time or token budget it was started with before it finished."""
+    kind: Literal["out_of_budget"] = "out_of_budget"
+    budget: Literal["time", "token"]
+
+
+class InternalError(BaseModel):
+    """The run failed on a fault of its own. Deliberately carries no exception text: that is for
+    whoever debugs the run, from its logs, and not for the reader of the report."""
+    kind: Literal["internal_error"] = "internal_error"
+
+
+type RunFailure = Refused | Interrupted | OutOfBudget | InternalError
+"""Why a run produced no report of its own. A report carrying one stands in for the report the run
+did not write: it names the contract, backend and run mode, and has no properties, rules or
+groups."""
+
+
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
     schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5"] = "3.5"
@@ -644,3 +676,8 @@ class AutoProverReport(BaseModel):
     scene: SceneAssessment | None = None
     #: Mutation testing of the specs (evaluate run, when mutation ran). None otherwise.
     mutation: MutationReport | None = None
+    #: Set only on the report written in place of one the run did not produce — because it ended
+    #: before its report phase, or because building its report failed. That report carries the
+    #: run's identity and nothing else. ``None`` on every report a run built, and on reports written
+    #: before schema 3.5.
+    run_failure: RunFailure | None = Field(default=None, discriminator="kind")

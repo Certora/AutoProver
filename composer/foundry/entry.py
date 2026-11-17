@@ -31,6 +31,7 @@ from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
 from composer.spec.context import SourceFields
 
 from composer.foundry.artifacts import FoundryArtifactStore
+from composer.spec.gen_types import FOUNDRY_REPORT_DIR
 from composer.foundry.env import build_foundry_env
 from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, backend
@@ -172,6 +173,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
                   task_handler=fact,
                   design_doc_phase=cast(FoundryPhase, FoundryPhase.DISCOVER_DESIGN_DOC),
                   ecosystem=EVM,
+                  report_dir=FOUNDRY_REPORT_DIR,
+                  report_backend="foundry",
                   at_exit=_usage_exit_logger(summary),
                   workflow="foundry"
             ) as (staged, cont),
