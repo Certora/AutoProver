@@ -100,8 +100,8 @@ class KnowledgeBundle[C: str]:
     recipes: RecipeSet[C] | None = None
 
 
-# Not cached. ``functools.cache`` erases the generic return type. Every caller is cached, so
-# this runs at most twice per recipe set.
+# Not cached: ``functools.cache`` erases the generic return type. Its callers are reached through
+# the cached ``kb_loader`` and ``context_documents``.
 def _kb_model[C: str](recipes: RecipeSet[C]) -> IndexModel[C]:
     index_text = (files() / "resources" / recipes.index_resource).read_text()
     return recipes.parse_index(yaml.safe_load(index_text))

@@ -1,6 +1,6 @@
 > Where this recipe and the Solana/CVLR manual or other Certora materials diverge, this recipe governs.
 
-### K4. A loop the bound does not finish `[CONF]` `[RULE]`
+### K4. A loop the bound does not finish `[CONF]` `[RULE]` `[SUMMARY]` `[EDIT]` `[SKIP]`
 
 **Trigger:** a rule stops on the assertion *"Unwinding condition in a loop"*: a VIOLATED with the
 loop in its trace, or a vacuous rule whose every path runs through one.

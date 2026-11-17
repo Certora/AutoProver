@@ -16,7 +16,7 @@ recipes:
   - A harness whose setup you are not yet sure the prover can execute at all
   - A branch or post-state you want shown to be reachable at least once
   - An acceptance property ("the handler accepts X") you are tempted to state as a satisfy rule
-  channel: RULE
+  channel: [RULE, SKIP]
   file: recipes/cvlr-k1-satisfy-for-reachability.md
   search_terms:
   - cvlr_satisfy
@@ -51,7 +51,7 @@ recipes:
   - A rule stops on `Unwinding condition in a loop`
   - You are about to raise `loop_iter` or turn on `optimistic_loop`
   - A property over a loop whose trip count is set by account data
-  channel: [CONF, RULE]
+  channel: [CONF, RULE, SUMMARY, EDIT, SKIP]
   file: recipes/cvlr-k4-loop-the-bound-does-not-finish.md
   search_terms:
   - loop_iter

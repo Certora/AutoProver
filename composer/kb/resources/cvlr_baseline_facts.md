@@ -188,7 +188,7 @@ way is not what the property depends on; then the editor. Read the diff it hands
 accepting it.
 
 The editor can refuse, and a refusal is information. If what a property needs is none of its nine
-kinds — a hand-unrolled loop, a restructured state machine, a shrunk collection — the editor will
+kinds, such as a hand-unrolled loop, a restructured state machine or a shrunk collection, the editor will
 say so and name the kind it would have taken. Skip the property and pass that on. That is a decision for a
 person, and naming it is what makes the skip actionable.
 

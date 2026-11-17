@@ -1,6 +1,6 @@
 > Where this recipe and the Solana/CVLR manual or other Certora materials diverge, this recipe governs.
 
-### K1. Satisfy rules, and the one they must not replace `[RULE]`
+### K1. Satisfy rules, and the one they must not replace `[RULE]` `[SKIP]`
 
 **Trigger:** you want to show that an execution *exists* — the setup runs at all, a branch is
 reachable, a post-state is attainable — rather than that every execution is correct.

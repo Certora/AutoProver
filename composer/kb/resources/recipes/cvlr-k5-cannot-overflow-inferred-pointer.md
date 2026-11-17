@@ -9,8 +9,8 @@ map index` before it reaches its property.
 `-solanaTACSoundSignedMath` is what adds it: the prover asserts that an expression it treats as a
 pointer, computed before it wraps to 64 bits, is at most `u64::MAX`, and it could not show that. That
 is almost always because a value the rule reads from an account (a balance, an amount) is free to sit
-just below `u64::MAX`, and adding it to an address goes past `2^64`. The verdict says nothing about
-the program.
+just below `u64::MAX`, and adding it to an address goes past `2^64`. The stop does not decide whether
+the property holds.
 
 **Formula:** bound the account-data values on that rule's path once, `cvlr_assume!(x < 1 << 63)`,
 and record each bound as an assumption. A bound of `u64::MAX` changes nothing; `2^63` leaves the
