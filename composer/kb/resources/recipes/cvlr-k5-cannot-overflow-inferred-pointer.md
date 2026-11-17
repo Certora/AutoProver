@@ -6,13 +6,15 @@
 map index` before it reaches its property.
 
 **What it is.** A check the Prover adds on its own, not one your rule asserts. The conf's
-`-solanaTACSoundSignedMath` is what adds it: the prover asserts that every value it takes for a
-pointer stays below `2^64`, and it could not show that for an expression it treats as one. That is
-almost always because a value the rule reads from an account (a balance, an amount) is free to sit
-just below `u64::MAX`. The verdict says nothing about the program.
+`-solanaTACSoundSignedMath` is what adds it: the prover asserts that an expression it treats as a
+pointer, computed before it wraps to 64 bits, is at most `u64::MAX`, and it could not show that. That
+is almost always because a value the rule reads from an account (a balance, an amount) is free to sit
+just below `u64::MAX`, and adding it to an address goes past `2^64`. The verdict says nothing about
+the program.
 
 **Formula:** bound the account-data values on that rule's path once, `cvlr_assume!(x < 1 << 63)`,
-and record each bound as an assumption.
+and record each bound as an assumption. A bound of `u64::MAX` changes nothing; `2^63` leaves the
+headroom the addition needs.
 
 **If it comes back with the bound in place**, the bound is not what the rule needs, and no rewording
 of the rule reliably gets past it. Which expressions the Prover takes for pointers depends on how the
