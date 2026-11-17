@@ -29,6 +29,7 @@ name a tool, this is what it means for you:
 | `record_skip`, `unskip_property` | Record the property as skipped, with the reason, where the skill keeps its skips. |
 | `feedback_tool` | Have the judge review the module. |
 | `result`, `give_up` | Finish the component, as the skill says. |
+| `rule_subjects` | Say in the commentary what each rule drives: the program function it calls, or the one a stand-in replaces and why that function could not be called. |
 | `write_rough_draft` | Draft the analysis in your own notes, then refine it before reporting it. |
 | `cargo_check` | `certora-cvlr check <project> --component <module>`. |
 | `verify_rules` | `certora-cvlr prove <project> --component <module>`, then `certora-cvlr wait <link>` until it no longer prints `RUNNING`. |

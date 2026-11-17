@@ -102,11 +102,20 @@ class TraceShape:
     prover's format string writes it, with ``{}`` where its value goes. ``dropped`` removes a frame
     *and everything under it*, which is only safe where nothing interesting can nest inside it — a
     per-chain fact, see :data:`SOLANA_TRACE`. ``elided`` keeps the frame and replaces its subtree
-    with a count.
+    with a count. ``elided_in_any_crate`` does the same for a frame whose function lives in the
+    program's own crate, named there by its path below the crate root, since the crate's name is
+    the program's.
     """
 
     dropped: frozenset[str] = frozenset()
     elided: frozenset[str] = frozenset()
+    elided_in_any_crate: frozenset[str] = frozenset()
+
+    def elides(self, frame: str) -> bool:
+        if frame in self.elided:
+            return True
+        crate, sep, path = frame.partition("::")
+        return bool(crate) and bool(sep) and path in self.elided_in_any_crate
 
 
 #: Frames the prover emits on every chain and no counterexample needs.
@@ -132,9 +141,18 @@ EVM_TRACE = TraceShape(
 #:
 #: rustc 1.89 and later name the allocator shim ``__rustc::__rust_alloc``, so both spellings are
 #: dropped.
+#:
+#: A Pinocchio or jiminy program builds its accounts in the shim setup writes into its crate
+#: (``harness_files/``), whose region choices are the same setup noise, one frame per account.
 SOLANA_TRACE = TraceShape(
     dropped=_GENERIC_NOISE | {"__rust_alloc: {}", "__rustc::__rust_alloc: {}", "CVT_alloc_slice: {}"},
     elided=frozenset({"cvlr_solana::layout::cvlr_deserialize_nondet_accounts(...)"}),
+    elided_in_any_crate=frozenset(
+        {
+            "certora::pinocchio::cvlr_pinocchio_accounts(...)",
+            "certora::jiminy::cvlr_jiminy_accounts(...)",
+        }
+    ),
 )
 
 
@@ -644,7 +662,7 @@ def calltrace_to_xml(node: CallTraceModel, shape: TraceShape) -> str:
         frame = child.message.frame
         if frame in shape.dropped:
             continue
-        if frame in shape.elided:
+        if shape.elides(frame):
             xml_parts.append(
                 f"<child><message>{child.message.render()}</message>"
                 f"<elided>{_descendants(child)} frames of setup</elided></child>"

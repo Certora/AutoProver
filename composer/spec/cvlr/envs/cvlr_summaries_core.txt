@@ -88,6 +88,18 @@
 #[type((*i8)(r1+32):num)]
 ^solana_pubkey::Pubkey::find_program_address$
 
+;; The syscall itself, which the Prover does not model. Pinocchio inlines its derivation down to
+;; it, so the two summaries above never match there. Unsummarized it writes nothing, and two
+;; derivations in one handler read the same stale bytes: their addresses alias.
+;; sol_try_find_program_address(seeds, seeds_len, program_id, address: *mut [u8; 32], bump: *mut u8) -> u64
+#[type(r0:num)]
+#[type((*i64)(r4+0):num)]
+#[type((*i64)(r4+8):num)]
+#[type((*i64)(r4+16):num)]
+#[type((*i64)(r4+24):num)]
+#[type((*i8)(r5+0):num)]
+^sol_try_find_program_address$
+
 #[type((*i32)(r1+0):num)]
 ^solana_program::program::invoke_signed_unchecked$
 

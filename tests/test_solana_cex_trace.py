@@ -34,6 +34,7 @@ from composer.prover.results import (
     read_and_format_run_result,
     trace_shape,
 )
+from composer.spec.cvlr.reference import REFERENCE_SET, HarnessShim
 
 FIXTURES = Path(__file__).parent / "data" / "solana_cex"
 
@@ -122,6 +123,63 @@ def test_account_setup_is_elided_rather_than_dropped():
     assert "cvlr_solana::layout::cvlr_deserialize_nondet_accounts(...)" in cex
     assert "CVT_alloc_slice" not in cex
     assert len(_messages(cex)) == 15
+
+
+_SETUP_FRAME = "cvlr_solana::layout::cvlr_deserialize_nondet_accounts(...)"
+
+
+def _loop_unwinding_dump_with_setup_frame(frame: str) -> dict:
+    path = FIXTURES / "loop_unwinding" / "Reports" / "treeView" / "rule_output_2.json"
+    text = path.read_text()
+    assert _SETUP_FRAME in text
+    return json.loads(text.replace(_SETUP_FRAME, frame))
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        "escrow::certora::pinocchio::cvlr_pinocchio_accounts(...)",
+        "my_amm::certora::jiminy::cvlr_jiminy_accounts(...)",
+    ],
+)
+def test_a_shim_s_account_setup_is_elided_in_whatever_crate_holds_it(frame: str):
+    """Pinocchio and jiminy programs build their accounts in the shim setup writes into their own
+    crate, so the frame carries the program's crate name."""
+    cex = _rendered(_loop_unwinding_dump_with_setup_frame(frame), SOLANA_TRACE)
+    assert "<elided>128 frames of setup</elided>" in cex
+    assert frame in cex
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        "certora::pinocchio::cvlr_pinocchio_accounts(...)",
+        "escrow::specs::certora::pinocchio::cvlr_pinocchio_accounts(...)",
+    ],
+)
+def test_a_shim_frame_is_elided_only_directly_below_a_crate_root(frame: str):
+    cex = _rendered(_loop_unwinding_dump_with_setup_frame(frame), SOLANA_TRACE)
+    assert "<elided>" not in cex
+
+
+_SHIMS = sorted(
+    {ref.binding for ref in REFERENCE_SET["solana"] if isinstance(ref.binding, HarnessShim)},
+    key=lambda shim: shim.template,
+)
+
+
+@pytest.mark.parametrize("shim", _SHIMS, ids=lambda shim: shim.template)
+def test_every_shim_builds_its_accounts_in_a_function_the_shape_elides(shim: HarnessShim):
+    """The shape names the shims' account builders by hand; a renamed one would bring the noise
+    back without failing anything else."""
+    template = (
+        Path(__file__).parents[1] / "composer" / "spec" / "cvlr" / "harness_files"
+        / f"{shim.template}.template.rs"
+    )
+    builders = re.findall(r"pub fn (cvlr_\w+_accounts)\(", template.read_text())
+    assert builders
+    for name in builders:
+        assert f"certora::{shim.module}::{name}(...)" in SOLANA_TRACE.elided_in_any_crate
 
 
 def test_allocator_frames_are_matched_by_name_not_by_the_value_they_hold():
