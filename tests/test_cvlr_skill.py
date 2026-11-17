@@ -5,6 +5,7 @@ the list of what the skill names. One that fails here means either the change br
 the interface module and the skill's text both need the new name.
 """
 
+import re
 import shutil
 import tomllib
 from pathlib import Path
@@ -75,6 +76,25 @@ def test_the_reference_holds_every_file_and_section_the_skill_reads():
     assert {Path(f) for f in interface.REFERENCE_FILES} <= set(docs)
     author = docs[Path("author.md")].splitlines()
     assert [h for h in interface.AUTHOR_SECTIONS if h not in author] == []
+
+
+def test_the_readme_translates_every_tool_the_author_and_judge_texts_define():
+    """A tool those texts name but the table omits leaves the skill's agent reading instructions
+    for something it does not have. Their tools are defined in bullets, ``* `name(...)` —``."""
+    docs = reference_documents(package="vault", cvlr_versions="cvlr 0.6.2", caveats=(), shim=None)
+    table = {
+        name
+        for row in docs[Path("README.md")].splitlines()
+        if row.startswith("| `")
+        for name in re.findall(r"`([a-z_]+)(?:\(\w*\))?`", row.split("|")[1])
+    }
+    defined = {
+        name
+        for doc in ("author.md", "judge.md")
+        for name in re.findall(r"^\* `([a-z_]+)\(", docs[Path(doc)], flags=re.MULTILINE)
+    }
+    assert defined - table == set()
+    assert "rule_subjects" in table
 
 
 @pytest.mark.skill_interface
