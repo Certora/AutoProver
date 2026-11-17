@@ -14,7 +14,8 @@ own, so the selection has to come from cargo's view of who owns ``main_source``.
 fails here.
 
 Marked ``expensive``: it resolves and compiles a real dependency graph off the network. It skips,
-naming what is missing, when cargo is absent.
+naming what is missing, when cargo or the host Rust toolchain is absent, and the compile skips
+when the Solana platform tools are.
 """
 
 import shutil
@@ -22,7 +23,10 @@ from pathlib import Path
 
 import pytest
 
+from composer.cargo.rustup import ToolchainMissing, require_toolchain
+from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.sandbox.config import SandboxConfig
+from composer.spec.cvlr.conf import HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.preflight import gate_workspace, prepare_workspace, select_package
 from composer.spec.cvlr.reference import SOLANA_V2
 
@@ -60,6 +64,10 @@ _UNCONFINED = SandboxConfig(provider="none")
 def project(tmp_path: Path) -> Path:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not on PATH")
+    try:
+        require_toolchain(HOST_RUST_TOOLCHAIN)
+    except ToolchainMissing as exc:
+        pytest.skip(str(exc))
     (tmp_path / "Cargo.toml").write_text(WORKSPACE_MANIFEST)
     for name in ("vault", "other"):
         source = tmp_path / "programs" / name / "src"
@@ -69,7 +77,17 @@ def project(tmp_path: Path) -> Path:
     return tmp_path
 
 
-async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_in(project):
+@pytest.fixture
+def platform_tools() -> None:
+    try:
+        sbf_check(PLATFORM_TOOLS_VERSION)
+    except PlatformToolsMissing as exc:
+        pytest.skip(str(exc))
+
+
+async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_in(
+    project, platform_tools
+):
     """Select a package, scaffold it, and compile it, in the order a run does.
 
     The compile is the check that the feature wiring, the manifest edits, and the pinned crate
