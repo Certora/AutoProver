@@ -35,9 +35,13 @@ differently:
   `solana-sysvar`), not on `Sysvar`. Import that trait to call it.
 - The sysvar's address is `Clock::id()`, from `solana_sysvar_id::SysvarId`.
 
-Current programs usually read sysvars only through the syscalls (`Clock::get()`, `Rent::get()`), and
-stake history through `StakeHistorySysvar`, whose generic `sol_get_sysvar` read is modelled too. A
+Current programs usually read sysvars only through the syscalls (`Clock::get()`, `Rent::get()`). A
 handler that reads them that way needs no account at all.
+
+Stake history is different. `StakeHistorySysvar` reads through the generic `sol_get_sysvar`, and
+the Prover models that call only for the clock and rent ids: for any other sysvar it returns an
+unconstrained status and writes nothing into the output buffer. A value read that way is not the
+runtime's, so a property that depends on a stake-history entry is a skip naming that read.
 
 **What still needs care: `Rent::minimum_balance` computes in `f64`.** The float builtins are
 summarized as unconstrained, so two calls with the same length can return different values. Do not
