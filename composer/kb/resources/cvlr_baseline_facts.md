@@ -102,7 +102,10 @@ nondet `AccountInfo`s.
 **Keep the account array alive to the end of the rule.** Build it in a `Box` and end the rule with
 `core::mem::forget(accounts);`. Without that, the array's `AccountInfo`s are dropped after your last
 assertion, the drop loop runs ahead of the vacuity check, and the rule is reported vacuous for code
-that is not the program's. It is the most common cause of `SANITY_FAILED` on this backend.
+that is not the program's. It is the most common cause of `SANITY_FAILED` on this backend. When
+something borrows the array for the rest of the rule, as an Anchor accounts struct from
+`try_accounts` does, `forget` cannot move it; leak it instead,
+`Box::leak(Box::new(cvlr_deserialize_nondet_accounts()))`, which is never dropped either.
 
 **A nondet account has a nondet data length, and that is what breaks rules.** The account machinery
 gives you unconstrained bytes *and* an unconstrained `data_len()`. Every deserializer the program

@@ -13,16 +13,17 @@ below are the example's (a `Deposit` struct with a `depositor` signer); use the 
 use anchor_lang::Accounts as _;          // the trait `try_accounts` is on
 use std::collections::BTreeSet;
 
-let accounts = Box::new(cvlr_deserialize_nondet_accounts());
-let mut rest: &[AccountInfo] = &accounts[..];
+// Leaked, not boxed and forgotten: the validated struct borrows the array for as long as its
+// `AccountInfo`s live, so a later `forget(accounts)` would move it while borrowed (E0505).
+let accounts: &[AccountInfo] = Box::leak(Box::new(cvlr_deserialize_nondet_accounts()));
+let mut rest = accounts;
 let mut bumps = crate::DepositBumps::default();
 let mut reallocs: BTreeSet<Pubkey> = BTreeSet::new();
-let mut ix = crate::Deposit::try_accounts(&crate::ID, &mut rest, &[], &mut bumps, &mut reallocs).unwrap();
+let ix = crate::Deposit::try_accounts(&crate::ID, &mut rest, &[], &mut bumps, &mut reallocs).unwrap();
 
 let signed = ix.depositor.is_signer;   // what the constraint promised, read through the validated struct
 clog!(signed as u64);
 cvlr_assert!(signed);
-core::mem::forget(accounts);
 ```
 
 The assertion holds on every execution validation accepts, which is the rejection property read the
@@ -52,6 +53,7 @@ hold a struct with the *same field names* and `Pubkey` types, for Rust clients, 
 bumps type inside one is the specific mistake to avoid. Nothing a rule builds
 lives in there.
 
-**You never construct a bumps value.** Anchor writes a `Default` impl covering every field of it, so
-`Default::default()` is not a convenience that usually works — it is always valid, and the fields it
-fills are the cached PDA bumps, which a rule driving a handler directly has no way to know anyway.
+**You never construct a bumps value field by field.** Anchor writes a `Default` impl for it, and
+`Default::default()` always type-checks. What it is not is the canonical bump: it sets every cached
+PDA bump to `u8::MAX`. A handler that stores a bump from `ctx.bumps` therefore stores 255 under such
+a rule, so a property about a stored bump cannot be stated through it; say so rather than assert it.
