@@ -56,6 +56,27 @@ def _conf_has_split_rules(job_spec: ProverJobSpec) -> bool:
     return bool(data.get("split_rules"))
 
 
+#: How many times a submission is tried in all when the server fails it transiently.
+SUBMISSION_ATTEMPTS = 3
+#: Seconds before the first resubmission; each later one waits that much longer again.
+SUBMISSION_RETRY_DELAY_S = 10
+
+#: Server responses that create no job and that a resubmission can clear: a unique-key race
+#: between concurrent submissions (two jobs registering the same contract record at once), and a
+#: gateway that did not reach the server.
+_TRANSIENT_SUBMISSION_MARKERS = (
+    "UniqueViolationError",
+    "Error Status:: 502",
+    "Error Status:: 503",
+    "Error Status:: 504",
+)
+
+
+def _is_transient_submission_error(output: str) -> bool:
+    """True when certoraRun's output reports a server failure a resubmission can clear."""
+    return any(marker in output for marker in _TRANSIENT_SUBMISSION_MARKERS)
+
+
 class CloudProverRunner(ProverRunner):
     """
     Cloud job manager for prover execution.
@@ -698,6 +719,38 @@ class CloudProverRunner(ProverRunner):
             transformed_result=None,
         )
 
+    async def _run_certora_once(self, cmd: list[str]) -> tuple[str, int]:
+        """Run one certoraRun submission; its combined output and return code."""
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=self.project_root,
+        )
+        stdout, _ = await process.communicate()
+        return (stdout.decode("utf-8") if stdout else ""), (process.returncode or -1)
+
+    async def _run_certora_with_retry(
+        self, cmd: list[str], contract_name: str
+    ) -> tuple[str, int]:
+        """Run a certoraRun submission, resubmitting after a transient server error
+        (``_is_transient_submission_error``) up to ``SUBMISSION_ATTEMPTS`` times in all."""
+        output, return_code = await self._run_certora_once(cmd)
+        for attempt in range(2, SUBMISSION_ATTEMPTS + 1):
+            if extract_job_url(output) or not _is_transient_submission_error(output):
+                break
+            delay = SUBMISSION_RETRY_DELAY_S * (attempt - 1)
+            log_with_contract(
+                self.component,
+                "info",
+                contract_name,
+                f"Transient server error on submission; retrying in {delay}s "
+                f"(attempt {attempt}/{SUBMISSION_ATTEMPTS})",
+            )
+            await asyncio.sleep(delay)
+            output, return_code = await self._run_certora_once(cmd)
+        return output, return_code
+
     async def _submit_new_job(
         self, job_spec: ProverJobSpec, cache_key: str
     ) -> SubmissionResult:
@@ -738,19 +791,8 @@ class CloudProverRunner(ProverRunner):
 
             self.log(f"Executing: {' '.join(cmd)}")
 
-            # Execute command
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=self.project_root,
-            )
-
-            stdout, _ = await process.communicate()
-            output = stdout.decode("utf-8") if stdout else ""
-
+            output, return_code = await self._run_certora_with_retry(cmd, job_spec.contract_name)
             duration = time.time() - start_time
-            return_code: int = process.returncode or -1
 
             # Check for symlink creation error which is not a real failure
             # This can appear in either stdout or stderr

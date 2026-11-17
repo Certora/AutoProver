@@ -564,12 +564,29 @@ class RuleFeedback(BaseModel):
     suggested_fix: str | None = None
 
 
+class ConfRunRecord(BaseModel):
+    """One conf's Prover run: the jobs it ran as, or why it returned no results."""
+    conf: str = Field(description="Project-relative path of the conf.")
+    prover_links: list[str] = Field(
+        default_factory=list,
+        description="One link per Prover job the run made; several when the conf splits its rules "
+        "into per-rule jobs (`split_rules`). Empty when no job was made.",
+    )
+    error: str | None = Field(
+        default=None, description="Why the run returned no results, when it did not.",
+    )
+
+
 class ConfCoverage(BaseModel):
     """Whether the confs that verify one spec, taken together, check every rule of it on every
     method. A gap is closed by a completing run, and this records what was missing before it."""
     spec: str = Field(description="Project-relative path of the spec.")
     confs: list[str] = Field(
         default_factory=list, description="Project-relative paths of the confs that verify the spec.",
+    )
+    runs: list[ConfRunRecord] = Field(
+        default_factory=list,
+        description="The Prover run of each conf in `confs` that was run, in the same order.",
     )
     rules_unchecked_before_completion: list[RuleName] = Field(
         default_factory=list,
@@ -681,8 +698,15 @@ class Refused(BaseModel):
 
 
 class Interrupted(BaseModel):
-    """The run was stopped from outside — a cancel, or the stall guard — before it finished."""
+    """The run was stopped from outside — cancelled, or interrupted from the keyboard — before it
+    finished."""
     kind: Literal["interrupted"] = "interrupted"
+
+
+class OutOfBudget(BaseModel):
+    """The run spent the time or token budget it was started with before it finished."""
+    kind: Literal["out_of_budget"] = "out_of_budget"
+    budget: Literal["time", "token"]
 
 
 class InternalError(BaseModel):
@@ -691,16 +715,18 @@ class InternalError(BaseModel):
     kind: Literal["internal_error"] = "internal_error"
 
 
-type RunFailure = Refused | Interrupted | InternalError
-"""Why a run produced no report of its own. A report carrying one has no properties, rules or groups:
-it stands in for the report the run did not get to write."""
+type RunFailure = Refused | Interrupted | OutOfBudget | InternalError
+"""Why a run produced no report of its own. A report carrying one stands in for the report the run
+did not write: it names the contract, backend and run mode, and has no properties, rules or
+groups."""
 
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
     schema_version: Literal[
-        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9", "3.10", "4.0", "4.1"
-    ] = "4.1"
+        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9", "3.10", "4.0", "4.1",
+        "4.2",
+    ] = "4.2"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written
@@ -779,6 +805,8 @@ class AutoProverReport(BaseModel):
     scene: SceneAssessment | None = None
     #: Mutation testing of the specs (evaluate run, when mutation ran). None otherwise.
     mutation: MutationReport | None = None
-    #: Set only on the report written in place of one the run failed to produce; every other field
-    #: is then empty. ``None`` on every report a run built, and on reports written before schema 3.9.
+    #: Set only on the report written in place of one the run did not produce — because it ended
+    #: before its report phase, or because building its report failed. That report carries the
+    #: run's identity and nothing else. ``None`` on every report a run built, and on reports written
+    #: before schema 3.9.
     run_failure: RunFailure | None = Field(default=None, discriminator="kind")

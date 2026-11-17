@@ -18,11 +18,20 @@ StateVar = TypeVar("StateVar", default=MessagesState, bound=MessagesState)
 BUDGET_PRESSURE_THRESHOLD = 0.8
 
 
+type ConstraintType = Literal["time", "token"]
+
+
 class BudgetExceeded(Exception):
     """Hard budget stop, raised cooperatively (from a monitor, between agent
     turns) once the active budget is blown. Only monitors given an
     ``on_overbudget`` callback raise; the workflow that launched the agent
     catches this and converts it into its give-up result."""
+
+    def __init__(self, sort: ConstraintType):
+        super().__init__(
+            f"{constraint_sort_to_noun(sort)} budget exhausted; the agent was cooperatively terminated."
+        )
+        self.sort: ConstraintType = sort
 
 
 class BudgetPressureAbort(Exception):
@@ -30,7 +39,6 @@ class BudgetPressureAbort(Exception):
     (e.g. a feedback judge) whose output is worthless once the main agent is
     in its wrap-up window. Caught by the tool that launched the agent."""
 
-type ConstraintType = Literal["time", "token"]
 
 class _ConstraintWarnings(TypedDict):
     time: ReadOnly[str]
@@ -290,9 +298,7 @@ def constraint_sort_to_noun(s: ConstraintType) -> LiteralString:
 
 def raise_budget_exceeded(sort: ConstraintType) -> Never:
     """``on_overbudget`` callback for agents that opt into the hard stop."""
-    raise BudgetExceeded(
-        f"{constraint_sort_to_noun(sort)} budget exhausted; the agent was cooperatively terminated."
-    )
+    raise BudgetExceeded(sort)
 
 
 def budget_pressure() -> bool:

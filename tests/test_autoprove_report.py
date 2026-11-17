@@ -39,7 +39,7 @@ from composer.spec.source.report.grouping import (
 )
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
-    AutoProverReport, ConfCoverage, ConfinedBuilds, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
+    AutoProverReport, ConfCoverage, ConfinedBuilds, ConfRunRecord, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
     AppliedEditRecord, GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel,
     Outcome, PropertyCoverage, PropertyGroup, RuleFeedback, RuleVerdict, SeverityTier, SkippedClaim,
     SourceEditRecord, SpecCoverageScore, UnconfinedBuilds, DeprioritizedProperty, Prioritization,
@@ -1578,6 +1578,10 @@ def _evaluate_report() -> AutoProverReport:
             rules_unchecked_before_completion=["users_own_rule"],
             methods_excluded={"revert_char": ["withdraw(uint256)"]},
             completion_conf="certora/confs/c-evaluate-completion.conf", complete=True,
+            runs=[ConfRunRecord(
+                conf="certora/confs/c.conf",
+                prover_links=["https://prover.certora.com/output/1/a", "https://prover.certora.com/output/1/b"],
+            )],
         )],
         "coverage_scores": [SpecCoverageScore(
             name="static_coverage", score=0.625, views={"scene": 0.5, "main_contract": 0.75},
@@ -1585,9 +1589,9 @@ def _evaluate_report() -> AutoProverReport:
     })
 
 
-def test_schema_4_1_round_trips():
+def test_schema_4_2_round_trips():
     report = _evaluate_report()
-    assert report.schema_version == "4.1"
+    assert report.schema_version == "4.2"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
@@ -1595,6 +1599,13 @@ def test_schema_4_1_round_trips():
     assert [r.name for r in reloaded.rules if r.ref not in referenced] == ["users_own_rule"]
     assert reloaded.properties[1].coverage is not None
     assert reloaded.properties[1].coverage.added_by_evaluator
+    assert len(reloaded.conf_coverage[0].runs[0].prover_links) == 2
+
+
+def test_conf_coverage_without_runs_loads() -> None:
+    # Reports written before schema 4.2 have no `runs`.
+    cov = ConfCoverage.model_validate({"spec": "s.spec", "confs": ["c.conf"], "complete": False})
+    assert cov.runs == []
 
 
 def test_prioritization_round_trips():

@@ -13,11 +13,12 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from composer.diagnostics.budget import BudgetExceeded
 from composer.pipeline.refusal import RunRefusal
 from composer.spec.artifacts import REPORT_FILE, write_report_file
 from composer.spec.source.report.schema import (
-    AutoProverReport, CoverageReport, InternalError, Interrupted, Refused, ReportBackend,
-    RunFailure,
+    AutoProverReport, CoverageReport, InternalError, Interrupted, OutOfBudget, Refused,
+    ReportBackend, RunFailure,
 )
 
 _log = logging.getLogger(__name__)
@@ -25,18 +26,19 @@ _log = logging.getLogger(__name__)
 
 def run_failure(exc: BaseException) -> RunFailure:
     """How ``exc``, having ended a run, is reported. Within an exception group, a refusal wins over
-    an interruption, and an interruption over anything else: a refusal is the one cause the reader
-    can act on, and is often what cancelled the group's other tasks."""
+    a budget stop, a budget stop over an interruption, and an interruption over anything else: a
+    refusal is the one cause the reader can act on and is often what cancelled the group's other
+    tasks, and a budget stop cancels them too."""
     if isinstance(exc, BaseExceptionGroup):
-        refusals, rest = exc.split(RunRefusal)
-        if refusals is not None:
-            return run_failure(_first_leaf(refusals))
-        if rest is not None and rest.subgroup((KeyboardInterrupt, asyncio.CancelledError)) is not None:
-            return Interrupted()
+        for kind in (RunRefusal, BudgetExceeded, (KeyboardInterrupt, asyncio.CancelledError)):
+            if (matching := exc.subgroup(kind)) is not None:
+                return run_failure(_first_leaf(matching))
         return InternalError()
     match exc:
         case RunRefusal():
             return Refused(message=str(exc))
+        case BudgetExceeded(sort=sort):
+            return OutOfBudget(budget=sort)
         case KeyboardInterrupt() | asyncio.CancelledError():
             return Interrupted()
         case _:
@@ -65,7 +67,7 @@ def failure_report(
             total_groups=0,
             properties_per_group_min=0,
             properties_per_group_max=0,
-            property_coverage_complete=True,
+            property_coverage_complete=False,
         ),
         run_failure=failure,
     )
@@ -83,14 +85,14 @@ def reporting_run_failure(
     report. One the body wrote is kept even if the body then fails, since it is the run's own
     account and a teardown fault does not make it wrong.
 
-    Neither ``GeneratorExit`` nor ``SystemExit`` is a failure of the run: the first is how an
-    abandoned generator is closed, the second a deliberate exit that has already said why.
+    ``GeneratorExit`` is not a failure of the run: it is how a generator wrapped around the run is
+    closed when its consumer abandons it.
     """
     report = report_dir / REPORT_FILE
     report.unlink(missing_ok=True)
     try:
         yield
-    except (GeneratorExit, SystemExit):
+    except GeneratorExit:
         raise
     except BaseException as exc:
         if not report.exists():

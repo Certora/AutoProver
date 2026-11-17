@@ -244,7 +244,10 @@ async def prepare_workspace(
     )
     fresh = resolved_in.member(member.name) or member
     if fresh.lib is None:
-        raise PreflightFailed(f"{fresh.name} has no library target to build")
+        raise PreflightFailed(
+            f"{fresh.name} has no library target to build. Point the run at the program's crate, "
+            "which needs a [lib] target."
+        )
 
     sources = CvlrSources.of(resolved_in)
     # The backstop behind the scaffold's gate. That gate reads the manifests and the pre-scaffold

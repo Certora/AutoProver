@@ -32,7 +32,7 @@ import pathlib
 import re
 import tempfile
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import AsyncIterator, Awaitable, Callable, Protocol, cast
 
 from graphcore.tools.vfs import DirBackend
@@ -313,20 +313,23 @@ async def cvlr_executor(args: CvlrArgs, summary: RunSummary) -> AsyncIterator[Cv
     to go through ``sys.argv`` to reach the run.
 
     Whatever ends the run before it writes its report — preflight refusing the project included —
-    leaves a report saying so in its place.
+    leaves a report saying so in its place. Setup is covered here; the run itself is covered by
+    :func:`~composer.pipeline.cli.cli_pipeline`, inside the awaited runner, because a TUI catches
+    the run's exception in its worker and it never reaches this context manager's caller.
     """
     project_root = pathlib.Path(args.project_root).resolve()
     main_source, identifier = parse_main_program(args.main_contract)
     run_mode = resolve_run_mode(args.run_mode, CVLR_RUN_MODES)
-    with reporting_run_failure(
-        under_project(project_root, CVLR_REPORT_DIR),
-        contract_name=identifier, backend="prover", run_mode=run_mode.value,
-    ):
-        async with _executor(
-            args, summary, project_root=project_root, main_source=main_source,
-            identifier=identifier, run_mode=run_mode,
-        ) as runner:
-            yield runner
+    async with AsyncExitStack() as stack:
+        with reporting_run_failure(
+            under_project(project_root, CVLR_REPORT_DIR),
+            contract_name=identifier, backend="prover", run_mode=run_mode.value,
+        ):
+            runner = await stack.enter_async_context(_executor(
+                args, summary, project_root=project_root, main_source=main_source,
+                identifier=identifier, run_mode=run_mode,
+            ))
+        yield runner
 
 
 @asynccontextmanager
@@ -380,6 +383,8 @@ async def _executor(
             task_handler=fact,
             design_doc_phase=CvlrPhase.DISCOVER_DESIGN_DOC,
             ecosystem=SOLANA,
+            report_dir=CVLR_REPORT_DIR,
+            report_backend="prover",
             at_exit=_usage_exit_logger(summary, selected, run_mode),
             run_mode=run_mode,
             workflow="cvlr",

@@ -4,7 +4,7 @@ import json
 import sys
 import pathlib
 import enum
-from contextlib import asynccontextmanager
+from contextlib import AbstractContextManager, asynccontextmanager
 
 import asyncio
 from dataclasses import dataclass
@@ -31,11 +31,14 @@ from composer.spec.artifacts import ArtifactIdentifier
 from composer.spec.system_model import FeatureUnit, BaseApplication
 from composer.spec.service_host import ModelProvider
 from composer.spec.types import SourceIdentifier
+from composer.spec.gen_types import under_project
+from composer.spec.source.report.schema import ReportBackend
 from composer.pipeline.ecosystem import Ecosystem
 from .core import PipelineBackend, run_pipeline
 from .property_set import PropertySet
 from .property_generators import resolve_property_generator
 from .run_mode import NON_FORMALIZING_MODES, RunMode
+from .run_failure import reporting_run_failure
 from .plugins import applicable_plugin_manifest
 from .run_tags import AutoProveCacheTags, CACHE_ROOT_RECORD
 from composer.io.multi_job import HandlerFactory, run_task, TaskInfo
@@ -318,232 +321,251 @@ async def cli_pipeline[P: enum.Enum, H, App: BaseApplication, Main, U: FeatureUn
     task_handler: HandlerFactory[P, H],
     design_doc_phase: P,
     ecosystem: Ecosystem[App, Main, U],
+    report_dir: pathlib.Path,
+    report_backend: ReportBackend,
     at_exit: AtExit | None = None,
     run_mode: RunMode = RunMode.COMPREHENSIVE,
     **metadata
 ) -> AsyncIterator[tuple[StagedPipeline, Continuation[P, H, App, Main, U]]]:
+    """Set up the run's services and yield the staged pipeline with its continuation.
+
+    ``report_dir`` is where the run's ``report.json`` goes, relative to the project root. If the
+    run ends on an exception without writing one, a report saying why is written there instead
+    (:func:`~composer.pipeline.run_failure.reporting_run_failure`). That covers the caller's body
+    too, which is why a caller has to enter this inside the coroutine that catches the run's
+    failure, not around it.
+    """
     project_root = pathlib.Path(args.project_root).resolve()
     main_contract_path, contract_name = args.main_contract.split(":", 1)
 
-    # Resolve the budget, the property set and the property generator up front so a malformed
-    # or uninstalled one fails before any services spin up.
-    budget = resolve_budget(args.budget, args.budget_total)
-    predefined = (
-        PropertySet.load(pathlib.Path(args.predefined_properties))
-        if args.predefined_properties is not None else None
-    )
-    property_generator = resolve_property_generator(args.property_generator)
+    def reporting_failure_of(contract_name: str) -> AbstractContextManager[None]:
+        return reporting_run_failure(
+            under_project(project_root, report_dir), contract_name=contract_name,
+            backend=report_backend, run_mode=run_mode.value,
+        )
 
-    # A relative path is resolved against the *project root*, not the process's working directory.
-    # Both readings agree whenever the old one worked — running from inside the project makes them
-    # the same directory — and they diverge only where it used to fail outright, which is running
-    # the CLI from anywhere else. That is the normal case for a checkout you are not sitting in.
-    full_contract_path = (project_root / main_contract_path).resolve()
-    if not full_contract_path.is_relative_to(project_root):
-        raise ValueError(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
+    with reporting_failure_of(contract_name):
+        # Resolve the budget, the property set and the property generator up front so a malformed
+        # or uninstalled one fails before any services spin up.
+        budget = resolve_budget(args.budget, args.budget_total)
+        predefined = (
+            PropertySet.load(pathlib.Path(args.predefined_properties))
+            if args.predefined_properties is not None else None
+        )
+        property_generator = resolve_property_generator(args.property_generator)
 
-    relative_path = str(full_contract_path.relative_to(project_root))
+        # A relative path is resolved against the *project root*, not the process's working directory.
+        # Both readings agree whenever the old one worked — running from inside the project makes them
+        # the same directory — and they diverge only where it used to fail outright, which is running
+        # the CLI from anywhere else. That is the normal case for a checkout you are not sitting in.
+        full_contract_path = (project_root / main_contract_path).resolve()
+        if not full_contract_path.is_relative_to(project_root):
+            raise ValueError(f"Invalid path: {full_contract_path} doesn't appear in project root {project_root}")
 
-    relative_path, contract_name = verification_target(
-        project_root, relative_path, contract_name, run_mode
-    )
+        relative_path = str(full_contract_path.relative_to(project_root))
 
-    # Set up services.
-    #
-    # Reached through the module rather than a ``from … import get_provider_for``, and that is
-    # load-bearing rather than style: both the fake-LLM tape and the tape *recorder* install
-    # themselves by replacing ``composer.llm.registry.get_provider_for``, and a name bound here at
-    # import time keeps pointing at the original. The replay symptom is a real (paid) model in a
-    # test that believes it is taped; the recording symptom is "no LLM responses captured".
-    tiered = llm_registry.get_provider_for(tiered=args)
-    reject_unpriced_budget(budget, {
-        args.heavy_model: tiered.heavy.price_provider,
-        args.lite_model: tiered.lite.price_provider,
-    })
+        relative_path, contract_name = verification_target(
+            project_root, relative_path, contract_name, run_mode
+        )
 
-    semaphore = asyncio.Semaphore(args.max_concurrent)
-    cpu_semaphore = asyncio.Semaphore(args.max_cpu_tasks)
+    # A library run has swapped in its harness by now, and every report of the run names that.
+    with reporting_failure_of(contract_name):
+        # Set up services.
+        #
+        # Reached through the module rather than a ``from … import get_provider_for``, and that is
+        # load-bearing rather than style: both the fake-LLM tape and the tape *recorder* install
+        # themselves by replacing ``composer.llm.registry.get_provider_for``, and a name bound here at
+        # import time keeps pointing at the original. The replay symptom is a real (paid) model in a
+        # test that believes it is taped; the recording symptom is "no LLM responses captured".
+        tiered = llm_registry.get_provider_for(tiered=args)
+        reject_unpriced_budget(budget, {
+            args.heavy_model: tiered.heavy.price_provider,
+            args.lite_model: tiered.lite.price_provider,
+        })
 
-    model = get_model()
-    text_log, events_log = setup_autoprove_logging(project_root, thread_id)
-    print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
-    print(f"Selected run id: {summary.run_id}")
-    install_run_summary(summary)
-    # Run-wide retry floor: transient provider failures (as classified by the
-    # provider itself) resume any graph in the run from its last checkpoint
-    # instead of killing the whole pipeline. Installed once here — contextvar
-    # inheritance carries it into every task the run spawns.
-    install_retry_policy(DefaultRetryPolicy(tiered.provider_service.should_retry))
+        semaphore = asyncio.Semaphore(args.max_concurrent)
+        cpu_semaphore = asyncio.Semaphore(args.max_cpu_tasks)
 
-    disc_cache_ns: tuple[str, ...] | None = (
-        user_ns(args.cache_ns, "discovery",
-                 discovery_cache_key(str(project_root), relative_path, contract_name))
-        if args.cache_ns is not None else None
-    )
+        model = get_model()
+        text_log, events_log = setup_autoprove_logging(project_root, thread_id)
+        print(f"autoprove logs: {text_log}\n           events: {events_log}", file=sys.stderr)
+        print(f"Selected run id: {summary.run_id}")
+        install_run_summary(summary)
+        # Run-wide retry floor: transient provider failures (as classified by the
+        # provider itself) resume any graph in the run from its last checkpoint
+        # instead of killing the whole pipeline. Installed once here — contextvar
+        # inheritance carries it into every task the run spawns.
+        install_retry_policy(DefaultRetryPolicy(tiered.provider_service.should_retry))
 
-    init_source = SourceFields(
-        relative_path=relative_path,
-        contract_name=SourceIdentifier(contract_name),
-        forbidden_read=ecosystem.language.default_forbidden_read,
-        project_root=str(project_root)
-    )
+        disc_cache_ns: tuple[str, ...] | None = (
+            user_ns(args.cache_ns, "discovery",
+                     discovery_cache_key(str(project_root), relative_path, contract_name))
+            if args.cache_ns is not None else None
+        )
 
-    async with (
-        standard_connections(provider=tiered.provider_service, embedder=DefaultEmbedder(model)) as conns,
-        async_tool_context(),
-        thread_logger(conns.store, {
-            "root_thread_id": thread_id,
-            "discovery_cache_root": list(disc_cache_ns) if disc_cache_ns is not None else None,
-            "memory_ns": args.memory_ns if args.memory_ns is not None else thread_id,
-            **metadata
-        }, default_logging_ns(uid=None), run_id=summary.run_id) as data_logger
-    ):
-        try:
-            memory_ns = args.memory_ns
-            if memory_ns:
-                memory_ns = get_uid() + "/" + memory_ns
+        init_source = SourceFields(
+            relative_path=relative_path,
+            contract_name=SourceIdentifier(contract_name),
+            forbidden_read=ecosystem.language.default_forbidden_read,
+            project_root=str(project_root)
+        )
 
-            models = ModelProvider(
-                heavy_model=tiered.heavy,
-                lite_model=tiered.lite,
-                checkpointer=conns.checkpointer,
-            )
+        async with (
+            standard_connections(provider=tiered.provider_service, embedder=DefaultEmbedder(model)) as conns,
+            async_tool_context(),
+            thread_logger(conns.store, {
+                "root_thread_id": thread_id,
+                "discovery_cache_root": list(disc_cache_ns) if disc_cache_ns is not None else None,
+                "memory_ns": args.memory_ns if args.memory_ns is not None else thread_id,
+                **metadata
+            }, default_logging_ns(uid=None), run_id=summary.run_id) as data_logger
+        ):
+            try:
+                memory_ns = args.memory_ns
+                if memory_ns:
+                    memory_ns = get_uid() + "/" + memory_ns
 
-            if args.system_doc is None:
-                disc_ctx = WorkflowContext.create(
-                    conns.memory,
-                    thread_id=thread_id,
-                    store=conns.store,
-                    recursion_limit=args.recursion_limit,
-                    memory_namespace=memory_ns,
-                    cache_namespace=disc_cache_ns
-                )
-                system_doc = await run_task(
-                    factory=task_handler,
-                    info=TaskInfo(
-                        label="Design Doc Discovery",
-                        phase=design_doc_phase,
-                        task_id=DESIGN_DOC_DISCOVERY_TASK_ID
-                    ),
-                    semaphore=semaphore,
-                    fn=lambda: \
-                        resolve_design_doc(
-                            source=init_source,
-                            disc_ctx=disc_ctx,
-                            models=models,
-                            uploader=conns.uploader
-                        )
-                )
-            else:
-                system_doc = pathlib.Path(args.system_doc)
-
-            # ``system_doc`` is None only when discovery found nothing: run source-only.
-            if system_doc is not None:
-                system_doc_content = await conns.uploader.get_document(system_doc)
-                if system_doc_content is None:
-                    raise ValueError(f"Fatal error, failed to upload system doc: {system_doc}")
-            else:
-                system_doc_content = None
-
-            root_key = root_cache_key(
-                project_root=str(project_root),
-                contract_name=contract_name,
-                relative_path=relative_path,
-                system_doc_path=system_doc,
-                tool_version=autoprover_version(),
-            )
-            cache_root = user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
-
-            threat_model = (
-                await conns.uploader.get_document(pathlib.Path(threat_path))
-                if (threat_path := args.threat_model) is not None else None
-            )
-            # Gathered rather than awaited one at a time: a swept directory of PDFs is
-            # one upload round trip each. ``gather`` preserves order, which the prompt
-            # and the bug-analysis cache key both depend on.
-            context_paths = resolve_document_paths(args.extra_context)
-            loaded = await asyncio.gather(*(conns.uploader.get_document(p) for p in context_paths))
-            extra_context: list[Document] = []
-            for path, doc in zip(context_paths, loaded):
-                if doc is None:
-                    raise ValueError(f"Fatal error, failed to read extra context: {path}")
-                extra_context.append(doc)
-            if budget is not None:
-                await data_logger("budget", {
-                    "total": budget.total, "caps": dict(budget.caps),
-                })
-
-            full_source = SourceCode(
-                content=system_doc_content,
-                contract_name=init_source.contract_name,
-                forbidden_read=init_source.forbidden_read,
-                project_root=init_source.project_root,
-                relative_path=init_source.relative_path
-            )
-
-            async def cont[FormT: BackendResult, A: ArtifactIdentifier, Pre](
-                env: ServiceHost,
-                backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
-            ) -> CorePipelineResult[FormT]:
-                await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
-                    cache_root=list(cache_root) if cache_root is not None else None,
-                    contract_name=str(contract_name),
-                    memory_ns=memory_ns,
-                    plugins=applicable_plugin_manifest(ecosystem.unit_type),
-                    threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
-                    extra_context_digests=[d.to_digest() for d in extra_context],
-                    interactive=args.interactive,
-                    max_bug_rounds=args.max_bug_rounds,
-                    run_mode=run_mode.value,
-                    property_generator=property_generator,
-                ).model_dump())
-                full_ctx = WorkflowContext.create(
-                    services=conns.memory,
-                    thread_id=thread_id,
-                    cache_namespace=cache_root,
-                    memory_namespace=memory_ns,
-                    recursion_limit=args.recursion_limit,
-                    store=conns.store
-                )
-                run = PipelineRun(
-                    ctx=full_ctx,
-                    source=full_source,
-                    env=env,
-                    run_mode=run_mode,
-                    property_generator=property_generator,
-                    _agent_semaphore=semaphore,
-                    _cpu_semaphore=cpu_semaphore,
-                    _handler_factory=task_handler
-                )
-                return await run_pipeline(
-                    backend=backend,
-                    run=run,
-                    interactive=args.interactive,
-                    max_bug_rounds=args.max_bug_rounds,
-                    threat_model=threat_model,
-                    extra_context=extra_context,
-                    budget=budget,
-                    time_budget_s=args.time_budget,
-                    ecosystem=ecosystem,
-                    predefined=predefined,
-                    stop_after_properties=args.stop_after_properties,
+                models = ModelProvider(
+                    heavy_model=tiered.heavy,
+                    lite_model=tiered.lite,
+                    checkpointer=conns.checkpointer,
                 )
 
-            yield (StagedPipeline(
-                conns=conns, llm_models=models, logger=data_logger,
-                embed_model=model,
-                root_key=root_key,
-                source=SourceCode(
+                if args.system_doc is None:
+                    disc_ctx = WorkflowContext.create(
+                        conns.memory,
+                        thread_id=thread_id,
+                        store=conns.store,
+                        recursion_limit=args.recursion_limit,
+                        memory_namespace=memory_ns,
+                        cache_namespace=disc_cache_ns
+                    )
+                    system_doc = await run_task(
+                        factory=task_handler,
+                        info=TaskInfo(
+                            label="Design Doc Discovery",
+                            phase=design_doc_phase,
+                            task_id=DESIGN_DOC_DISCOVERY_TASK_ID
+                        ),
+                        semaphore=semaphore,
+                        fn=lambda: \
+                            resolve_design_doc(
+                                source=init_source,
+                                disc_ctx=disc_ctx,
+                                models=models,
+                                uploader=conns.uploader
+                            )
+                    )
+                else:
+                    system_doc = pathlib.Path(args.system_doc)
+
+                # ``system_doc`` is None only when discovery found nothing: run source-only.
+                if system_doc is not None:
+                    system_doc_content = await conns.uploader.get_document(system_doc)
+                    if system_doc_content is None:
+                        raise ValueError(f"Fatal error, failed to upload system doc: {system_doc}")
+                else:
+                    system_doc_content = None
+
+                root_key = root_cache_key(
+                    project_root=str(project_root),
+                    contract_name=contract_name,
+                    relative_path=relative_path,
+                    system_doc_path=system_doc,
+                    tool_version=autoprover_version(),
+                )
+                cache_root = user_ns(args.cache_ns, root_key) if args.cache_ns is not None else None
+
+                threat_model = (
+                    await conns.uploader.get_document(pathlib.Path(threat_path))
+                    if (threat_path := args.threat_model) is not None else None
+                )
+                # Gathered rather than awaited one at a time: a swept directory of PDFs is
+                # one upload round trip each. ``gather`` preserves order, which the prompt
+                # and the bug-analysis cache key both depend on.
+                context_paths = resolve_document_paths(args.extra_context)
+                loaded = await asyncio.gather(*(conns.uploader.get_document(p) for p in context_paths))
+                extra_context: list[Document] = []
+                for path, doc in zip(context_paths, loaded):
+                    if doc is None:
+                        raise ValueError(f"Fatal error, failed to read extra context: {path}")
+                    extra_context.append(doc)
+                if budget is not None:
+                    await data_logger("budget", {
+                        "total": budget.total, "caps": dict(budget.caps),
+                    })
+
+                full_source = SourceCode(
                     content=system_doc_content,
                     contract_name=init_source.contract_name,
                     forbidden_read=init_source.forbidden_read,
                     project_root=init_source.project_root,
                     relative_path=init_source.relative_path
                 )
-            ), cont)
-        finally:
-            if at_exit is not None:
-                try:
-                    await at_exit(init_source, data_logger)
-                except Exception:
-                    pass
+
+                async def cont[FormT: BackendResult, A: ArtifactIdentifier, Pre](
+                    env: ServiceHost,
+                    backend: PipelineBackend[P, FormT, H, A, U, Main, App, Pre],
+                ) -> CorePipelineResult[FormT]:
+                    await data_logger(CACHE_ROOT_RECORD, AutoProveCacheTags(
+                        cache_root=list(cache_root) if cache_root is not None else None,
+                        contract_name=str(contract_name),
+                        memory_ns=memory_ns,
+                        plugins=applicable_plugin_manifest(ecosystem.unit_type),
+                        threat_model_digest=threat_model.to_digest() if threat_model is not None else None,
+                        extra_context_digests=[d.to_digest() for d in extra_context],
+                        interactive=args.interactive,
+                        max_bug_rounds=args.max_bug_rounds,
+                        run_mode=run_mode.value,
+                        property_generator=property_generator,
+                    ).model_dump())
+                    full_ctx = WorkflowContext.create(
+                        services=conns.memory,
+                        thread_id=thread_id,
+                        cache_namespace=cache_root,
+                        memory_namespace=memory_ns,
+                        recursion_limit=args.recursion_limit,
+                        store=conns.store
+                    )
+                    run = PipelineRun(
+                        ctx=full_ctx,
+                        source=full_source,
+                        env=env,
+                        run_mode=run_mode,
+                        property_generator=property_generator,
+                        _agent_semaphore=semaphore,
+                        _cpu_semaphore=cpu_semaphore,
+                        _handler_factory=task_handler
+                    )
+                    return await run_pipeline(
+                        backend=backend,
+                        run=run,
+                        interactive=args.interactive,
+                        max_bug_rounds=args.max_bug_rounds,
+                        threat_model=threat_model,
+                        extra_context=extra_context,
+                        budget=budget,
+                        time_budget_s=args.time_budget,
+                        ecosystem=ecosystem,
+                        predefined=predefined,
+                        stop_after_properties=args.stop_after_properties,
+                    )
+
+                yield (StagedPipeline(
+                    conns=conns, llm_models=models, logger=data_logger,
+                    embed_model=model,
+                    root_key=root_key,
+                    source=SourceCode(
+                        content=system_doc_content,
+                        contract_name=init_source.contract_name,
+                        forbidden_read=init_source.forbidden_read,
+                        project_root=init_source.project_root,
+                        relative_path=init_source.relative_path
+                    )
+                ), cont)
+            finally:
+                if at_exit is not None:
+                    try:
+                        await at_exit(init_source, data_logger)
+                    except Exception:
+                        pass
