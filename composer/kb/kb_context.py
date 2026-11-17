@@ -211,32 +211,35 @@ def with_cvl_context(prompt: "PromptInput") -> "PromptInput":
 #: ``SKIP`` is ``record_skip``.
 type CvlrChannel = Literal["RULE", "SUMMARY", "EDIT", "CONF", "SKIP"]
 
-CVLR_RECIPES = RecipeSet[CvlrChannel](
+CVLR_SOLANA_RECIPES = RecipeSet[CvlrChannel](
     tool_name="get_cvlr_recipe",
     index_resource="cvlr_recipes_index.yaml",
     parse_index=lambda raw: IndexModel[CvlrChannel].model_validate(raw),
     index_template=KB_INDEX_TEMPLATE,
 )
 
-_CVLR_SPECS = (
+_CVLR_SOLANA_SPECS = (
     ContextSpec(
         title="CVLR and the Certora Solana Prover",
         loader=_resource_file_loader("cvlr_baseline_facts.md"),
     ),
 )
 
+#: CVLR on Solana only: the facts and recipes are about Solana accounts, CPIs and the Solana
+#: Prover, and do not hold for Soroban.
+#:
 #: For the author and the judge, which both have ``get_cvlr_recipe``. The legend names the author's
 #: tools, and the judge uses it to see where a fix was made.
-CVLR_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", recipes=CVLR_RECIPES, specs=_CVLR_SPECS)
+CVLR_SOLANA_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", recipes=CVLR_SOLANA_RECIPES, specs=_CVLR_SOLANA_SPECS)
 
 #: The same facts, without the recipe index, for an agent that cannot call ``get_cvlr_recipe``.
 #: The index tells its reader to fetch a recipe and names the author's tools.
-CVLR_FACTS_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", specs=_CVLR_SPECS)
+CVLR_SOLANA_FACTS_BUNDLE = KnowledgeBundle[CvlrChannel](label="CVLR", specs=_CVLR_SOLANA_SPECS)
 
 
-def with_cvlr_context(prompt: "PromptInput") -> "PromptInput":
-    return with_context(CVLR_BUNDLE, prompt)
+def with_cvlr_solana_context(prompt: "PromptInput") -> "PromptInput":
+    return with_context(CVLR_SOLANA_BUNDLE, prompt)
 
 
-def with_cvlr_facts(prompt: "PromptInput") -> "PromptInput":
-    return with_context(CVLR_FACTS_BUNDLE, prompt)
+def with_cvlr_solana_facts(prompt: "PromptInput") -> "PromptInput":
+    return with_context(CVLR_SOLANA_FACTS_BUNDLE, prompt)
