@@ -219,8 +219,8 @@ rolls back every account mutation. So a panicking path cannot violate an invaria
 surviving state for the invariant to be false about. Pruning those paths is not a gap in the
 analysis, it is the analysis agreeing with the runtime. A reachable panic is an *availability*
 concern, not a state-integrity one, and it is not a finding you can produce from a rule. The
-Prover's switch for reporting panics as violations is off in this backend's conf, and the author's
-config tool cannot turn it on.
+Prover's switch for reporting panics as violations is off by default, nothing in this backend turns
+it on, and the author's config tool cannot.
 
 So do not write a rule asserting a handler never panics, and do not report a panicking path as an
 attack. If a property in your batch asks for panic-freedom, skip it and say that a panic reverts, so
