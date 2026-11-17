@@ -91,8 +91,10 @@ Three things follow from a stand-in:
 * **A counterexample may use a value the real function never returns.** Before marking such a rule
   as expected to fail, show that the real function can return that value. Otherwise, add the
   guarantee that excludes it, under the previous paragraph's rule.
-* **Say what ran against it.** Name the stand-in in `rule_subjects` for every rule whose path
-  crosses it, and list its constraints in the commentary, each with where it comes from.
+* **Say what ran against it.** A rule's `rule_subjects` entry stays the program function it drives;
+  a stand-in munged in below that function is not its subject. For every rule whose path crosses
+  the stand-in, name the function it replaces in the commentary, and list the stand-in's
+  constraints, each with where it comes from.
 
 **When the function holding the time is a stand-in.** A stand-in can be the hot function itself. A
 `redirect_module` of a wide-integer module whose stand-in still computes a 256-bit division exactly
