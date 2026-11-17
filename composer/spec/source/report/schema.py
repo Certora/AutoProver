@@ -507,12 +507,29 @@ class RuleFeedback(BaseModel):
     suggested_fix: str | None = None
 
 
+class ConfRunRecord(BaseModel):
+    """One conf's Prover run: the jobs it ran as, or why it returned no results."""
+    conf: str = Field(description="Project-relative path of the conf.")
+    prover_links: list[str] = Field(
+        default_factory=list,
+        description="One link per Prover job the run made; several when the conf splits its rules "
+        "into per-rule jobs (`split_rules`). Empty when no job was made.",
+    )
+    error: str | None = Field(
+        default=None, description="Why the run returned no results, when it did not.",
+    )
+
+
 class ConfCoverage(BaseModel):
     """Whether the confs that verify one spec, taken together, check every rule of it on every
     method. A gap is closed by a completing run, and this records what was missing before it."""
     spec: str = Field(description="Project-relative path of the spec.")
     confs: list[str] = Field(
         default_factory=list, description="Project-relative paths of the confs that verify the spec.",
+    )
+    runs: list[ConfRunRecord] = Field(
+        default_factory=list,
+        description="The Prover run of each conf in `confs` that was run, in the same order.",
     )
     rules_unchecked_before_completion: list[RuleName] = Field(
         default_factory=list,
@@ -573,7 +590,7 @@ class Prioritization(BaseModel):
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4"] = "3.4"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5"] = "3.5"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written
