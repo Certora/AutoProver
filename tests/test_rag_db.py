@@ -180,6 +180,14 @@ class TestManualSections:
         assert len(hits) > 0
         assert hits[0].headers == ["CVL", "Invariants"]
 
+    async def test_headers_under_a_prefix(self, rag_db: ComposerRAGDB) -> None:
+        # A multipart section is listed once.
+        listed = await rag_db.manual_headers(["CVL", "Hooks"])
+        assert sorted(listed) == [["CVL", "Hooks"], ["CVL", "Hooks", "Syntax"]]
+        assert ["CVL", "Long Topic"] in await rag_db.manual_headers(["CVL"])
+        assert len(await rag_db.manual_headers(["CVL"])) == len(_TEST_CORPUS)
+        assert await rag_db.manual_headers(["Nonexistent"]) == []
+
 
 # ── Embedding / vector search tests ──
 

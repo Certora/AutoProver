@@ -42,15 +42,19 @@ giving it `cvlr_research` is the direction, not a second mount.
 different CVLR is refused at preflight.** That is the CVL arrangement: the Prover ships one CVL, and
 the language version is not a thing a project chooses. For CVLR it is a policy rather than a
 physical constraint, but the contract is the same. The reference set is
-[`composer/spec/cvlr/reference.py`](../composer/spec/cvlr/reference.py). Solana has three
+[`composer/spec/cvlr/reference.py`](../composer/spec/cvlr/reference.py). Solana has three SDK
 generations, because a chain crate is bound to one SDK line and each line has its own
 `AccountInfo`:
 
 | Generation | Core | `cvlr-solana`, `cvlr-solana-stake`, `cvlr-spl-token` |
 |---|---|---|
-| `solana-program` 1.18 (`SOLANA_V1_18`) | `cvlr` 0.6.2 | `cvlr-solana` 0.4.6 only |
-| `solana-program` 2.x (`SOLANA_V2`) | `cvlr` 0.6.2 | 0.5.1 |
-| `solana-*` 3.x (`SOLANA_V3`) | `cvlr` 0.6.2 | 0.6.0 |
+| `solana-program` 1.18 (`SOLANA_V1_18`) | `cvlr` 0.6.2 | `cvlr-solana` 0.4.7 only |
+| `solana-program` 2.x (`SOLANA_V2`) | `cvlr` 0.6.2 | 0.5.2 |
+| `solana-*` 3.x (`SOLANA_V3`) | `cvlr` 0.6.2 | 0.6.1 |
+
+It also has framework generations — jiminy and four Pinocchio lines — that pin the core alone and
+have the scaffold write a harness module in place of a chain crate. They add nothing to the API
+corpus: the producer documents only the generations that pin a chain crate, whose core is the same.
 
 Soroban has one, `cvlr-soroban` and `cvlr-soroban-derive` 0.4.0. The scaffold reads which generation
 the project is on and pins that set. What the run compiles is guaranteed equal to it, because
@@ -137,8 +141,9 @@ API manifest when the image is built and ingests both at `setup-db`.
 ### 4.1 Why two, and not one corpus with a `"CVLR API"` header root
 
 1. **Regeneration lifecycle.** Ingest is a plain insert under a uniqueness constraint, so the
-   operational model is drop-and-rebuild (`rag_import --replace` empties the corpus first). The API corpus is rebuilt on a CVLR bump and the manual on
-   a documentation revision. Merged, either rebuild drags the other along.
+   operational model is drop-and-rebuild. Neither `ragbuild` nor `rag_import` can empty a corpus
+   yet, so a rebuild starts from an empty schema. The API corpus is rebuilt on a CVLR bump and the
+   manual on a documentation revision. Merged, either rebuild drags the other along.
 2. **Retrieval interference.** rustdoc rows are short and dense; manual rows are long prose. In one
    vector index a prose query surfaces paragraphs that *discuss* `nondet` above the `nondet()`
    signature. Two indexes let the researcher ask each one deliberately.
@@ -160,9 +165,12 @@ family (`ChainReference.cargo_dependencies()`) and runs `cargo +<nightly> rustdo
 json` over it, offline. One probe per generation, because their chain crates are bound to different
 platform crates; a crate the generations share, the core, is documented once. The compiler emits the item list,
 the signatures, the doc comments and the re-export targets, so the producer is cargo plus a JSON
-walk: no model, no API key, and testable by the ordinary suite over trimmed real rustdoc output
-(`tests/test_cvlr_api_docs.py`, `tests/data/cvlr_rustdoc/`). It replaced a producer in the private
+walk: no model and no API key. It replaced a producer in the private
 `certora-cvlr-kb` repository that inferred the surface with a regex scanner and a model.
+
+It documents only what a scaffolded project can write: an item whose every path runs through a
+crate the scaffold does not declare, and that the facade does not re-export, is left out
+(`writable_from`). `cvlr-rule-manifest`'s constants are the case today.
 
 What it emits is a **contract**: signature, defining crate, feature gate, deprecation, the facade
 paths an item is reachable by, and its documentation. Not its implementation. A `macro` item carries
@@ -179,10 +187,12 @@ invite a dependency on binding names nobody promised. The walk has to get three 
 * **Trait-impl methods are mechanical.** Twenty `Add`/`Sub`/`Mul` impls would bury the questions
   people ask. Their methods are not emitted; the type's entry names the traits it implements.
 
-**rustdoc JSON is nightly-only and explicitly unstable.** The parser accepts one `format_version`
-(`FORMAT_VERSION`, 60) and fails loudly on any other, so a format change is a broken rebuild rather
-than a thin corpus. `PINNED_NIGHTLY` (`nightly-2026-07-06`) is the dated nightly that emits it, and
-the images generate the manifest with it; moving one means moving the other.
+**rustdoc JSON is nightly-only and explicitly unstable.** [`composer/cargo/rustdoc.py`](../composer/cargo/rustdoc.py)
+reads one `format_version` (`FORMAT_VERSION`, 60) into pydantic models of every record the walk
+reads, and fails loudly on another version or on a record that does not match, so a format change
+is a broken rebuild rather than a thin corpus. Type expressions stay JSON, rendered with `_` for a
+shape the producer does not model; the live test asserts the pinned crates produce none. `PINNED_NIGHTLY` (`nightly-2026-07-06`) is the dated nightly that emits it and
+the producer's default toolchain; moving one means moving the other.
 
 **`--crate-source PATH`** documents a local CVLR checkout instead of the published crates: each CVLR
 package the checkout defines replaces the release through `[patch.crates-io]`, so the pin still
@@ -194,23 +204,24 @@ tried before it is published.
 
 **Every exported item is documented, read from the releases that document it.** The releases
 published before October 2026 document 66 of 284 items; `cvlr-asserts`, for one, had 31 items and
-no prose. Both repositories have since documented every item and check for it in CI. The core's
-documented release, `cvlr` 0.6.2, is published, and so is `cvlr-solana` 0.5.1; 0.6.0 is read from
-its release commit until it is. Built from those pins, the corpus has 0 of 354 items without prose
-(2026-10-27). The producer's `--undocumented` report is how that is rechecked after a bump.
+no prose. Both repositories have since documented every item and check for it in CI, and every
+release the reference set pins is published. The producer's `--undocumented` report is how that
+is rechecked after a bump.
 
 ### 4.3 Header paths
 
 ```
 ["CVLR API", "cvlr-asserts", "0.6.1", "cvlr_assert!"]
-["CVLR API", "cvlr-solana", "0.5.0", "cvlr_deserialize_nondet_accounts"]
+["CVLR API", "cvlr-solana", "0.5.2", "cvlr_deserialize_nondet_accounts"]
 ["CVLR API", "cvlr-asserts", "0.6.1", "Complete public surface"]
 ```
 
 Level 2 is the *defining* crate, not the facade. The version at level 3 is what keeps the
-generations apart: the corpus holds `cvlr-solana` 0.5.1 and 0.6.0 side by side, and the tools show a
-run only the rows at the versions it pins (`ApiCorpus.admits`). A crate the run does not pin, such
-as one of the core's sub-crates, is shown at whatever version the corpus holds. The level also makes
+generations apart: the corpus holds `cvlr-solana` 0.5.2 and 0.6.1 side by side, and the tools show a
+run only the rows at the versions it pins, or at an earlier patch release on the pin's line
+(`ApiCorpus.admits`). Where several are admitted the newest is shown, and an answer from an earlier
+patch release says that the pin may add items it does not list. A crate the run does not pin, such
+as one of the core's sub-crates, is shown at the newest version the corpus holds. The level also makes
 a stale corpus visible in every answer. A leaf is qualified by its kind, and by its defining path, only where the
 bare name is not unique: a crate exporting a macro and the function it expands into is ordinary
 CVLR, and two identical leaves would violate the importer's uniqueness constraint.
@@ -223,8 +234,8 @@ entry — signature, documentation and examples — which is what an exact looku
 thin wherever an item is undocumented, and conceptual questions lean on the manual until upstream
 documentation lands.
 
-**One synthetic section per crate lists its complete public surface**, marked `atomic` so chunking
-never splits it. It is the only row that supports a closed-world read: the researcher fetches it
+**One synthetic section per crate lists its complete public surface**, in a single text block of
+the manual product. It is the only row that supports a closed-world read: the researcher fetches it
 and can say "this crate exports 41 items and `nondet_option` is not among them" rather than "I found
 nothing".
 
@@ -233,7 +244,7 @@ nothing".
 | tool | for |
 |---|---|
 | `cvlr_api_search(query)` | "what helper does X?" — natural language over the item documentation |
-| `cvlr_api_lookup(name)` | "what is the exact signature of X, and how do I import it?" — keyword search and fetch in one call, because the author usually has an identifier |
+| `cvlr_api_lookup(name)` | "what is the exact signature of X, and how do I import it?" — found by header leaf and fetched in one call, because the author usually has an identifier. Not full-text search, which splits an identifier at `_`; full text only proposes candidates for a name a re-export gives (`clog`), kept when the entry lists that path |
 | `cvlr_api_surface(crate)` | "does X exist?" — the closed-world read of §4.4 |
 
 Every docstring says that this corpus is generated from the CVLR crates and is authoritative, and
@@ -272,10 +283,8 @@ every family crate as a direct dependency, so an example may import `cvlr_macros
 scaffolded project must write `cvlr::…`; the researcher's prompt tells it to give the entry's facade
 path instead.
 
-The recipes' code blocks go through the same machinery (`tests/test_cvlr_recipe_examples.py`), and a
-recipe fence must be either compilable or explicitly `ignore`. All three current recipes are
-fragments of a rule that need the program around them, so all are marked `ignore` and the gate
-compiles nothing there yet.
+The recipes' code blocks are to go through the same machinery once the recipe index (#298) lands,
+with a recipe fence either compilable or explicitly `ignore`.
 
 Completeness is not a separate gate. With rustdoc there is one extraction, so the thing to assert is
 that each surface section lists exactly the items the walk emitted.
@@ -283,6 +292,8 @@ that each surface section lists exactly the items the walk emitted.
 ---
 
 ## 5. The research agent
+
+Not in the tree yet; it lands in a later PR. This section is its design.
 
 ### 5.1 `composer/spec/cvlr_research.py`
 
@@ -328,27 +339,25 @@ failure to retry around. Its display entry is `CommonTools.cvlr_research` in
 ## 6. Where it runs
 
 `scripts/populate_cvlr_rag.sh` on a host: it builds the API manifest (`--crate-source` to document a
-checkout), ingests it, and ingests the manual if `gen_docs.sh` has built it. In the container,
-`scripts/Dockerfile.solana` generates the manifest at image build time, where it has a toolchain and
-the network: `python -m composer.scripts.solana_toolchain api-manifest` installs `PINNED_NIGHTLY`,
-runs the producer over every Solana generation, and removes the nightly in the same layer, so the
-image keeps only the manifest. `setup-db` ingests it beside the manual. The EVM image carries no
-Rust toolchain, so `setup-db` run from it fills the manual alone.
+checkout), ingests it, and ingests the manual if `gen_docs.sh` has built it.
 
-A cloud database is seeded from the Solana image with `ragbuild --replace --corpus cvlr` and
-`rag_import --replace`, not with `setup-db`, which applies `init-db.sql` as the compose database's
-superuser.
+Planned, not yet in the tree: the Solana image generates the manifest at build time, where it has a
+toolchain and the network, installing `PINNED_NIGHTLY` and removing it in the same layer so the
+image keeps only the manifest, and `setup-db` ingests it beside the manual. The EVM image carries no
+Rust toolchain, so `setup-db` run from it would fill the manual alone.
 
 ## 7. Tests
 
-`tests/test_cvlr_api_docs.py` drives the producer over five trimmed payloads from a real rustdoc run
-— the asserts crate, the mathint crate, the `cvlr` facade, the derive crate and the Solana chain
-crate, between them every re-export shape the walk handles. They are trimmed rather than written by
-hand, because a hand-written payload encodes the author's belief about rustdoc's schema, and that
-belief is what is most likely to be wrong. It also checks that a checkout reaches only its own
-generation. `tests/test_cvlr_research.py` covers the tools against a corpus the producer built,
-including a corpus holding two generations, which a run sees only its own of; the per-generation
-cache key; and the researcher's prompt and contract. `tests/test_cvlr_rag.py` covers the manual's
+`tests/test_cvlr_api_docs.py` tests what the producer does with items — entries, the surface
+listing, leaves, the example labels, the report, checkouts — over items written by hand, with no
+rustdoc. The walk itself is tested against the pinned crates, by cargo rather than by expected
+values: `test_every_documented_path_compiles_in_a_scaffolded_project` documents each Solana
+generation and compiles every path and alias the corpus offers as a `use` in a crate with exactly
+the reference set's dependencies. It is `expensive` (it needs the pinned nightly and about a
+minute and a half warm) and runs in the integration workflow. `tests/test_cvlr_research.py` covers
+the tools against a corpus the producer built from hand-written items, including a corpus holding
+two generations, which a run sees only its own of; the research agent's
+cache key, prompt and contract come with the agent. `tests/test_cvlr_rag.py` covers the manual's
 tools.
 
 ---
@@ -363,8 +372,7 @@ scenario, against the recorded mount-only run as the baseline.
 *Run #1, 2026-09-25, stopped at 34 minutes on purpose.* It found the corpus defective: two
 `error[E0603]: module 'layout' is private`, which an audit widened to 138 of 200 entries offering no
 path a scaffolded project could write. The cause was re-export resolution skipping globs, at two
-levels. Fixed, with `cvlr-solana` added as a test fixture because the old fixtures carried none of
-those shapes. The qualitative evidence from this run stands: the macro contract reached the author
+levels. Fixed; that class of defect is what the path-compiling test (§7) now catches. The qualitative evidence from this run stands: the macro contract reached the author
 through a doc comment; the ordering caught the manual claiming an 8-element account array against
 the reference's 16 and called it stale (now [upstream-defects.md](./upstream-defects.md) M2); the
 not-found contract held on PDA derivation; and the researcher cost about 10% of the run.

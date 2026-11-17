@@ -75,6 +75,13 @@ jobs:
             -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
             --aws-sigv4 "aws:amz:us-west-2:lambda"
 
+      - name: install the pinned rustdoc nightly
+        # tests/test_cvlr_api_docs.py documents the CVLR crates with rustdoc's JSON output, which is
+        # nightly-only; the producer names the one dated nightly whose format it parses.
+        run: |
+          rustup toolchain install --no-self-update --profile minimal \
+            "$(uv run --no-dev python -c 'from composer.scripts.cvlr_api_docs import PINNED_NIGHTLY; print(PINNED_NIGHTLY)')"
+
       - name: run autoprover integration tests
         run: |
           uv run --no-dev pytest -n 3 -m 'expensive' tests

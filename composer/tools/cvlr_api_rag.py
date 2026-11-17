@@ -6,38 +6,29 @@ thing telling an agent whether an answer is the crates' own account of themselve
 of hand-written prose is **which tool returned it** (``docs/cvlr-api-docs-plan.md`` §4.1). Hence
 ``cvlr_api_*`` rather than more ``cvlr_*`` tools over a shared corpus.
 
-Three tools for three questions, and the middle one is not the shape
-:mod:`composer.tools.cvlr_rag` uses:
+Three tools for three questions:
 
 * *"what helper does X?"* — natural language over the item docs.
-* *"what is the exact signature of X, and which crate defines it?"* — one call, not
-  keyword-search-then-fetch. That two-step is right when you are exploring a manual and wrong when
-  you already have an identifier, which by the live run's tool census is the dominant case.
+* *"what is the exact signature of X, and which crate defines it?"* — one call, by name. Full-text
+  search cannot decide it: Postgres splits an identifier at ``_``, so ``cvlr_assert`` would match
+  every ``cvlr_assert_*`` entry. An entry is found by its header leaf, or, for a name only a
+  re-export spells (``clog`` for ``cvlr_log``), by full-text candidates whose entry lists that
+  path.
 * *"does X exist?"* — the closed-world read. A vector search always returns its nearest rows, so
   "nothing came back" cannot distinguish absence from an oddly phrased query. The producer emits
   one section per crate listing its whole public surface, and this is the tool that fetches it.
 """
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from langchain_core.tools import BaseTool
 from pydantic import Field
 
+from composer.rag.cvlr_api import API_ROOT, ApiPath
 from composer.rag.db import ComposerRAGDB
+from composer.rag.render import header_path, render_refs
 from graphcore.tools.schemas import WithAsyncDependencies
-
-#: The heading a crate's complete-surface section is filed under, below its version level. The
-#: producer writes it and :class:`CvlrApiSurface` reads it, so the string lives in one place.
-SURFACE_HEADING = "Complete public surface"
-
-#: Words every complete-surface section's text opens with. The keyword search reads a section's
-#: text and not its headers, so this, not :data:`SURFACE_HEADING`, is what finds a surface.
-SURFACE_PHRASE = "exports, in full"
-
-#: The root of every header path in this corpus. Present in the path so a row read out of context
-#: still says which corpus it came from.
-API_ROOT = "CVLR API"
 
 _AUTHORITY = (
     "This corpus is generated from the CVLR crates at the releases this build pins, so it is "
@@ -48,14 +39,14 @@ _AUTHORITY = (
 )
 
 
-#: How many rows to ask the database for, per row a tool returns. Rows of the other platform
+#: How many rows to ask the database for, per row a tool returns. Rows of another platform
 #: generation are dropped after the query (:meth:`ApiCorpus.admits`), and with two generations up to
 #: half of them can be.
 _OVERFETCH = 3
 
-
-def _header_string(s: list[str]) -> str:
-    return " > ".join(i for i in s if i)
+#: How many full-text candidates :func:`_reexported_as` reads. A short name like ``clog`` occurs in
+#: many entries' prose, not only in the one that lists it as a path.
+_REEXPORT_CANDIDATES = 50
 
 
 @dataclass(frozen=True)
@@ -63,9 +54,9 @@ class ApiCorpus:
     """The corpus as one run sees it: the releases that run builds.
 
     The corpus holds every platform generation's crates (``cvlr-solana`` 0.5.x and 0.6.x side by
-    side), and each row's header path is ``[API_ROOT, crate, version, ...]``. A row for a crate the
-    run pins on another release line is another generation's, and a tool that showed it would
-    describe, with full authority, an API the run's build does not have (:meth:`admits`).
+    side). A row for a crate the run pins on another release line is another generation's, and a
+    tool that showed it would describe, with full authority, an API the run's build does not have
+    (:meth:`admits`).
     """
 
     db: ComposerRAGDB
@@ -73,23 +64,45 @@ class ApiCorpus:
     #: core's sub-crates, is admitted at any version: the generations share it.
     pinned: Mapping[str, str]
 
-    def admits(self, headers: Sequence[str]) -> bool:
+    def admits(self, path: ApiPath) -> bool:
         """A pinned crate's row is admitted from an earlier release of the pin's semver line, not
         only from the pin itself.
 
-        A compatible release only adds to its line's API, so an earlier one describes a subset of
-        what the build has, and the corpus need not be re-seeded for a patch release. A later
+        An earlier compatible release describes a subset of what the build has, so the corpus need
+        not be re-seeded for a patch release; :meth:`patch_gap` is how a tool says so. A later
         release may describe items the build lacks, and is refused like another line."""
-        if len(headers) < 3:
+        pin = self.pinned.get(path.crate)
+        if pin is None or path.version == pin:
             return True
-        crate, version = headers[1], headers[2]
-        pin = self.pinned.get(crate)
-        if pin is None or version == pin:
-            return True
-        row, pinned = _semver(version), _semver(pin)
+        row, pinned = _semver(path.version), _semver(pin)
         if row is None or pinned is None:
             return False
         return _release_line(row) == _release_line(pinned) and row <= pinned
+
+    def patch_gap(self, path: ApiPath) -> str | None:
+        """The pinned version, when ``path`` is from an earlier release than the pin."""
+        pin = self.pinned.get(path.crate)
+        return pin if pin is not None and pin != path.version else None
+
+    def newest(self, paths: Iterable[ApiPath]) -> set[ApiPath]:
+        """Of the admitted ``paths``, the newest release's row for each crate and leaf.
+
+        The corpus may hold both the pin and an earlier patch release of it, and the earlier one
+        describes less."""
+        best: dict[tuple[str, str], ApiPath] = {}
+        for path in paths:
+            if not self.admits(path):
+                continue
+            key = (path.crate, path.leaf)
+            prior = best.get(key)
+            if prior is None or _recency(path) > _recency(prior):
+                best[key] = path
+        return set(best.values())
+
+    async def rows(self) -> set[ApiPath]:
+        """Every row this run is shown, at its newest admitted release."""
+        listed = await self.db.manual_headers([API_ROOT])
+        return self.newest(p for h in listed if (p := ApiPath.parse(h)) is not None)
 
 
 def _semver(version: str) -> tuple[int, int, int] | None:
@@ -101,6 +114,12 @@ def _semver(version: str) -> tuple[int, int, int] | None:
     return major, minor, patch
 
 
+def _recency(path: ApiPath) -> tuple[int, int, int]:
+    """Ordering among admitted rows of one crate. Only a pinned version can fail to parse, and
+    then it is the only admitted one."""
+    return _semver(path.version) or (0, 0, 0)
+
+
 def _release_line(version: tuple[int, int, int]) -> tuple[int, ...]:
     """Cargo's caret compatibility: the leading components up to and including the first
     non-zero one. ``0.5.2`` is on ``0.5``, ``1.4.0`` on ``1``, ``0.0.3`` only on itself."""
@@ -108,6 +127,16 @@ def _release_line(version: tuple[int, int, int]) -> tuple[int, ...]:
         if part != 0:
             return version[: i + 1]
     return version
+
+
+def _patch_note(corpus: ApiCorpus, path: ApiPath) -> str:
+    pin = corpus.patch_gap(path)
+    if pin is None:
+        return ""
+    return (
+        f"\n\n(This is `{path.crate}` {path.version}. This build pins {pin}, a later patch "
+        f"release on the same line, which may add items this does not describe.)"
+    )
 
 
 class CvlrApiSearch(WithAsyncDependencies[str, ApiCorpus]):
@@ -130,26 +159,21 @@ class CvlrApiSearch(WithAsyncDependencies[str, ApiCorpus]):
 
     async def run(self) -> str:
         with self.tool_deps() as corpus:
-            res = [
-                r
-                for r in await corpus.db.find_refs(
-                    self.query,
-                    similarity_cutoff=self.similarity_cutoff,
-                    top_k=self.max_results * _OVERFETCH,
-                )
-                if corpus.admits(r.headers)
-            ][: self.max_results]
+            refs = await corpus.db.find_refs(
+                self.query,
+                similarity_cutoff=self.similarity_cutoff,
+                top_k=self.max_results * _OVERFETCH,
+            )
+            parsed = [(r, ApiPath.parse(r.headers)) for r in refs]
+            shown = corpus.newest(p for _, p in parsed if p is not None)
+            res = [r for r, p in parsed if p in shown][: self.max_results]
             if not res:
                 return (
                     "(No results found. This does not mean the item does not exist — vector "
                     "search returns nearest matches, so rephrase, or call `cvlr_api_surface` for "
                     "the crate to settle existence.)"
                 )
-            return "\n".join(
-                f"----\nSection: {_header_string(r.headers)}\n\n{r.content}\n"
-                f"Similarity: {r.similarity:.4f}"
-                for r in res
-            )
+            return render_refs(res)
 
 
 class CvlrApiLookup(WithAsyncDependencies[str, ApiCorpus]):
@@ -157,7 +181,8 @@ class CvlrApiLookup(WithAsyncDependencies[str, ApiCorpus]):
         "Look up one CVLR item by name and get its entry in full: the signature, the crate that "
         "*defines* it, its feature gate, and whatever the crate documents about it. Use this "
         "whenever you have an identifier — a macro (`cvlr_assert_le`, `clog`), a function "
-        "(`nondet`, `cvlr_deserialize_nondet_accounts`), a trait, a derive or a type.\n\n"
+        "(`nondet`, `cvlr_deserialize_nondet_accounts`), a trait, a derive, a type, or a method "
+        "(`NativeIntU64::u64_max`, or `u64_max` alone).\n\n"
         f"{_AUTHORITY}\n\n"
         "The defining crate is what you get back, not the facade path: `cvlr` re-exports almost "
         "everything, so the item you reach as `cvlr::x::y` usually lives in a sibling crate. "
@@ -165,46 +190,66 @@ class CvlrApiLookup(WithAsyncDependencies[str, ApiCorpus]):
     )
 
     name: str = Field(description=(
-        "The exact identifier, without a `!` and without a path — `cvlr_assert_le`, not "
-        "`cvlr::cvlr_assert_le!`."
+        "The exact identifier, without a `!` and without a module path — `cvlr_assert_le`, not "
+        "`cvlr::cvlr_assert_le!`. A method may be qualified by its type."
     ))
-    limit: int = Field(default=5, description="How many candidate entries to return at most.")
+    limit: int = Field(default=5, description="How many matching entries to return at most.")
 
     async def run(self) -> str:
         with self.tool_deps() as corpus:
-            db = corpus.db
-            # Keyword search finds the candidates; the fetch is what makes this one call instead
-            # of two. A bare identifier is already a websearch-style query for one term.
-            hits = [
-                hit
-                for hit in await db.search_manual_keywords(
-                    self.name, limit=self.limit * _OVERFETCH
-                )
-                if corpus.admits(hit.headers)
-            ][: self.limit]
-            if not hits:
+            name = self.name.removesuffix("!")
+            rows = await corpus.rows()
+            matches = sorted(
+                (p for p in rows if not p.is_surface and p.names(name)),
+                key=lambda p: (p.leaf != name, p.crate, p.leaf),
+            )[: self.limit]
+            entries = [
+                (path, content)
+                for path in matches
+                if (content := await corpus.db.get_manual_section(path.headers())) is not None
+            ]
+            if not matches:
+                entries = await _reexported_as(corpus, rows, name, self.limit)
+            if not matches and not entries:
                 return (
-                    f"Nothing in the generated CVLR API reference matches {self.name!r}. Check "
+                    f"No entry in the generated CVLR API reference is named {self.name!r}. Check "
                     f"the spelling, then call `cvlr_api_surface` for the crate you expect it in — "
                     f"that section lists the whole public surface and settles whether it exists."
                 )
-            sections = []
-            for hit in hits:
-                content = await db.get_manual_section(list(hit.headers))
-                if content is not None:
-                    sections.append(f"----\n{_header_string(list(hit.headers))}\n\n{content}")
-            if not sections:
+            if not entries:
                 return (
-                    f"Matched {len(hits)} entries for {self.name!r} but none could be read back; "
-                    f"the corpus may be mid-rebuild."
+                    f"Matched {len(matches)} entries for {self.name!r} but none could be read "
+                    f"back; the corpus may be mid-rebuild."
                 )
-            return "\n".join(sections)
+            return "\n".join(
+                f"----\n{header_path(path.headers())}\n\n{content}{_patch_note(corpus, path)}"
+                for path, content in entries
+            )
+
+
+async def _reexported_as(
+    corpus: ApiCorpus, rows: set[ApiPath], name: str, limit: int
+) -> list[tuple[ApiPath, str]]:
+    """Entries that list a path ending in ``name``: a re-export under another name.
+
+    Full text proposes the candidates, and only an entry whose own text spells the path is kept."""
+    found: list[tuple[ApiPath, str]] = []
+    for hit in await corpus.db.search_manual_keywords(name, limit=_REEXPORT_CANDIDATES):
+        path = ApiPath.parse(hit.headers)
+        if path is None or path.is_surface or path not in rows:
+            continue
+        content = await corpus.db.get_manual_section(path.headers())
+        if content is not None and f"::{name}`" in content:
+            found.append((path, content))
+            if len(found) == limit:
+                break
+    return found
 
 
 class CvlrApiSurface(WithAsyncDependencies[str, ApiCorpus]):
     __doc__ = (
         "List a CVLR crate's **complete** public surface — every item it exports, at the release "
-        "this build pins or an earlier patch release of it.\n\n"
+        "this build pins or an earlier patch release of it, which the answer names.\n\n"
         "This is the tool that answers *does X exist?*, and it is the only one that can: it "
         "returns a closed list, so a name that is absent from it is a name you do not have. Do "
         "not infer absence from an empty search, and do not write a helper you could not find "
@@ -220,23 +265,20 @@ class CvlrApiSurface(WithAsyncDependencies[str, ApiCorpus]):
 
     async def run(self) -> str:
         with self.tool_deps() as corpus:
-            db = corpus.db
-            # The version level sits between the root and the crate, and a caller does not know
-            # it — the point of the pin is that they never have to. Keyword search over the
-            # surface text finds the crate's surface rows, one per version the corpus holds, and
-            # the run's pin chooses among them.
-            hits = await db.search_manual_keywords(f'"{self.crate}" "{SURFACE_PHRASE}"', limit=10)
-            for hit in hits:
-                headers = list(hit.headers)
-                if self.crate in headers and SURFACE_HEADING in headers and corpus.admits(headers):
-                    content = await db.get_manual_section(headers)
-                    if content is not None:
-                        return f"{_header_string(headers)}\n\n{content}"
-            return (
-                f"No public-surface listing for a crate named {self.crate!r}. Either the name is "
-                f"misspelled or this build does not pin that crate — in which case you cannot use "
-                f"it, whatever it offers."
+            surface = next(
+                (p for p in await corpus.rows() if p.is_surface and p.crate == self.crate), None
             )
+            content = (
+                await corpus.db.get_manual_section(surface.headers()) if surface is not None
+                else None
+            )
+            if surface is None or content is None:
+                return (
+                    f"No public-surface listing for a crate named {self.crate!r}. Either the name "
+                    f"is misspelled or this build does not pin that crate — in which case you "
+                    f"cannot use it, whatever it offers."
+                )
+            return f"{header_path(surface.headers())}\n\n{content}{_patch_note(corpus, surface)}"
 
 
 def get_tools(db: ComposerRAGDB, pinned: Mapping[str, str]) -> Iterable[BaseTool]:

@@ -293,8 +293,11 @@ def _check_once(
     for line in result.stdout.splitlines():
         try:
             records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
+        except json.JSONDecodeError as exc:
+            raise GateUnavailable(
+                f"cargo check in {crate_dir} printed a line that is not a JSON message, so its "
+                f"errors cannot all be attributed:\n{line}"
+            ) from exc
     modules = {_module(index): index for index in sources}
     per_block, unattributed = attribute_errors(records, modules)
     if unattributed or not per_block:

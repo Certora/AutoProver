@@ -288,6 +288,7 @@ class Workspace:
         project_root: Path,
         *,
         offline: bool = False,
+        no_deps: bool = False,
         features: tuple[CargoFeature, ...] = (),
         toolchain: str | None = None,
         cargo_home: Path | None = None,
@@ -302,6 +303,9 @@ class Workspace:
 
         ``offline`` passes ``--offline``. Pass it when a warm cache is guaranteed;
         leave it off for the first read of an unseen project.
+
+        ``no_deps`` passes ``--no-deps``: the members alone, with no graph resolved, so
+        :attr:`packages` is :attr:`members` and :attr:`links` is empty.
 
         ``features`` selects the graph the verification build resolves. Pass it
         whenever the answer is about CVLR. A scaffolded project marks CVLR crates
@@ -322,6 +326,7 @@ class Workspace:
             _cargo_metadata,
             project_root,
             offline=offline,
+            no_deps=no_deps,
             features=features,
             toolchain=toolchain,
             cargo_home=cargo_home,
@@ -425,6 +430,7 @@ def _cargo_metadata(
     project_root: Path,
     *,
     offline: bool,
+    no_deps: bool,
     features: tuple[CargoFeature, ...],
     toolchain: str | None,
     cargo_home: Path | None,
@@ -439,6 +445,8 @@ def _cargo_metadata(
     args = ["cargo", "metadata", "--format-version", "1"]
     if offline:
         args.append("--offline")
+    if no_deps:
+        args.append("--no-deps")
     if features:
         args += ["--features", ",".join(features)]
     overrides = {

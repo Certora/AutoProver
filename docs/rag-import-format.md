@@ -321,9 +321,10 @@ The mechanism, corpus-free:
 3. The `KNOWLEDGE_BASES` registry (§4) in [`composer/rag/db.py`](../composer/rag/db.py).
 4. The first producer, [`composer/scripts/cvlr_api_docs.py`](../composer/scripts/cvlr_api_docs.py):
    rustdoc JSON over the CVLR crates the backend pins, emitted as one manifest tagged `cvlr_api_kb`.
-   It imports only the manifest model, which pulls in neither spaCy, an embedding model nor a DB,
-   and it is covered by [`tests/test_cvlr_api_docs.py`](../tests/test_cvlr_api_docs.py) over
-   trimmed real rustdoc output. That is the producer/importer split working as intended.
+   Of the RAG package it imports only the manifest model and the corpus's header layout
+   (`composer/rag/cvlr_api.py`), so it pulls in neither spaCy, an embedding model nor a DB,
+   and it is covered by [`tests/test_cvlr_api_docs.py`](../tests/test_cvlr_api_docs.py), its
+   walk by compiling every path it emits against the pinned crates. That is the producer/importer split working as intended.
 
 What an adopting application adds, in one go: its `<kb>.rag.json` (or the producer that builds it),
 its `KNOWLEDGE_BASES` connection, the DB role/schema in

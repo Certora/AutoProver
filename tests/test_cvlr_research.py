@@ -13,19 +13,59 @@ The **not-found contract** is the other. A vector search always returns its near
 nothing else.
 """
 
-import json
 import re
-from pathlib import Path
 
 import pytest
 
 from composer.rag.db import CVLR_API_DEFAULT_CONNECTION, CVLR_DEFAULT_CONNECTION, KNOWLEDGE_BASES
+from composer.rag.cvlr_api import API_ROOT, SURFACE_HEADING, ApiPath
 from composer.rag.types import ManualRef, ManualSectionHit
-from composer.cargo.doctest import Passed
-from composer.scripts.cvlr_api_docs import CrateDocs, ExampleGate, build_manifest, gated_sources
-from composer.tools.cvlr_api_rag import API_ROOT, SURFACE_HEADING, ApiCorpus, get_tools
+from composer.scripts.cvlr_api_docs import (
+    DocumentedCrate,
+    ExampleGate,
+    Item,
+    ItemKind,
+    build_manifest,
+)
+from composer.tools.cvlr_api_rag import ApiCorpus, get_tools
 
-_DATA = Path(__file__).parent / "data" / "cvlr_rustdoc"
+_ASSERT_LE = Item(
+    name="cvlr_assert_le", kind=ItemKind.MACRO, crate="cvlr-asserts", path="cvlr_asserts::cvlr_assert_le",
+    signature="macro_rules! cvlr_assert_le {\n    ($lhs:expr, $rhs:expr) => { ... };\n}",
+)
+#: Re-exported by the facade under another name, as `cvlr::clog` is `cvlr_log`.
+_ASSUME = Item(
+    name="cvlr_assume", kind=ItemKind.MACRO, crate="cvlr-asserts", path="cvlr_asserts::cvlr_assume",
+    signature="macro_rules! cvlr_assume { ... }", docs="Assume a condition holds.",
+    aliases=("cvlr::asserts::cvt_assume",),
+)
+_SATISFY = Item(
+    name="cvlr_satisfy", kind=ItemKind.MACRO, crate="cvlr-asserts", path="cvlr_asserts::cvlr_satisfy",
+    signature="macro_rules! cvlr_satisfy { ... }", docs="Satisfy, and unlike an assume.",
+    aliases=("cvlr::asserts::cvt_satisfy",),
+)
+_U64_MAX = Item(
+    name="NativeIntU64::u64_max", kind=ItemKind.FUNCTION, crate="cvlr-mathint", path=None,
+    signature="fn u64_max() -> Self",
+)
+_DESERIALIZE = Item(
+    name="cvlr_deserialize_nondet_accounts", kind=ItemKind.FUNCTION, crate="cvlr-solana",
+    path="cvlr_solana::cvlr_deserialize_nondet_accounts",
+    signature="fn cvlr_deserialize_nondet_accounts() -> [AccountInfo; 16]",
+    docs="Nondeterministic accounts for a rule.",
+)
+
+
+def _db(*crates: DocumentedCrate) -> "_FakeDB":
+    gate = ExampleGate(verdicts={})
+    return _FakeDB(build_manifest(list(crates), "test", gate).manual_sections)
+
+
+def _solana(version: str) -> DocumentedCrate:
+    return DocumentedCrate("cvlr-solana", version, (_DESERIALIZE,))
+
+
+_ASSERTS = DocumentedCrate("cvlr-asserts", "0.6.1", (_ASSERT_LE, _ASSUME, _SATISFY))
 
 
 # ---------------------------------------------------------------------------------------------
@@ -59,18 +99,18 @@ class _FakeDB:
     def _content(self, section) -> str:
         return "\n\n".join(b.body for b in section.blocks)
 
+    async def manual_headers(self, prefix):
+        return [list(h) for h in self._sections if h[: len(prefix)] == tuple(prefix)]
+
     async def search_manual_keywords(self, query, *, min_depth=0, limit=10):
-        """Each quoted phrase, or each bare word, must occur in the section's text. Like
-        Postgres's full-text search here, the headers are not searched: a tool that found a row by
-        its headers would pass this fake and find nothing in the real corpus."""
-        terms = re.findall(r'"([^"]+)"|(\S+)', query)
-        wanted = [quoted or bare for quoted, bare in terms]
-        hits = [
+        """Every word must occur in the section's text, where, as in Postgres's parser, `_` and
+        `:` separate words. The headers are not searched."""
+        words = re.findall(r"[A-Za-z0-9]+", query.lower())
+        return [
             ManualSectionHit(headers=list(h), relevance=1.0)
             for h, s in self._sections.items()
-            if all(t in self._content(s) for t in wanted)
-        ]
-        return hits[:limit]
+            if all(w in re.findall(r"[A-Za-z0-9]+", self._content(s).lower()) for w in words)
+        ][:limit]
 
     async def get_manual_section(self, headers):
         section = self._sections.get(tuple(headers))
@@ -83,17 +123,9 @@ class _FakeDB:
         ]
 
 
-def _passing(crates: list[CrateDocs]) -> ExampleGate:
-    return ExampleGate(verdicts={source: Passed() for source in gated_sources(crates)})
-
-
 @pytest.fixture
 def corpus():
-    crates = [
-        CrateDocs("cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text())),
-        CrateDocs("cvlr-mathint", "0.6.1", json.loads((_DATA / "cvlr_mathint.json").read_text())),
-    ]
-    return _FakeDB(build_manifest(crates, "test", _passing(crates)).manual_sections)
+    return _db(_ASSERTS, DocumentedCrate("cvlr-mathint", "0.6.1", (_U64_MAX,)))
 
 
 @pytest.fixture
@@ -103,11 +135,36 @@ def tools(corpus):
 
 @pytest.mark.asyncio
 async def test_lookup_returns_the_entry_in_one_call(tools):
-    # Keyword-search-then-fetch is right when you are exploring a manual and wrong when you
-    # already have an identifier, which the live run's census says is the dominant case.
+    # A caller with an identifier gets the entry itself, not a list of sections to fetch.
     out = await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_assert_le"})
     assert "macro_rules! cvlr_assert_le" in out
     assert "cvlr-asserts" in out
+
+
+@pytest.mark.asyncio
+async def test_lookup_is_by_name_not_by_the_words_in_it(tools):
+    """Full-text search splits an identifier at `_`, so `cvlr_assert` there is `cvlr & assert`
+    and matches every `cvlr_assert_*` entry and the surface listing. The corpus has no
+    `cvlr_assert`, so the answer is that there is no such entry."""
+    out = await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_assert"})
+    assert out.startswith("No entry")
+    assert "macro_rules!" not in out
+
+
+@pytest.mark.asyncio
+async def test_lookup_finds_a_method_by_its_bare_name(tools):
+    out = await tools["cvlr_api_lookup"].ainvoke({"name": "u64_max"})
+    assert "NativeIntU64::u64_max" in out
+
+
+@pytest.mark.asyncio
+async def test_lookup_finds_an_item_by_the_name_a_re_export_gives_it():
+    """`cvlr::asserts::cvt_assume` is `cvlr_assume` under another name, as `cvlr::clog` is
+    `cvlr_log`. The entry is filed under the defining name, so no header leaf spells it."""
+    lookup = {t.name: t for t in get_tools(_db(_ASSERTS), {})}["cvlr_api_lookup"]  # type: ignore[arg-type]
+    out = await lookup.ainvoke({"name": "cvt_assume"})
+    assert "cvlr-asserts > 0.6.1 > cvlr_assume" in out
+    assert "cvlr_satisfy" not in out
 
 
 @pytest.mark.asyncio
@@ -161,8 +218,10 @@ def test_every_api_tool_states_the_authority_ordering(tools):
 def test_the_surface_heading_is_shared_by_the_producer_and_the_tool():
     # The producer writes this heading and `cvlr_api_surface` fetches by it. Two spellings would
     # make the closed listing unreachable, and nothing else would fail.
-    crates = [CrateDocs("cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text()))]
-    headers = [list(s.headers) for s in build_manifest(crates, "t", _passing(crates)).manual_sections]
+    headers = [
+        list(s.headers)
+        for s in build_manifest([_ASSERTS], "t", ExampleGate(verdicts={})).manual_sections
+    ]
     assert [API_ROOT, "cvlr-asserts", "0.6.1", SURFACE_HEADING] in headers
 
 
@@ -172,15 +231,8 @@ def test_the_surface_heading_is_shared_by_the_producer_and_the_tool():
 
 @pytest.fixture
 def two_generations():
-    """``cvlr-solana`` at both release lines, and a core crate the generations share. The 0.5.x
-    payload stands in for both lines: what is under test is which version a run is shown."""
-    payload = json.loads((_DATA / "cvlr_solana.json").read_text())
-    crates = [
-        CrateDocs("cvlr-solana", "0.5.1", payload),
-        CrateDocs("cvlr-solana", "0.6.0", payload),
-        CrateDocs("cvlr-asserts", "0.6.1", json.loads((_DATA / "cvlr_asserts.json").read_text())),
-    ]
-    return _FakeDB(build_manifest(crates, "test", _passing(crates)).manual_sections)
+    """``cvlr-solana`` at both release lines, and a core crate the generations share."""
+    return _db(_solana("0.5.1"), _solana("0.6.0"), _ASSERTS)
 
 
 def _scoped(db, pinned):
@@ -215,14 +267,27 @@ async def test_a_crate_the_run_does_not_pin_is_shown_at_the_version_the_corpus_h
 
 @pytest.mark.asyncio
 async def test_a_patch_release_reads_the_corpus_of_an_earlier_patch_on_its_line(two_generations):
-    """A corpus seeded at 0.6.0 serves a run on 0.6.1: a patch release adds nothing the corpus
-    would have to describe, so the corpus need not be re-seeded for one."""
+    """A corpus seeded at 0.6.0 serves a run on 0.6.1, and says so: a patch release may add
+    items, so the listing is closed only for the release it was generated from."""
     tools = _scoped(two_generations, {"cvlr-solana": "0.6.1"})
-    out = await tools["cvlr_api_surface"].ainvoke({"crate": "cvlr-solana"})
-    assert "cvlr-solana > 0.6.0" in out
-    out = await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_deserialize_nondet_accounts"})
-    assert "cvlr-solana > 0.6.0" in out
-    assert "0.5.1" not in out
+    for out in (
+        await tools["cvlr_api_surface"].ainvoke({"crate": "cvlr-solana"}),
+        await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_deserialize_nondet_accounts"}),
+    ):
+        assert "cvlr-solana > 0.6.0" in out
+        assert "This build pins 0.6.1" in out
+        assert "0.5.1" not in out
+
+
+@pytest.mark.asyncio
+async def test_the_newest_admitted_release_wins():
+    tools = _scoped(_db(_solana("0.6.0"), _solana("0.6.1")), {"cvlr-solana": "0.6.1"})
+    for out in (
+        await tools["cvlr_api_surface"].ainvoke({"crate": "cvlr-solana"}),
+        await tools["cvlr_api_lookup"].ainvoke({"name": "cvlr_deserialize_nondet_accounts"}),
+    ):
+        assert "cvlr-solana > 0.6.1" in out
+        assert "0.6.0" not in out
 
 
 @pytest.mark.parametrize(
@@ -246,6 +311,6 @@ async def test_a_patch_release_reads_the_corpus_of_an_earlier_patch_on_its_line(
 )
 def test_which_releases_a_pin_admits(row, pin, admitted):
     corpus = ApiCorpus(db=object(), pinned={"cvlr-solana": pin})  # type: ignore[arg-type]
-    assert corpus.admits(["root", "cvlr-solana", row, "item"]) is admitted
+    assert corpus.admits(ApiPath("cvlr-solana", row, "item")) is admitted
     # A crate the run does not pin is admitted whatever its version.
-    assert corpus.admits(["root", "cvlr-asserts", row, "item"])
+    assert corpus.admits(ApiPath("cvlr-asserts", row, "item"))

@@ -47,9 +47,9 @@ ingest_manual() {
 build_api_docs() {
     local out="$1"
     if ! (cd "$parent"; uv run --no-sync python -m composer.scripts.cvlr_api_docs \
-            --output "$out" "${crate_sources[@]+"${crate_sources[@]}"}"); then
+            --chain solana --output "$out" "${crate_sources[@]+"${crate_sources[@]}"}"); then
         echo "Could not generate the CVLR API corpus; continuing with whatever else is available." >&2
-        echo "  It needs a nightly toolchain (rustup toolchain install nightly) and a warm cargo registry." >&2
+        echo "  It needs the pinned nightly (PINNED_NIGHTLY in composer/scripts/cvlr_api_docs.py) and a warm cargo registry." >&2
         return 1
     fi
 }
@@ -123,7 +123,7 @@ if [[ ${#manifests[@]} -eq 0 ]]; then
     cat >&2 <<'MSG'
 Error: nothing to ingest -- the API corpus could not be generated and there is no local manual.
 
-  cvlr_api_kb  needs a nightly toolchain and a warm cargo registry; see the error above.
+  cvlr_api_kb  needs the pinned nightly and a warm cargo registry; see the error above.
   cvlr_kb      needs ./gen_docs.sh for the manual.
 
 Pass manifest paths explicitly to skip generation.
