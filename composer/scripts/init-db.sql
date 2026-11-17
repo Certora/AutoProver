@@ -14,6 +14,9 @@ DO $$ BEGIN
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cvlr_rag_user') THEN
         CREATE USER cvlr_rag_user WITH PASSWORD 'rag_password';
     END IF;
+    IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cvlr_api_rag_user') THEN
+        CREATE USER cvlr_api_rag_user WITH PASSWORD 'rag_password';
+    END IF;
     IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'langgraph_store_user') THEN
         CREATE USER langgraph_store_user WITH PASSWORD 'langgraph_store_password';
     END IF;
@@ -59,10 +62,18 @@ CREATE SCHEMA IF NOT EXISTS foundry_rag AUTHORIZATION foundry_rag_user;
 GRANT USAGE ON SCHEMA extensions TO foundry_rag_user;
 ALTER ROLE foundry_rag_user IN DATABASE rag_db SET search_path = foundry_rag, extensions;
 
--- cvlr rag
+-- cvlr rag: the CVLR manual, hand-written prose that may lag the crates.
 CREATE SCHEMA IF NOT EXISTS cvlr_rag AUTHORIZATION cvlr_rag_user;
 GRANT USAGE ON SCHEMA extensions TO cvlr_rag_user;
 ALTER ROLE cvlr_rag_user IN DATABASE rag_db SET search_path = cvlr_rag, extensions;
+
+-- cvlr api rag: the CVLR API, generated from the crates by composer.scripts.cvlr_api_docs.
+-- Its own schema, not a header root inside cvlr_rag: the two are rebuilt on different
+-- occasions (a CVLR bump vs. a docs revision) and ingestion is drop-and-rebuild, so sharing a
+-- schema would make either rebuild drag the other along. See docs/cvlr-api-docs-plan.md §4.1.
+CREATE SCHEMA IF NOT EXISTS cvlr_api_rag AUTHORIZATION cvlr_api_rag_user;
+GRANT USAGE ON SCHEMA extensions TO cvlr_api_rag_user;
+ALTER ROLE cvlr_api_rag_user IN DATABASE rag_db SET search_path = cvlr_api_rag, extensions;
 
 
 \c langgraph_store_db

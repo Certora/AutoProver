@@ -52,14 +52,22 @@ DEFAULT_CONNECTION: str = f"postgresql://rag_user:rag_password@{_RAG_HOST}:{_RAG
 SANITY_DEFAULT_CONNECTION: str = f"postgresql://extended_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 FOUNDRY_DEFAULT_CONNECTION: str = f"postgresql://foundry_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 CVLR_DEFAULT_CONNECTION: str = f"postgresql://cvlr_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
+CVLR_API_DEFAULT_CONNECTION: str = (
+    f"postgresql://cvlr_api_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
+)
 
 # Logical knowledge-base tag -> default DB connection, for corpora ingested by the generic importer
 # (`composer.scripts.rag_import`). The tag is the one the manifest carries (== a wheel's
 # `rag_db_default`), so the import target and the runtime search tools resolve by one name —
-# `composer.tools.rag_env` requires both halves before a tag is usable. Empty until the first such
-# corpus lands with the application that declares it; the CVL/Foundry builders use the constants
-# above instead.
-KNOWLEDGE_BASES: dict[str, str] = {}
+# `composer.tools.rag_env` requires both halves before a tag is usable. The CVL/Foundry builders
+# predate the importer and use the constants above instead.
+#
+# `cvlr_api_kb` is here for the importer alone: `composer.scripts.cvlr_api_docs` emits a manifest
+# carrying that tag. No wheel declares it, so it has no `rag_env` factory: a caller opens it by
+# connection and hands it to `composer.tools.cvlr_api_rag.get_tools`.
+KNOWLEDGE_BASES: dict[str, str] = {
+    "cvlr_api_kb": CVLR_API_DEFAULT_CONNECTION,
+}
 
 
 type _RagHeader = str | None

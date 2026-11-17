@@ -1,0 +1,735 @@
+{
+ "root": 4,
+ "crate_version": "0.6.1",
+ "includes_private": false,
+ "index": {
+  "0": {
+   "id": 0,
+   "crate_id": 0,
+   "name": "Nondet",
+   "span": {
+    "filename": "/home/eric/src/cvlr/cvlr-derive/src/lib.rs",
+    "begin": [
+     117,
+     1
+    ],
+    "end": [
+     199,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Derive macro for implementing the `Nondet` trait\n\nThis macro generates an implementation of `Nondet` for structs and enums,\nallowing them to be created with non-deterministic (symbolic) values.\n\n* A struct gets every field from `nondet()`, so every field type must\n  implement `Nondet`; a unit struct is returned as is.\n* An enum is any one of its variants, chosen arbitrarily, with every field\n  of that variant from `nondet()`. An enum must have at least one variant.\n\nThe result is completely unconstrained apart from the field types' own\nranges; add constraints with `cvlr_assume!` or\n`cvlr::nondet::nondet_with`. Generic types and unions are not supported.\nThe generated code refers to `::cvlr::nondet`, so the crate must depend on\n`cvlr`. Also available from `cvlr::derive` and the prelude.\n\n# Example\n\n```ignore\nuse cvlr_derive::Nondet;\nuse cvlr::prelude::*;\n\n#[derive(Nondet)]\nstruct Point {\n    x: u64,\n    y: u64,\n}\n\n#[derive(Nondet)]\nenum MyEnum {\n    Variant1,\n    Variant2(u64),\n    Variant3 { x: u64 },\n}\n\nlet p = Point::nondet();\nlet e = MyEnum::nondet();\n```",
+   "links": {},
+   "attrs": [
+    {
+     "other": "#[attr = ProcMacroDerive {trait_name: \"Nondet\", helper_attrs: []}]"
+    }
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "proc_macro": {
+     "kind": "derive",
+     "helpers": []
+    }
+   }
+  },
+  "4": {
+   "id": 4,
+   "crate_id": 0,
+   "name": "cvlr_derive",
+   "span": {
+    "filename": "/home/eric/src/cvlr/cvlr-derive/src/lib.rs",
+    "begin": [
+     1,
+     1
+    ],
+    "end": [
+     394,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Derive macros for CVLR: [`macro@Nondet`] makes a struct or enum\nnondeterministic and [`macro@CvlrLog`] makes it loggable. Use them through\n`cvlr::derive` or the `cvlr` prelude; the generated code refers to the\n`cvlr` crate.",
+   "links": {
+    "`macro@CvlrLog`": 3,
+    "`macro@Nondet`": 2
+   },
+   "attrs": [],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "module": {
+     "is_crate": true,
+     "items": [
+      0,
+      1
+     ],
+     "is_stripped": false
+    }
+   }
+  },
+  "1": {
+   "id": 1,
+   "crate_id": 0,
+   "name": "CvlrLog",
+   "span": {
+    "filename": "/home/eric/src/cvlr/cvlr-derive/src/lib.rs",
+    "begin": [
+     255,
+     1
+    ],
+    "end": [
+     394,
+     2
+    ]
+   },
+   "visibility": "public",
+   "docs": "Derive macro for implementing the `CvlrLog` trait\n\nThis macro generates an implementation of `CvlrLog` for structs and enums,\nallowing them to be logged with CVLR's logging system.\n\nSupports:\n- Structs with named fields (uses field names as tags)\n- Structs with unnamed fields (uses field indices \"0\", \"1\", \"2\", etc. as tags)\n- Unit structs (empty scope)\n- Enums with unit variants (logs variant name)\n- Enums with field variants (logs variant name first, then fields, inside a scope)\n\nIn the call trace, a struct logged under `tag` appears as a collapsible\nscope named `tag` containing one entry per field. A unit enum variant is\nshown as the line `tag: Variant`; a variant with fields as a scope `tag`\ncontaining `tag: Variant` followed by the fields. Every field type must\nimplement `CvlrLog`. To log only some fields, use\n`cvlr::log::impl_cvlr_log_for_struct!` instead. Generic types and unions\nare not supported. The generated code refers to `::cvlr::log`, so the\ncrate must depend on `cvlr`. Also available from `cvlr::derive` and the\nprelude.\n\n# Example\n\n```ignore\nuse cvlr_derive::CvlrLog;\nuse cvlr::log::CvlrLog;\n\n#[derive(CvlrLog)]\nstruct Point {\n    x: u64,\n    y: u64,\n}\n\n#[derive(CvlrLog)]\nstruct Tuple(u64, i32);\n\n#[derive(CvlrLog)]\nenum MyEnum {\n    Variant1,\n    Variant2(u64),\n    Variant3 { x: u64, y: i32 },\n}\n\nlet p = Point { x: 1, y: 2 };\nclog!(p);                  // scope \"p\" with entries x, y\n\nlet t = Tuple(1, -2);\nclog!(t => \"tuple\");       // scope \"tuple\" with entries 0, 1\n\nlet e = MyEnum::Variant2(42);\nclog!(e);                  // scope \"e\": \"e: Variant2\", then \"0: 42\"\n```",
+   "links": {},
+   "attrs": [
+    {
+     "other": "#[attr = ProcMacroDerive {trait_name: \"CvlrLog\", helper_attrs: []}]"
+    }
+   ],
+   "deprecation": null,
+   "stability": null,
+   "const_stability": null,
+   "inner": {
+    "proc_macro": {
+     "kind": "derive",
+     "helpers": []
+    }
+   }
+  }
+ },
+ "paths": {
+  "3": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_derive",
+    "CvlrLog"
+   ],
+   "kind": "proc_derive"
+  },
+  "4": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_derive"
+   ],
+   "kind": "module"
+  },
+  "2": {
+   "crate_id": 0,
+   "path": [
+    "cvlr_derive",
+    "Nondet"
+   ],
+   "kind": "proc_derive"
+  }
+ },
+ "external_crates": {},
+ "target": {
+  "triple": "x86_64-unknown-linux-gnu",
+  "target_features": [
+   {
+    "name": "adx",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "aes",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-avx512",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-bf16",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-complex",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-fp8",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-fp16",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-int8",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-movrs",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-tf32",
+    "implies_features": [
+     "amx-tile"
+    ],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "amx-tile",
+    "implies_features": [],
+    "unstable_feature_gate": "x86_amx_intrinsics",
+    "globally_enabled": false
+   },
+   {
+    "name": "apxf",
+    "implies_features": [],
+    "unstable_feature_gate": "apx_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "avx",
+    "implies_features": [
+     "sse4.2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx2",
+    "implies_features": [
+     "avx"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx10.1",
+    "implies_features": [
+     "avx512bf16",
+     "avx512bitalg",
+     "avx512bw",
+     "avx512cd",
+     "avx512dq",
+     "avx512f",
+     "avx512fp16",
+     "avx512ifma",
+     "avx512vbmi",
+     "avx512vbmi2",
+     "avx512vl",
+     "avx512vnni",
+     "avx512vpopcntdq"
+    ],
+    "unstable_feature_gate": "avx10_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "avx10.2",
+    "implies_features": [
+     "avx10.1",
+     "avxvnni",
+     "avxvnniint8",
+     "avxvnniint16"
+    ],
+    "unstable_feature_gate": "avx10_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512bf16",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512bitalg",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512bw",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512cd",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512dq",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512f",
+    "implies_features": [
+     "avx2",
+     "fma",
+     "f16c"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512fp16",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512ifma",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vbmi",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vbmi2",
+    "implies_features": [
+     "avx512bw"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vl",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vnni",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vp2intersect",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avx512vpopcntdq",
+    "implies_features": [
+     "avx512f"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxifma",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxneconvert",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxvnni",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxvnniint8",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "avxvnniint16",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "bmi1",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "bmi2",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "clflushopt",
+    "implies_features": [],
+    "unstable_feature_gate": "clflushopt_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "cmpxchg16b",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "ermsb",
+    "implies_features": [],
+    "unstable_feature_gate": "ermsb_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "f16c",
+    "implies_features": [
+     "avx"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "fma",
+    "implies_features": [
+     "avx"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "fma4",
+    "implies_features": [
+     "avx",
+     "sse4a"
+    ],
+    "unstable_feature_gate": "fma4_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "fxsr",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": true
+   },
+   {
+    "name": "gfni",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "kl",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "lahfsahf",
+    "implies_features": [],
+    "unstable_feature_gate": "lahfsahf_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "lzcnt",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "movbe",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "movrs",
+    "implies_features": [],
+    "unstable_feature_gate": "movrs_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "pclmulqdq",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "popcnt",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "prfchw",
+    "implies_features": [],
+    "unstable_feature_gate": "prfchw_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "rdrand",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "rdseed",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "rtm",
+    "implies_features": [],
+    "unstable_feature_gate": "rtm_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "sha",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sha512",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sm3",
+    "implies_features": [
+     "avx"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sm4",
+    "implies_features": [
+     "avx2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sse",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": true
+   },
+   {
+    "name": "sse2",
+    "implies_features": [
+     "sse"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": true
+   },
+   {
+    "name": "sse3",
+    "implies_features": [
+     "sse2"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sse4.1",
+    "implies_features": [
+     "ssse3"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sse4.2",
+    "implies_features": [
+     "sse4.1"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "sse4a",
+    "implies_features": [
+     "sse3"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "ssse3",
+    "implies_features": [
+     "sse3"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "tbm",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "vaes",
+    "implies_features": [
+     "avx2",
+     "aes"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "vpclmulqdq",
+    "implies_features": [
+     "avx",
+     "pclmulqdq"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "widekl",
+    "implies_features": [
+     "kl"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "x87",
+    "implies_features": [],
+    "unstable_feature_gate": "x87_target_feature",
+    "globally_enabled": true
+   },
+   {
+    "name": "xop",
+    "implies_features": [
+     "fma4",
+     "avx",
+     "sse4a"
+    ],
+    "unstable_feature_gate": "xop_target_feature",
+    "globally_enabled": false
+   },
+   {
+    "name": "xsave",
+    "implies_features": [],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "xsavec",
+    "implies_features": [
+     "xsave"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "xsaveopt",
+    "implies_features": [
+     "xsave"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   },
+   {
+    "name": "xsaves",
+    "implies_features": [
+     "xsave"
+    ],
+    "unstable_feature_gate": null,
+    "globally_enabled": false
+   }
+  ]
+ },
+ "format_version": 60
+}
