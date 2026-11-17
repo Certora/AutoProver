@@ -3,7 +3,7 @@
 It is prose: methodology, idiom, why one shape of rule beats another, what a pitfall costs. It was
 written against particular releases and is allowed to lag them, so it is not authority on what
 exists. That is :mod:`composer.tools.cvlr_api_rag`, generated from the crates at the releases this
-build pins (``docs/cvlr-api-docs-plan.md`` §4.1, §4.6). The docstrings below keep these tools from
+build pins. The docstrings below keep these tools from
 being reached for the questions the API tools answer.
 """
 

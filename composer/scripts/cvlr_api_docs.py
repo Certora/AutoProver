@@ -1,9 +1,7 @@
 """Producer: the CVLR crates' rustdoc → the ``cvlr_api_kb`` manifest.
 
-``docs/cvlr-api-docs-plan.md`` §4.2 is the argument for this living here. The short form: the
-compiler emits the item list, the signatures, the doc comments and the re-export targets, so this
-is cargo plus a JSON walk — no model, no API key, and testable by the ordinary suite. It sits
-beside :mod:`composer.scripts.ragbuild` (the manual's producer) and emits the same manifest format
+The compiler emits the item list, the signatures, the doc comments and the re-export targets, so
+this is cargo plus a JSON walk, with no model and no API key. It sits beside :mod:`composer.scripts.ragbuild` (the manual's producer) and emits the same manifest format
 (``docs/rag-import-format.md``), so :mod:`composer.scripts.rag_import` ingests it with no changes.
 
 **What it emits, and what it deliberately does not.** Entries carry a *contract*: the item's
@@ -1203,8 +1201,7 @@ def _probe_crate(
     """A crate whose only purpose is to make the reference set resolvable.
 
     The dependency block comes from the reference set itself, so the corpus is built against
-    exactly the releases a run pins — which is what makes a bump one change rather than two
-    (``docs/cvlr-api-docs-plan.md`` §2).
+    exactly the releases a run pins, and a bump of the pin is a bump of the corpus.
 
     A checkout enters as ``[patch.crates-io]`` rather than as a dependency, which is what keeps
     those two questions apart: the pin still says which crates resolve and at what version, and
@@ -1442,8 +1439,7 @@ def undocumented_report(crates: Sequence[DocumentedCrate], examples: ExampleGate
 
     The corpus can only carry what the crates carry. rustdoc gives existence, signature, defining
     crate and feature gate with no doc comment at all, but *what an item is for* has to be written
-    by someone, and this is the list of what nobody has written yet
-    (``docs/cvlr-api-docs-plan.md`` §4.2).
+    by someone, and this is the list of what nobody has written yet.
 
     An example that does not compile is the same kind of ask: the corpus drops it, so the item
     reads as having no example at all.

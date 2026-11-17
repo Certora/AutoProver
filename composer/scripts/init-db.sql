@@ -70,7 +70,7 @@ ALTER ROLE cvlr_rag_user IN DATABASE rag_db SET search_path = cvlr_rag, extensio
 -- cvlr api rag: the CVLR API, generated from the crates by composer.scripts.cvlr_api_docs.
 -- Its own schema, not a header root inside cvlr_rag: the two are rebuilt on different
 -- occasions (a CVLR bump vs. a docs revision) and ingestion is drop-and-rebuild, so sharing a
--- schema would make either rebuild drag the other along. See docs/cvlr-api-docs-plan.md §4.1.
+-- schema would make either rebuild drag the other along.
 CREATE SCHEMA IF NOT EXISTS cvlr_api_rag AUTHORIZATION cvlr_api_rag_user;
 GRANT USAGE ON SCHEMA extensions TO cvlr_api_rag_user;
 ALTER ROLE cvlr_api_rag_user IN DATABASE rag_db SET search_path = cvlr_api_rag, extensions;

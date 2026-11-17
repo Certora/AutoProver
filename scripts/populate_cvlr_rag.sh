@@ -7,9 +7,8 @@
 #                the releases composer/spec/cvlr/reference.py pins.
 #
 # Each manifest declares its own knowledge_base, and rag_import routes by that tag, so both land
-# from one call. Ingest only inserts, so run this against empty corpora. See
-# docs/cvlr-api-docs-plan.md. Any source can be missing and the others still land; all missing is
-# an error.
+# from one call. Ingest only inserts, so run this against empty corpora. Any source can be
+# missing and the others still land; all missing is an error.
 #
 # Manifest resolution, in order:
 #   1. paths given before `--`, which skip generation

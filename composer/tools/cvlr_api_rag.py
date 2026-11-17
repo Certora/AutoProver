@@ -3,8 +3,8 @@
 The tool names are the point. A retrieval hit carries no provenance — :meth:`find_refs` returns
 headers, content and a similarity score, and nothing about where the row came from — so the only
 thing telling an agent whether an answer is the crates' own account of themselves or a paragraph
-of hand-written prose is **which tool returned it** (``docs/cvlr-api-docs-plan.md`` §4.1). Hence
-``cvlr_api_*`` rather than more ``cvlr_*`` tools over a shared corpus.
+of hand-written prose is **which tool returned it**. Hence ``cvlr_api_*`` rather than more
+``cvlr_*`` tools over a shared corpus.
 
 Three tools for three questions:
 

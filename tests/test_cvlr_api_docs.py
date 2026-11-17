@@ -4,7 +4,7 @@ Everything here is pure: the walk's output is written by hand as :class:`Documen
 these tests are about what the producer does with items, not about rustdoc's schema. Whether the
 walk reads real rustdoc right is ``test_every_documented_path_compiles_in_a_scaffolded_project``
 at the bottom, which is ``expensive``: it documents the pinned crates and lets cargo judge every
-path the corpus offers. See ``docs/cvlr-api-docs-plan.md`` §4.2 and §7.
+path the corpus offers.
 """
 
 import re
