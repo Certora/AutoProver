@@ -634,7 +634,7 @@ def test_a_checkout_of_one_release_line_reaches_only_its_generation():
     sdk3 = LocalCheckout(
         root=root,
         crate_dir=root / "cvlr-solana",
-        version=SOLANA_V3.chain_crate.version,
+        version=SOLANA_V3.binding.version,
         revision="x",
     )
     core = _checkout("cvlr-asserts")
