@@ -91,8 +91,8 @@ kinds, was then cut as [#311](https://github.com/Certora/AutoProver/pull/311), a
 Pinocchio 0.8 a generation of its own beside 0.9 and made a framework's generation match only a
 package that declares the framework; see [P1c](#p1c--pinocchio-and-jiminy-programs).
 `eric/solana-staging` merged master after #311 the same day (`87d55da1`), resolving the P1c files
-against #311's first cut (`1480af33`) as the base. #312 is now the second of #311 and #312 to land,
-so it takes the `binding` rename.
+against #311's first cut (`1480af33`) as the base. #312 then merged master after #311
+(`f656245a`) and took the `binding` rename (`02a07060`).
 
 The branch was rebased onto master after #258 (`709293a9`): 291 commits, 195 files, about 100,000
 inserted lines. P1 changed a lot in review, and the branch carries 727 lines of later work on files
@@ -867,8 +867,8 @@ the branch in four ways:
   are in it. The cases that import `cvlr_research` or read its prompt ride P6.
 * **`tests/test_cvlr_recipe_examples.py` is held.** It reads K1's recipe index, so it lands with
   whichever of #298 and #312 merges second.
-* **`chain_crate`, not `binding`.** One test reads `SOLANA_V3.chain_crate.version`. #311 merged
-  first, so #312 renames it when it merges master.
+* **`binding`, after #311.** One test read `SOLANA_V3.chain_crate.version` as cut. #311 merged
+  first, and #312 merged master after it (`f656245a`) and renamed it (`02a07060`).
 
 The comments that named `cvlr_research`, `cvlr-knowledge-plan.md`, or the corpus's history now
 describe only what is on master. No tool-display entries ride here; they come with the research
