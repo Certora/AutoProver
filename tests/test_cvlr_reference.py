@@ -36,8 +36,9 @@ def test_every_cvlr_crate_is_pinned_to_an_exact_release():
 
 def test_the_platform_is_a_line_not_a_release():
     # The platform generation is about the target. An exact pin would claim a patch level that
-    # was never compiled. A generation bound by a harness module declares none: its framework is
-    # not published, so there is nothing a probe could depend on.
+    # was never compiled. A generation bound by a harness module declares none: its helpers are
+    # the module, compiled against the program's own copy of the framework, so there is no chain
+    # crate a probe could build against, whatever the framework publishes.
     for chain, generations in ref.REFERENCE_SET.items():
         for r in generations:
             assert r.platform.sdk_crates or r.shim is not None, chain
@@ -141,6 +142,7 @@ def test_solana_has_one_reference_set_per_generation_framework_first_then_newest
         ref.SOLANA_JIMINY,
         ref.SOLANA_PINOCCHIO_0_11,
         ref.SOLANA_PINOCCHIO_0_10,
+        ref.SOLANA_PINOCCHIO_0_9,
         ref.SOLANA_PINOCCHIO_0_8,
         ref.SOLANA_V3,
         ref.SOLANA_V2,
@@ -175,13 +177,19 @@ def test_every_harness_module_has_its_template():
 def test_the_pinocchio_lines_share_a_module_and_differ_in_its_template():
     """A rule names `crate::certora::pinocchio` whatever the release. What changes between lines is
     the account header the module describes, and the account type the author is told about."""
-    lines = (ref.SOLANA_PINOCCHIO_0_11, ref.SOLANA_PINOCCHIO_0_10, ref.SOLANA_PINOCCHIO_0_8)
+    lines = (
+        ref.SOLANA_PINOCCHIO_0_11,
+        ref.SOLANA_PINOCCHIO_0_10,
+        ref.SOLANA_PINOCCHIO_0_9,
+        ref.SOLANA_PINOCCHIO_0_8,
+    )
     shims = [r.shim for r in lines]
     assert all(s is not None and s.module == "pinocchio" and s.requires == "pinocchio" for s in shims)
-    assert len({s.template for s in shims if s is not None}) == 3
+    assert len({s.template for s in shims if s is not None}) == 4
     assert [s.author_section for s in shims if s is not None] == [
         ref.AuthorSection.PINOCCHIO_ACCOUNT_VIEW,
         ref.AuthorSection.PINOCCHIO_ACCOUNT_VIEW,
+        ref.AuthorSection.PINOCCHIO_ACCOUNT_INFO,
         ref.AuthorSection.PINOCCHIO_ACCOUNT_INFO,
     ]
     for r in lines:

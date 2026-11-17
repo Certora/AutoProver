@@ -353,6 +353,7 @@ def test_a_jiminy_run_is_told_how_to_reach_a_jiminy_handler_instead_of_an_anchor
     [
         ("SOLANA_PINOCCHIO_0_11", "AccountView", "address()", "AccountInfo; 16"),
         ("SOLANA_PINOCCHIO_0_10", "AccountView", "address()", "AccountInfo; 16"),
+        ("SOLANA_PINOCCHIO_0_9", "AccountInfo", "key()", "AccountView"),
         ("SOLANA_PINOCCHIO_0_8", "AccountInfo", "key()", "AccountView"),
     ],
 )

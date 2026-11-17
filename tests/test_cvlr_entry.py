@@ -25,7 +25,10 @@ from composer.spec.source.report.schema import AutoProverReport, Refused
 
 
 def _package(root: Path, name: str, *, lib: bool = True) -> CratePackage:
+    """A member declaring only itself. Selecting a generation reads its manifest."""
     package_root = root / "programs" / name
+    package_root.mkdir(parents=True, exist_ok=True)
+    (package_root / "Cargo.toml").write_text(f'[package]\nname = "{name}"\nversion = "0.1.0"\n')
     return CratePackage(
         name=name,
         version="0.1.0",

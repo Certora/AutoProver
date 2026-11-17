@@ -69,6 +69,12 @@ class WorkspaceTable(_ManifestModel):
     dependencies: dict[str, Dependency] = {}
 
 
+class TargetTable(_ManifestModel):
+    """``[target.'<platform>']``: what cargo adds on a matching target only."""
+
+    dependencies: dict[str, Dependency] = {}
+
+
 class Manifest(_ManifestModel):
     #: ``None`` for a virtual workspace manifest.
     package: PackageTable | None = None
@@ -76,9 +82,17 @@ class Manifest(_ManifestModel):
     #: the manifest a workspace root.
     workspace: WorkspaceTable | None = None
     dependencies: dict[str, Dependency] = {}
+    #: Keyed by the platform as written: a target triple or a ``cfg(...)`` expression.
+    target: dict[str, TargetTable] = {}
     features: dict[CargoFeature, list[str]] = {}
     #: Keyed by the source being patched (``crates-io``, or a registry or git URL), then by crate.
     patch: dict[str, dict[str, Dependency]] = {}
+
+    def declares(self, crate: str) -> bool:
+        """Whether ``crate`` is a normal dependency under its own name, on any target."""
+        return crate in self.dependencies or any(
+            crate in table.dependencies for table in self.target.values()
+        )
 
     @property
     def workspace_dependencies(self) -> dict[str, Dependency]:

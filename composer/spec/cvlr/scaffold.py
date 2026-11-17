@@ -32,18 +32,23 @@ AutoProver's files are rewritten whenever they differ from what the scaffold wou
 (:class:`Write`), so a harness left by an earlier run or by hand is replaced, and a newer
 starting configuration reaches the build. Nothing else under ``src/certora/`` is touched.
 
-The project's files are edited, never replaced. Each edit is planned only when what it adds is
-missing, so a second run changes nothing. A manifest is edited as a TOML document
+The project's manifests are edited, never replaced. Each edit is planned only when what it adds
+is missing, so a second run changes nothing. A manifest is edited as a TOML document
 (:class:`~composer.cargo.manifest.ManifestEditor`): keys go into the tables that already hold
-them, and everything the scaffold does not add comes back as it was, comments included.
+them, and everything the scaffold does not add comes back as it was, comments included. A
+framework program's sources are the exception: a file that makes the crate ``no_std`` or installs
+an allocator or panic handler is rewritten whole to gate those off under the feature
+(:class:`SourceEdit`), and :func:`apply` writes that rewrite only over the text it was planned
+against.
 
 ``sources`` includes ``Cargo.toml``. ``.certora_sources`` is what the report and the counterexample
 analyzer read, and a source tree with no manifest cannot be rebuilt. CVLR versions come from the
 reference set.
 """
 
+import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from importlib.resources import files
 from pathlib import Path
@@ -293,31 +298,115 @@ def _harness_files(dialect: PathDialect, shim: HarnessShim | None) -> tuple[Writ
 
 
 _CERTORA_OFF = f'not(feature = "{DEFAULT_FEATURE}")'
+_GATE = f"#[cfg({_CERTORA_OFF})]"
 
-_NO_STD = re.compile(r"^#!\[no_std\]", re.MULTILINE)
-_NO_STD_WHEN = re.compile(r"^#!\[cfg_attr\((?P<cond>.+), no_std\)\]", re.MULTILINE)
-#: A panic handler of the crate's own: the `#[panic_handler]` attribute, or Pinocchio's macro that
-#: defines one. Not matched when the line before already gates it on the feature.
-_PANIC_HANDLER = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<item>#\[panic_handler\]|(?:pinocchio::)?nostd_panic_handler!)",
+#: The start of a crate-level attribute, which is all ``no_std`` can be. Anchored at a line's start
+#: so a ``//!`` doc line that quotes one is left alone.
+_INNER_ATTRIBUTE = re.compile(r"^(?P<indent>[ \t]*)#!\[", re.MULTILINE)
+
+#: A framework macro that installs a global allocator or a panic handler, called by any path, or
+#: the ``#[panic_handler]`` attribute. ``program_entrypoint!`` installs neither and is not matched.
+_RUNTIME_ITEM = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<item>#\[\s*panic_handler\s*\]"
+    r"|(?:::)?(?:\w+\s*::\s*)*"
+    r"(?:entrypoint|entrypoint_with_r2|lazy_entrypoint|default_allocator|no_allocator"
+    r"|nostd_panic_handler)\s*!)",
     re.MULTILINE,
 )
-_GATE = f"#[cfg({_CERTORA_OFF})]"
+
+
+def _closing(source: str, start: int) -> int | None:
+    """The index of the bracket that closes the one at ``start``, or ``None`` if it is unclosed.
+
+    String literals are skipped, so a ``]`` or ``)`` in a ``feature = "…"`` does not count.
+    """
+    depth = 0
+    quoted = False
+    i = start
+    while i < len(source):
+        c = source[i]
+        if quoted:
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                quoted = False
+        elif c == '"':
+            quoted = True
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _top_level_args(text: str) -> list[str]:
+    """``text`` split at the commas outside any bracket or string, each part stripped."""
+    parts: list[str] = []
+    depth = 0
+    quoted = False
+    begin = 0
+    for i, c in enumerate(text):
+        if quoted:
+            quoted = c != '"' or text[i - 1] == "\\"
+        elif c == '"':
+            quoted = True
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(text[begin:i].strip())
+            begin = i + 1
+    parts.append(text[begin:].strip())
+    return [part for part in parts if part]
+
+
+def _std_attribute(body: str, indent: str) -> str | None:
+    """The crate attribute ``#![body]`` with ``no_std`` gated off under the feature, or ``None``
+    when it does not make the crate ``no_std`` or already leaves it ``std`` under the feature.
+
+    In a ``cfg_attr`` that applies several attributes, only ``no_std`` moves to an attribute of its
+    own. The others keep the condition they had.
+    """
+    body = body.strip()
+    if body == "no_std":
+        return f"{indent}#![cfg_attr({_CERTORA_OFF}, no_std)]"
+    opened = re.match(r"cfg_attr\s*\(", body)
+    if opened is None or _closing(body, opened.end() - 1) != len(body) - 1:
+        return None
+    condition, *attributes = _top_level_args(body[opened.end() : -1])
+    if "no_std" not in attributes or _CERTORA_OFF in condition:
+        return None
+    rest = [a for a in attributes if a != "no_std"]
+    kept = f"{indent}#![cfg_attr({condition}, {', '.join(rest)})]\n" if rest else ""
+    return f"{kept}{indent}#![cfg_attr(all({condition}, {_CERTORA_OFF}), no_std)]"
 
 
 def _with_std(source: str) -> str:
     """``source`` as it has to be to compile with the harness, which links ``std`` through cvlr.
 
-    ``std`` brings its own panic handler, so a handler the crate defines is a duplicate of it and is
-    gated off. ``no_std`` is gated off too, so a rule can use what ``std`` has.
+    ``no_std`` is gated off under the feature, so a rule can use what ``std`` has. ``std`` brings
+    its own panic handler, so one the crate defines is a duplicate of it and is gated off. So are
+    the framework's allocators: the bump allocator writes the heap at a fixed address, and a rule
+    that allocates through ``__rust_alloc`` beside it fails with Prover error 3309. ``entrypoint!``
+    installs both, and goes with them, as ``no-entrypoint`` takes it out of an SDK program.
     """
-    source = _NO_STD.sub(f"#![cfg_attr({_CERTORA_OFF}, no_std)]", source)
-    source = _NO_STD_WHEN.sub(
-        lambda m: m.group(0)
-        if _CERTORA_OFF in m.group("cond")
-        else f"#![cfg_attr(all({m.group('cond')}, {_CERTORA_OFF}), no_std)]",
-        source,
-    )
+    pieces: list[str] = []
+    copied = 0
+    for match in _INNER_ATTRIBUTE.finditer(source):
+        if match.start() < copied:
+            continue
+        close = _closing(source, match.end() - 1)
+        if close is None:
+            break
+        rewritten = _std_attribute(source[match.end() : close], match.group("indent"))
+        if rewritten is not None:
+            pieces += [source[copied : match.start()], rewritten]
+            copied = close + 1
+    source = "".join(pieces) + source[copied:]
 
     def gate(match: re.Match[str]) -> str:
         preceding = source[: match.start()].rstrip("\n").rsplit("\n", 1)[-1].strip()
@@ -325,7 +414,7 @@ def _with_std(source: str) -> str:
             return match.group(0)
         return f"{match.group('indent')}{_GATE}\n{match.group(0)}"
 
-    return _PANIC_HANDLER.sub(gate, source)
+    return _RUNTIME_ITEM.sub(gate, source)
 
 
 def _lib_declaration() -> str:
@@ -447,7 +536,8 @@ class _OnGeneration:
 
 @dataclass(frozen=True)
 class _OffGeneration:
-    """The package links a copy of ``witness`` from another generation."""
+    """The package links a copy of ``witness`` from another generation. ``witness`` is the crate at
+    the newest line the generation accepts, which is what a refusal tells the author to move to."""
 
     witness: CrateRequirement
     builds: tuple[str, ...]
@@ -485,15 +575,21 @@ def select_generation(
     """The reference set in ``candidates`` for the platform generation ``package`` is on.
 
     ``None`` when the package links none of their witnesses. ``candidates`` are newest first
-    (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`), and the first match wins.
+    (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`), and the first match wins, with one
+    exception. A framework's generation matches only a package that declares the framework itself.
+    A framework a dependency links is that dependency's business: the program's handlers take the
+    account type of whatever it does declare. Such a package still matches when no other
+    generation does, so that :func:`_check_shim_dependency` can say what it is missing.
     """
+    on = [
+        reference
+        for reference in candidates
+        if isinstance(_read_platform(workspace, package, reference), _OnGeneration)
+    ]
+    manifest = read_manifest(package.root / "Cargo.toml")
     return next(
-        (
-            reference
-            for reference in candidates
-            if isinstance(_read_platform(workspace, package, reference), _OnGeneration)
-        ),
-        None,
+        (r for r in on if r.shim is None or manifest.declares(r.shim.requires)),
+        next(iter(on), None),
     )
 
 
@@ -672,16 +768,44 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
     )
 
 
-def _calls_entrypoint(package: CratePackage) -> bool:
-    """Whether ``package``'s sources call ``entrypoint!`` or ``entrypoint_no_alloc!``.
+#: Directories beside a library's root that cargo builds as other targets, or writes to.
+_NOT_LIBRARY = frozenset({"target", "tests", "examples", "benches"})
 
-    ``src/certora`` is the harness, so those files are skipped.
+
+def _library_sources(package: CratePackage) -> Iterator[tuple[Path, str]]:
+    """The ``.rs`` files of ``package``'s library, with their text, ``lib.rs`` included.
+
+    Every file under the library root's directory, which is where its modules are, except the
+    harness, and except what is not the library's when that directory is the package root: build
+    output, the other cargo targets, hidden directories and other packages. A file that is not
+    UTF-8 is skipped. It is not Rust source cargo would compile, and nothing could be written back
+    over it.
     """
-    source = package.root / "src"
+    if package.lib is None:
+        return
+    top = package.lib.src_path.parent
+    harness = package.root / HARNESS_DIR
+    for directory, subdirectories, names in os.walk(top):
+        here = Path(directory)
+        subdirectories[:] = sorted(
+            d
+            for d in subdirectories
+            if not d.startswith(".")
+            and not (here == package.root and d in _NOT_LIBRARY)
+            and here / d != harness
+            and not (here / d / "Cargo.toml").is_file()
+        )
+        for name in sorted(n for n in names if n.endswith(".rs")):
+            try:
+                yield here / name, (here / name).read_text()
+            except UnicodeDecodeError:
+                continue
+
+
+def _calls_entrypoint(package: CratePackage) -> bool:
+    """Whether ``package``'s library calls ``entrypoint!`` or ``entrypoint_no_alloc!``."""
     return any(
-        _ENTRYPOINT_MACRO.search(_COMMENT.sub(" ", path.read_text(errors="replace")))
-        for path in source.rglob("*.rs")
-        if not path.is_relative_to(source / "certora")
+        _ENTRYPOINT_MACRO.search(_COMMENT.sub(" ", text)) for _, text in _library_sources(package)
     )
 
 
@@ -889,55 +1013,90 @@ def _plan_harness(
         else:
             plan.add_change(replace(file, path=relative / file.path))
 
-    if package.lib is not None:
-        lib_rel = _project_relative(package.lib.src_path, package.root)
-        # cargo metadata reports a `[lib] path` without checking the file exists.
-        if not package.lib.src_path.is_file():
-            plan.add_blocked(
-                Blocked(
-                    path=relative / "Cargo.toml",
-                    problem=(
-                        f"{package.name}'s library source, {relative / lib_rel}, does not exist, "
-                        f"so there is no crate to add the harness to"
-                    ),
-                    resolution=(
-                        "point `[lib] path` at the program's source, or scaffold the package that "
-                        "has it"
-                    ),
-                )
-            )
-        elif _MOD_CERTORA.search(package.lib.src_path.read_text()):
-            plan.add_satisfied(f"{relative / lib_rel} already declares the harness module")
-        else:
-            plan.add_change(
-                AppendSection(
-                    path=relative / lib_rel,
-                    contents=_lib_declaration(),
-                    why="pull the harness into the crate, gated on the feature",
-                )
-            )
+
+_STD_WHY = (
+    "gate no_std, the panic handler and the allocator off under the feature: cvlr links std, "
+    "whose panic handler would be a second one (E0152), and a rule's allocations would collide "
+    "with the bump allocator's (Prover error 3309)"
+)
+_DECLARATION_WHY = "pull the harness into the crate, gated on the feature"
 
 
-def _plan_std(package: CratePackage, relative: Path, plan: _PlanBuilder) -> None:
-    """Make a ``no_std`` crate build with ``std`` under the feature, as hand-written Pinocchio
-    verification projects do. Every file of the library is read: a program may install its panic
-    handler beside its entrypoint rather than in ``lib.rs``."""
-    if package.lib is None or not package.lib.src_path.is_file():
+def _plan_sources(
+    package: CratePackage, relative: Path, shim: HarnessShim | None, plan: _PlanBuilder
+) -> None:
+    """The changes to the library's own sources: the harness module's declaration in its root, and
+    for a program on a framework (``shim``), its runtime gated off under the feature
+    (:func:`_with_std`), as hand-written Pinocchio verification projects do.
+
+    An SDK program needs no rewrite. It builds with ``std``, and ``no-entrypoint`` or the
+    platform's heap switch takes its allocator out. A framework program has neither, and may
+    install its allocator or panic handler anywhere in the library, so every file is read. A root
+    that needs both gets one :class:`SourceEdit` that carries the declaration too.
+    """
+    if package.lib is None:
         return
-    for source in sorted(package.lib.src_path.parent.rglob("*.rs")):
-        if HARNESS_DIR in source.relative_to(package.root).parents:
+    lib = package.lib.src_path
+    lib_rel = relative / _project_relative(lib, package.root)
+    # cargo metadata reports a `[lib] path` without checking the file exists.
+    if not lib.is_file():
+        plan.add_blocked(
+            Blocked(
+                path=relative / "Cargo.toml",
+                problem=(
+                    f"{package.name}'s library source, {lib_rel}, does not exist, so there is no "
+                    f"crate to add the harness to"
+                ),
+                resolution=(
+                    "point `[lib] path` at the program's source, or scaffold the package that has it"
+                ),
+            )
+        )
+        return
+
+    root_text: str | None = None
+    for source, before in _library_sources(package):
+        if source == lib:
+            root_text = before
             continue
-        before = source.read_text()
-        after = _with_std(before)
+        after = _with_std(before) if shim is not None else before
         if after != before:
             plan.add_change(
                 SourceEdit(
                     path=relative / _project_relative(source, package.root),
                     before=before,
                     after=after,
-                    why="build with std under the feature: cvlr links it, and its panic handler",
+                    why=_STD_WHY,
                 )
             )
+    if root_text is None:
+        plan.add_blocked(
+            Blocked(
+                path=lib_rel,
+                problem=f"{lib_rel} is not UTF-8 text, so the harness cannot be declared in it",
+                resolution="save it as UTF-8",
+            )
+        )
+        return
+
+    before = root_text
+    after = _with_std(before) if shim is not None else before
+    declared = _MOD_CERTORA.search(before) is not None
+    if declared:
+        plan.add_satisfied(f"{lib_rel} already declares the harness module")
+    if after != before:
+        plan.add_change(
+            SourceEdit(
+                path=lib_rel,
+                before=before,
+                after=after if declared else after + _lib_declaration(),
+                why=_STD_WHY if declared else f"{_STD_WHY}; {_DECLARATION_WHY}",
+            )
+        )
+    elif not declared:
+        plan.add_change(
+            AppendSection(path=lib_rel, contents=_lib_declaration(), why=_DECLARATION_WHY)
+        )
 
 
 def _check_shim_dependency(
@@ -947,9 +1106,10 @@ def _check_shim_dependency(
 
     A crate can only name its own dependencies, so a framework the package reaches only through
     another crate leaves the shim unable to compile. The manifest is read rather than the graph:
-    the graph does not say under which name the package declares the crate.
+    the graph does not say under which name the package declares the crate. A declaration for some
+    targets only counts: the harness is built for the one the program is.
     """
-    if shim.requires in plan.read(relative / "Cargo.toml").dependencies:
+    if plan.read(relative / "Cargo.toml").declares(shim.requires):
         return
     plan.add_blocked(
         Blocked(
@@ -1091,10 +1251,8 @@ def plan_scaffold(
     dialect = dialect_for(workspace, package, reference)
 
     _plan_workspace_manifest(reference, plan)
-    # Before the harness: a source edit is checked against the file as planned, and the harness
-    # appends its declaration to `lib.rs`.
-    _plan_std(package, relative, plan)
     _plan_harness(package, relative, dialect, reference.shim, plan)
+    _plan_sources(package, relative, reference.shim, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, plan)
     _plan_forks(workspace, package, reference, plan)
@@ -1144,12 +1302,19 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
     """Carry out ``plan`` under ``root``, returning the paths it touched, in order.
 
     Refuses a plan that still has a :class:`Blocked` entry. A partial scaffold leaves the next
-    build with two possible causes.
+    build with two possible causes. For the same reason every file's new text is worked out, and
+    every :class:`ScaffoldStale` raised, before the first one is written.
     """
     if plan.blocked:
         raise ScaffoldBlocked(plan.blocked)
 
-    touched: list[Path] = []
+    texts: dict[Path, str] = {}
+
+    def current(target: Path) -> str | None:
+        if target in texts:
+            return texts[target]
+        return target.read_text() if target.is_file() else None
+
     for change in plan.changes:
         target = root / change.path
         # Every path in a plan comes from constants and from cargo metadata. A path outside the
@@ -1158,18 +1323,18 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
             raise ScaffoldOutsideProject(f"{target} escapes {root}")
         match change:
             case Write(contents=contents):
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(contents)
+                texts[target] = contents
             case AppendSection(contents=contents):
-                existing = target.read_text() if target.is_file() else ""
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(existing + contents)
+                texts[target] = (current(target) or "") + contents
             case SourceEdit(before=before, after=after):
-                if target.read_text() != before:
+                if current(target) != before:
                     raise ScaffoldStale(f"{change.path} changed after the scaffold was planned")
-                target.write_text(after)
+                texts[target] = after
             case EditManifest(additions=additions):
-                edited = ManifestEditor.read(target)
+                existing = current(target)
+                if existing is None:
+                    raise ScaffoldStale(f"{change.path} was removed after the scaffold was planned")
+                edited = ManifestEditor(existing, origin=str(change.path))
                 for addition in additions:
                     try:
                         edited.apply(addition.edit, note=_ADDED)
@@ -1177,6 +1342,9 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
                         raise ScaffoldStale(
                             f"{change.path} changed after the scaffold was planned: {exc}"
                         ) from exc
-                target.write_text(edited.text())
-        touched.append(change.path)
-    return tuple(touched)
+                texts[target] = edited.text()
+
+    for target, text in texts.items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    return tuple(change.path for change in plan.changes)
