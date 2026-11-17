@@ -1499,3 +1499,142 @@ def test_a_source_edit_over_a_changed_file_is_stale(tmp_path):
     (tmp_path / "src" / "lib.rs").write_text(PINOCCHIO_PROGRAM + "// edited\n")
     with pytest.raises(scaffold.ScaffoldStale, match="src/lib.rs"):
         apply(plan, workspace.root)
+
+
+def test_a_conditional_no_std_beside_other_attributes_keeps_them_under_its_condition():
+    assert scaffold._with_std("#![cfg_attr(not(test), no_std, no_main)]\n") == (
+        "#![cfg_attr(not(test), no_main)]\n"
+        '#![cfg_attr(all(not(test), not(feature = "certora")), no_std)]\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        ("  #![no_std]\n", '  #![cfg_attr(not(feature = "certora"), no_std)]\n'),
+        ("#![ no_std ]\n", '#![cfg_attr(not(feature = "certora"), no_std)]\n'),
+        (
+            '#![cfg_attr(\n    target_os = "solana",\n    no_std\n)]\n',
+            '#![cfg_attr(all(target_os = "solana", not(feature = "certora")), no_std)]\n',
+        ),
+    ],
+)
+def test_no_std_is_found_however_it_is_spelled(source, expected):
+    assert scaffold._with_std(source) == expected
+
+
+def test_a_quoted_no_std_is_left_alone():
+    source = "//! Start with `#![no_std]`.\n#![allow(unused)]\n"
+    assert scaffold._with_std(source) == source
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "entrypoint!(process_instruction);",
+        "pinocchio::entrypoint!(process_instruction);",
+        "entrypoint_with_r2!(process_instruction);",
+        "lazy_entrypoint!(process_instruction);",
+        "default_allocator!();",
+        "pinocchio::no_allocator!();",
+        "jiminy_entrypoint::default_allocator!();",
+        "nostd_panic_handler!();",
+        "::pinocchio::nostd_panic_handler!();",
+        "pinocchio :: nostd_panic_handler!();",
+    ],
+)
+def test_what_installs_an_allocator_or_a_panic_handler_is_gated_off(call):
+    """An allocator beside the rules' own allocations fails with Prover error 3309, and a panic
+    handler beside std's with E0152."""
+    assert scaffold._with_std(f"{call}\n") == f'#[cfg(not(feature = "certora"))]\n{call}\n'
+
+
+@pytest.mark.parametrize(
+    "call",
+    ["program_entrypoint!(process_instruction);", "pinocchio::program_entrypoint!(f);", "msg!(\"x\");"],
+)
+def test_what_installs_neither_is_left_alone(call):
+    assert scaffold._with_std(f"{call}\n") == f"{call}\n"
+
+
+def test_the_rewrite_is_idempotent():
+    once = scaffold._with_std(PINOCCHIO_PROGRAM + "#![cfg_attr(not(test), no_std, no_main)]\n")
+    assert scaffold._with_std(once) == once
+
+
+@pytest.mark.parametrize(
+    "reference, platform_crate, version",
+    [(SOLANA_V2, "solana-program", "2.2.1"), (SOROBAN, "soroban-sdk", "22.0.0")],
+)
+def test_a_no_std_program_on_a_published_binding_is_not_rewritten(
+    tmp_path, reference, platform_crate, version
+):
+    """Only a framework program's runtime is gated. A Soroban contract builds for a target with no
+    `std`, and an SDK program's allocator is switched off by a feature."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "lib.rs").write_text("#![no_std]\n" + PROGRAM)
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE,
+        platform=version, platform_crate=platform_crate,
+    )
+    plan = plan_scaffold(workspace, package, reference)
+    assert not [c for c in plan.changes if isinstance(c, scaffold.SourceEdit)]
+
+
+def test_an_sdk_program_that_links_pinocchio_through_a_dependency_is_on_the_sdk(tmp_path):
+    """Its handlers take the SDK's `AccountInfo`. A Pinocchio copy in the graph is a dependency's."""
+    workspace, package = _project(
+        tmp_path, manifest=STANDALONE, platform="2.2.1", cvlr_resolved={"pinocchio": "0.10.2"}
+    )
+    assert scaffold.select_generation(workspace, package, generations("solana")) == SOLANA_V2
+
+
+def test_a_program_that_declares_pinocchio_and_links_the_sdk_is_on_pinocchio(tmp_path):
+    workspace, package = _pinocchio_project(tmp_path, cvlr_resolved={"solana-program": "2.2.1"})
+    assert scaffold.select_generation(workspace, package, generations("solana")) == SOLANA_PINOCCHIO_0_9
+
+
+def test_a_framework_declared_for_the_solana_target_only_is_declared(tmp_path):
+    manifest = PINOCCHIO_MANIFEST.replace(
+        "[dependencies]", "[target.'cfg(target_os = \"solana\")'.dependencies]"
+    )
+    workspace, package = _pinocchio_project(tmp_path, manifest=manifest)
+    assert scaffold.select_generation(workspace, package, generations("solana")) == SOLANA_PINOCCHIO_0_9
+    assert not plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9).blocked
+
+
+def test_only_the_librarys_own_text_sources_are_rewritten(tmp_path):
+    """With `[lib] path = "lib.rs"` the library's directory is the package root, which also holds
+    build output and the other cargo targets."""
+    manifest = PINOCCHIO_MANIFEST.replace("[lib]\n", '[lib]\npath = "lib.rs"\n')
+    (tmp_path / "lib.rs").write_text(PINOCCHIO_PROGRAM)
+    (tmp_path / "Cargo.toml").write_text(manifest)
+    for other in ("target/release/build/out/gen.rs", "tests/it.rs", "member/src/lib.rs", "state.rs"):
+        (tmp_path / other).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / other).write_text("#![no_std]\n")
+    (tmp_path / "member" / "Cargo.toml").write_text("[package]\nname = \"member\"\n")
+    (tmp_path / "fixture.rs").write_bytes(b"\xff\xfe#![no_std]\n")
+    workspace, package = _pinocchio_project(tmp_path, manifest=manifest)
+    (tmp_path / "src" / "lib.rs").unlink()
+    package = replace(package, lib=replace(package.lib, src_path=tmp_path / "lib.rs"))
+    workspace = replace(
+        workspace, members=(package,), packages=(package, *workspace.packages[1:]),
+        links={package: workspace.links[workspace.members[0]]},
+    )
+    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9)
+    edited = {c.path for c in plan.changes if isinstance(c, scaffold.SourceEdit)}
+    assert edited == {Path("lib.rs"), Path("state.rs")}
+
+
+def test_a_stale_source_edit_writes_nothing(tmp_path):
+    """The check runs before the harness and the manifests are written, not when `apply` reaches
+    the edit."""
+    workspace, package = _pinocchio_project(tmp_path)
+    plan = plan_scaffold(workspace, package, SOLANA_PINOCCHIO_0_9)
+    manifest = (tmp_path / "Cargo.toml").read_text()
+    (tmp_path / "src" / "lib.rs").unlink()
+    with pytest.raises(scaffold.ScaffoldStale, match="src/lib.rs"):
+        apply(plan, workspace.root)
+    assert not (tmp_path / HARNESS_DIR).exists()
+    assert (tmp_path / "Cargo.toml").read_text() == manifest
+    assert not (tmp_path / ".gitignore").exists()

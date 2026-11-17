@@ -442,7 +442,8 @@ SOLANA_JIMINY = ChainReference(
         sdk_crates=(),
         # Every jiminy program declares its entrypoint crate, which links `jiminy-account`.
         witnesses=(CrateRequirement("jiminy-entrypoint", "0.1"),),
-        # jiminy's `entrypoint!` installs its allocator unconditionally.
+        # jiminy's `entrypoint!` installs its allocator with no switch to turn it off. The
+        # scaffold gates the macro off in the source instead.
         heap_opt_out=None,
     ),
 )
@@ -465,7 +466,8 @@ SOLANA_PINOCCHIO_0_11 = ChainReference(
         label="pinocchio 0.11-0.12",
         sdk_crates=(),
         witnesses=(CrateRequirement("pinocchio", "0.12"), CrateRequirement("pinocchio", "0.11")),
-        # Pinocchio's `entrypoint!` installs its allocator unconditionally.
+        # Pinocchio's `entrypoint!` installs its allocator with no switch to turn it off. The
+        # scaffold gates the macro off in the source instead.
         heap_opt_out=None,
     ),
 )
@@ -536,9 +538,9 @@ SOROBAN = ChainReference(
 #: only with its own generation's ``AccountInfo``, so a target is set up with the generation it is
 #: on (:func:`composer.spec.cvlr.scaffold.select_generation`).
 #:
-#: A framework's generations come before the SDK's. A program that links a framework's entrypoint
-#: takes that framework's account type in its handlers, whatever SDK crates its dependencies also
-#: link.
+#: A framework's generations come before the SDK's. A program that declares a framework takes that
+#: framework's account type in its handlers, whatever SDK crates its dependencies also link. One
+#: that only links a framework through a dependency is on the SDK's generation.
 REFERENCE_SET: dict[str, tuple[ChainReference, ...]] = {
     "solana": (
         SOLANA_JIMINY,

@@ -209,8 +209,8 @@ async def prepare_workspace(
 
     Writes into the project it is given. For a pipeline run that is the copy the run owns. The
     harness files under ``src/certora/`` are replaced by AutoProver's. The project's manifests
-    are only added to, and a ``no_std`` source is rewritten to build with ``std`` under the
-    feature.
+    are only added to. A framework program's sources are rewritten to build with ``std``, and
+    without the framework's allocator and panic handler, under the feature.
 
     ``reference`` is the set rather than a chain name because every function this calls takes the
     set.
