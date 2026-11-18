@@ -247,6 +247,9 @@ class Mutant(BaseModel):
         default_factory=list,
         description="Rules mapped to the property that flipped to VIOLATED on the mutant.")
     run_note: str = Field(default="", description="Why inconclusive/no_signal, when so.")
+    prover_links: list[str] = Field(
+        default_factory=list,
+        description="One link per Prover job that ran the mutant. Empty when it was not run.")
 
 
 class MutationReport(BaseModel):
@@ -682,7 +685,7 @@ groups."""
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6"] = "3.6"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7"] = "3.7"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written

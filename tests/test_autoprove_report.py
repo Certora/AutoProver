@@ -40,7 +40,7 @@ from composer.spec.source.report.grouping import (
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
     AutoProverReport, ConfCoverage, ConfRunRecord, ConfStatusCounts, CoverageReport, EvaluationSummary, PropertyCounts, RuleOutcomeCounts, SpecStatusCounts, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
-    GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
+    GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Mutant, MutationReport, Outcome,
     PropertyCoverage, PropertyGroup, RuleFeedback, RuleVerdict, SeverityTier, SkippedClaim,
     SpecCoverageScore, DeprioritizedProperty, Prioritization, PursuedProperty,
 )
@@ -1357,7 +1357,7 @@ def _evaluate_report() -> AutoProverReport:
 
 def test_evaluate_statuses_and_summary_round_trip():
     report = _evaluate_report()
-    assert report.schema_version == "3.6"
+    assert report.schema_version == "3.7"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
@@ -1385,6 +1385,25 @@ def test_conf_coverage_without_runs_loads() -> None:
         {"spec": "s.spec", "status": "complete", "confs": ["c.conf"], "complete": False}
     )
     assert cov.runs == []
+
+
+def test_a_mutant_keeps_its_prover_links() -> None:
+    mutant = Mutant(
+        target_property="p", mutant_class="syntactic", old_str="a", new_str="b",
+        scenario="s", rationale="r", accepted=True, status="killed", killed_by=["rule"],
+        prover_links=["https://prover.certora.com/output/1/a"],
+    )
+    report = _evaluate_report().model_copy(
+        update={"mutation": MutationReport(mutants=[mutant], killed=1)}
+    )
+    reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
+    assert reloaded.mutation is not None
+    assert reloaded.mutation.mutants[0].prover_links == ["https://prover.certora.com/output/1/a"]
+    # A mutant that was not run has none.
+    assert Mutant.model_validate(
+        {"target_property": "p", "mutant_class": "syntactic", "old_str": "a", "new_str": "b",
+         "scenario": "s", "rationale": "r"}
+    ).prover_links == []
 
 
 def test_schema_3_3_prioritization_round_trips():
