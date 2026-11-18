@@ -7,6 +7,7 @@ Parallel to FoundryManager but adapted for Hardhat's JavaScript/TypeScript confi
 
 import json
 import os
+import re
 import subprocess
 import sys
 from typing import Dict, Any, List, Optional, Tuple
@@ -19,6 +20,11 @@ from certora_autosetup.build_systems.manager import BuildSystemManager
 from certora_autosetup.utils.logger import logger
 from certora_autosetup.utils.solc_version_resolver import assign_evm_versions
 from certora_autosetup.utils.types import ContractHandle
+
+# `_format` of a solc build-info file: Hardhat 2, Hardhat 3.
+HARDHAT_BUILD_INFO_FORMATS = frozenset({"hh-sol-build-info-1", "hh3-sol-build-info-1"})
+_SOLC_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+_EVM_VERSION_RE = re.compile(r"[a-z]+")
 
 
 @dataclass
@@ -227,8 +233,7 @@ class HardhatManager(BuildSystemManager):
         Each build-info file is the solc standard-json input of one compilation
         job of `hardhat compile`, with the exact solc version and settings it
         ran with. Every distinct (version, settings) pair becomes one entry of
-        `solidity.compilers`, the job compiling the most sources first. Files
-        without a `solcVersion` and an `input` are skipped.
+        `solidity.compilers`, the job compiling the most sources first.
 
         Limitations: per-file `overrides` are not recovered — an override job is
         just another entry, so the first entry's settings (e.g. evmVersion)
@@ -243,23 +248,7 @@ class HardhatManager(BuildSystemManager):
         """
         if not build_info_dir.is_dir():
             return None
-        jobs: List[Tuple[int, str, Dict[str, Any]]] = []
-        for path in sorted(build_info_dir.glob("*.json")):
-            try:
-                build_info = json.loads(path.read_text())
-            except (OSError, json.JSONDecodeError) as e:
-                self.log(f"Skipping unreadable build-info {path.name}: {e}", "WARNING")
-                continue
-            solc_input = build_info.get("input") if isinstance(build_info, dict) else None
-            solc_version = build_info.get("solcVersion") if isinstance(build_info, dict) else None
-            if not isinstance(solc_version, str) or not isinstance(solc_input, dict):
-                continue
-            settings = solc_input.get("settings")
-            settings = settings if isinstance(settings, dict) else {}
-            n_sources = len(solc_input.get("sources") or {})
-            jobs.append((n_sources, solc_version, {
-                key: settings[key] for key in ("optimizer", "viaIR", "evmVersion") if key in settings
-            }))
+        jobs = [job for path in sorted(build_info_dir.glob("*.json")) if (job := self._read_build_info(path))]
         if not jobs:
             return None
 
@@ -273,6 +262,58 @@ class HardhatManager(BuildSystemManager):
             "INFO",
         )
         return {"solidity": {"compilers": compilers}, "paths": {}}
+
+    def _read_build_info(self, path: Path) -> Optional[Tuple[int, str, Dict[str, Any]]]:
+        """
+        The number of sources, solc version and compiler settings of one solc
+        build-info file, or None if it is not one or a value is malformed.
+
+        The settings keep only `optimizer` (`enabled`, `runs`), `viaIR` and
+        `evmVersion`, each checked against the type and shape solc accepts.
+        """
+        try:
+            build_info = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError) as e:
+            self.log(f"Skipping unreadable build-info {path.name}: {e}", "WARNING")
+            return None
+        if not isinstance(build_info, dict) or build_info.get("_format") not in HARDHAT_BUILD_INFO_FORMATS:
+            return None
+        if build_info.get("compilerType", "solc") != "solc":
+            return None
+
+        solc_version = build_info.get("solcVersion")
+        solc_input = build_info.get("input")
+        settings = solc_input.get("settings", {}) if isinstance(solc_input, dict) else None
+        if (
+            not isinstance(solc_version, str)
+            or not _SOLC_VERSION_RE.fullmatch(solc_version)
+            or not isinstance(solc_input, dict)
+            or not isinstance(settings, dict)
+        ):
+            self.log(f"Skipping malformed build-info {path.name}", "WARNING")
+            return None
+
+        optimizer = settings.get("optimizer", {})
+        enabled = optimizer.get("enabled", False) if isinstance(optimizer, dict) else None
+        runs = optimizer.get("runs", 200) if isinstance(optimizer, dict) else None
+        via_ir = settings.get("viaIR", False)
+        evm_version = settings.get("evmVersion")
+        if (
+            not isinstance(enabled, bool)
+            or not isinstance(runs, int) or isinstance(runs, bool) or runs < 0
+            or not isinstance(via_ir, bool)
+            or (evm_version is not None and not (
+                isinstance(evm_version, str) and _EVM_VERSION_RE.fullmatch(evm_version)
+            ))
+        ):
+            self.log(f"Skipping build-info {path.name} with malformed compiler settings", "WARNING")
+            return None
+        kept: Dict[str, Any] = {"optimizer": {"enabled": enabled, "runs": runs}, "viaIR": via_ir}
+        if evm_version is not None:
+            kept["evmVersion"] = evm_version
+
+        sources = solc_input.get("sources")
+        return (len(sources) if isinstance(sources, dict) else 0), solc_version, kept
 
     def _process_path(self, path_value: str, default: str, path_type: str) -> str:
         """
