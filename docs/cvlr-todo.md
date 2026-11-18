@@ -325,6 +325,10 @@ development and wrong for a shipped product. Remove `prover_version` once those 
 release, and rerun the CVLR gate against the released Prover first, since P8's two-hour timeouts are
 what the release has to have fixed.
 
+`SOROBAN_BASE_CONF` pins `prover_version: master` too, for the wasm Prover fixes Soroban runs depend
+on (#8800, #8804, #8805), which are on master and not yet released. Remove it there once a release
+has them.
+
 **~~U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.~~** —
 **published (2026-10-27).** The reference set ([reference.py](../composer/spec/cvlr/reference.py))
 named the release commit (`GitCommit`) of each unpublished `cvlr-solana` release, and the scaffold

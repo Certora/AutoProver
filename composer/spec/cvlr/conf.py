@@ -287,9 +287,15 @@ def delivered_conf(
 #: optimization, as the Solana prover does. cvlr-soroban's ``#[rule]`` emits the marker from the
 #: commits :data:`~composer.spec.cvlr.reference.SOROBAN_V22` and ``SOROBAN_V25`` pin; the prover
 #: side is EVMVerifier's ``cnandi/soroban-cvlr-vacuity``, not yet merged.
+#:
+#: ``prover_version`` is ``master``, as in :data:`BASE_CONF`: the wasm Prover fixes Soroban runs
+#: depend on (#8800, #8804, #8805) are on the Prover's master branch and not yet released.
+#:
+#: TODO(cvlr-todo U25): remove ``prover_version`` before the Soroban AutoProver ships.
 SOROBAN_BASE_CONF: Conf = {
     "smt_timeout": "6000",
     "rule_sanity": "advanced",
+    "prover_version": "master",
     "precise_bitwise_ops": True,
 }
 

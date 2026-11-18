@@ -368,6 +368,14 @@ def test_the_soroban_base_carries_no_solana_keys_or_flags():
     assert SOROBAN_BASE_CONF["rule_sanity"] == "advanced"
 
 
+def test_the_soroban_master_prover_pin_is_still_tracked_as_a_ship_blocker():
+    """``prover_version: master`` is for development only. This fails once the pin is removed, so
+    whoever removes it also updates cvlr-todo U25."""
+    todo = (Path(__file__).parent.parent / "docs" / "cvlr-todo.md").read_text()
+    assert soroban_tunable_conf(TunableConf()).get("prover_version") == "master"
+    assert "`SOROBAN_BASE_CONF` pins `prover_version: master` too" in todo
+
+
 # ---------------------------------------------------------------------------------------------
 # The scaffold
 
