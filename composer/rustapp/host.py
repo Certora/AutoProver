@@ -37,6 +37,7 @@ from composer.sandbox.command import DEFAULT_TIMEOUT_S
 from composer.sandbox.config import SandboxConfig
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import SourceCode, WorkflowContext
+from composer.spec.prop_inference import DEFAULT_MAX_BUG_ROUNDS
 from composer.spec.service_host import ServiceHost
 from composer.tools.rag_env import validate_rag_db
 
@@ -142,7 +143,7 @@ async def run_rust_pipeline(
     *,
     max_concurrent: int = 4,
     max_cpu_tasks: int = DEFAULT_MAX_CPU_TASKS,
-    max_bug_rounds: int = 3,
+    max_bug_rounds: int = DEFAULT_MAX_BUG_ROUNDS,
     interactive: bool = False,
 ) -> CorePipelineResult[RustFormalResult]:
     """Build the backend from ``module_name`` and run the shared driver — the Rust
@@ -175,7 +176,7 @@ async def run_application(
     *,
     max_concurrent: int = 4,
     max_cpu_tasks: int = DEFAULT_MAX_CPU_TASKS,
-    max_bug_rounds: int = 3,
+    max_bug_rounds: int = DEFAULT_MAX_BUG_ROUNDS,
     interactive: bool = False,
 ) -> CorePipelineResult[RustFormalResult]:
     """Run a pre-built :class:`RustApplication`. The backend is constructed from the

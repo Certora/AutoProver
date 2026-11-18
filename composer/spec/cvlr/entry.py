@@ -36,7 +36,7 @@ import pathlib
 import re
 import tempfile
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from typing import AsyncIterator, Awaitable, Callable, Protocol, cast
 
 from graphcore.tools.vfs import DirBackend
@@ -45,20 +45,20 @@ from composer.cargo.sbf import PLATFORM_TOOLS_ROOT, sbf_subcommand_version
 from composer.core.user import get_uid
 from composer.diagnostics.timing import RunSummary
 from composer.input.parsing import add_extra_context_args, add_protocol_args
-from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, PropertySetOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
 from composer.pipeline.cli import AtExit, cli_pipeline, user_ns
-from composer.pipeline.pinned import load_pinned_run
 from composer.pipeline.ecosystem import ChainTag
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS, CorePipelineResult
-from composer.pipeline.run_mode import RunMode
+from composer.pipeline.run_failure import reporting_run_failure
+from composer.pipeline.run_mode import RunMode, add_run_mode_arg, resolve_run_mode
 from composer.prover.core import make_prover_options
 from composer.sandbox.config import SandboxConfig
 from composer.spec.context import SourceFields
 from composer.spec.cvlr.chains import CvlrChain
 from composer.spec.cvlr.harness import CvlrArtifactStore, GeneratedHarness
-from composer.spec.cvlr.patch import write_patch
+from composer.spec.gen_types import CVLR_REPORT_DIR, under_project
 from composer.spec.cvlr.editor import EditingServices
 from composer.spec.cvlr.pipeline import CvlrBackend, CvlrPhase, run_work_directory
 from composer.spec.cvlr.preflight import SelectedPackage, select_package
@@ -79,6 +79,9 @@ from composer.spec.cvlr_research import (
 
 _log = logging.getLogger(__name__)
 
+#: The run modes the CVLR backend implements. ``evaluate`` is not among them (cvlr-todo U47).
+CVLR_RUN_MODES = (RunMode.COMPREHENSIVE, RunMode.PRIORITIZED)
+
 #: The result a frontend renders.
 type CvlrPipelineResult = CorePipelineResult[GeneratedHarness]
 
@@ -92,7 +95,7 @@ type CvlrRunner = Callable[
 # ---------------------------------------------------------------------------
 
 
-class CvlrArgs(ExtendedModelOptions, Protocol):
+class CvlrArgs(ExtendedModelOptions, PropertySetOptions, Protocol):
     project_root: str
     main_contract: str
     system_doc: str | None
@@ -105,8 +108,6 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     memory_ns: str | None
     interactive: bool
     max_bug_rounds: int
-    properties: str | None
-    pin_to: str | None
     recursion_limit: int
     budget: str | None
     budget_total: float | None
@@ -114,6 +115,7 @@ class CvlrArgs(ExtendedModelOptions, Protocol):
     extra_context: list[str] | None
     threat_model: str | None
     token_model: bool
+    run_mode: str | None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -150,6 +152,7 @@ def build_parser(chain: ChainTag = "solana") -> argparse.ArgumentParser:
         description=f"CVLR rule author for the {unit.prover}",
     )
     add_protocol_args(parser, ExtendedModelOptions)
+    add_protocol_args(parser, PropertySetOptions)
     parser.add_argument(
         "--recursion-limit", type=int, default=DEFAULT_RECURSION_LIMIT,
         help=f"Max graph iterations (default: {DEFAULT_RECURSION_LIMIT})",
@@ -204,19 +207,6 @@ def build_parser(chain: ChainTag = "solana") -> argparse.ArgumentParser:
              "the EVM pipeline does.",
     )
     parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
-    parser.add_argument(
-        "--properties", default=None, metavar="PATH",
-        help="Re-enter the pipeline at formalization using a fixture written by --pin-to: its "
-             "analysis and its properties are used instead of running those two phases, which "
-             "between them are most of what a run on a real target costs. Components the fixture "
-             "omits are dropped, so pinning one of ten is what makes it cheap.",
-    )
-    parser.add_argument(
-        "--pin-to", default=None, metavar="PATH", dest="pin_to",
-        help="After analysis and extraction, write both to PATH as a fixture --properties can "
-             "replay. Records the target's commit so a later run can say when the checkout has "
-             "moved out from under it.",
-    )
     # One budget, two spellings — the file shapes spend across phases, the scalar sets the pool
     # alone. Mutually exclusive here so argparse renders the choice in --help.
     budget_group = parser.add_mutually_exclusive_group()
@@ -233,6 +223,7 @@ def build_parser(chain: ChainTag = "solana") -> argparse.ArgumentParser:
                  "balance rule there fails on a counterexample that is not real.",
         )
     parser.set_defaults(token_model=False)
+    add_run_mode_arg(parser, CVLR_RUN_MODES)
     add_extra_context_args(parser)
     return parser
 
@@ -336,7 +327,9 @@ def announce_confinement(sandbox: SandboxConfig) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _usage_exit_logger(summary: RunSummary, selected: SelectedPackage) -> AtExit:
+def _usage_exit_logger(
+    summary: RunSummary, selected: SelectedPackage, run_mode: RunMode
+) -> AtExit:
     """Persist the run's LLM usage, and dump ``job_info.json`` beside the report whether or not the
     pipeline got as far as writing one — the foundry entry point's hook, with the package directory
     the CVLR store needs. Each step is guarded so a teardown failure cannot mask the run's own
@@ -353,20 +346,10 @@ def _usage_exit_logger(summary: RunSummary, selected: SelectedPackage) -> AtExit
             _log.exception("failed to log cvlr usage to run data")
         try:
             CvlrArtifactStore(run.project_root, selected.package_dir).write_job_info(
-                # This backend exposes no --run-mode and passes none to the pipeline, so the
-                # manifest records the mode the run actually took rather than a resolved
-                # preference it would have ignored.
-                summary, user_id=get_uid(), run_mode=RunMode.COMPREHENSIVE.value
+                summary, user_id=get_uid(), run_mode=run_mode.value
             )
         except Exception:
             _log.exception("failed to dump cvlr job info")
-        try:
-            # Again after finalize's, because a run that ended before finalize still leaves the
-            # harness it delivered in the tree, and the patch is the only way that reaches a
-            # consumer that takes certora/ alone.
-            await asyncio.to_thread(write_patch, pathlib.Path(run.project_root))
-        except Exception:
-            _log.exception("failed to write the cvlr harness patch")
     return exit_logger
 
 
@@ -388,10 +371,39 @@ async def cvlr_executor[App: BaseApplication, Main, U: FeatureUnit](
     Split from :func:`_entry_point` the way ``autoprove_executor`` is split from its parser: a
     caller with an ``CvlrArgs`` in hand — a test, or an embedder of this pipeline — should not have
     to go through ``sys.argv`` to reach the run.
+
+    Whatever ends the run before it writes its report — preflight refusing the project included —
+    leaves a report saying so in its place. Setup is covered here; the run itself is covered by
+    :func:`~composer.pipeline.cli.cli_pipeline`, inside the awaited runner, because a TUI catches
+    the run's exception in its worker and it never reaches this context manager's caller.
     """
-    thread_id = f"cvlr_{uuid.uuid4().hex[:12]}"
     project_root = pathlib.Path(args.project_root).resolve()
     main_source, identifier = parse_main_program(args.main_contract, chain.tag)
+    run_mode = resolve_run_mode(args.run_mode, CVLR_RUN_MODES)
+    async with AsyncExitStack() as stack:
+        with reporting_run_failure(
+            under_project(project_root, CVLR_REPORT_DIR),
+            contract_name=identifier, backend="prover", run_mode=run_mode.value,
+        ):
+            runner = await stack.enter_async_context(_executor(
+                args, summary, chain, project_root=project_root, main_source=main_source,
+                identifier=identifier, run_mode=run_mode,
+            ))
+        yield runner
+
+
+@asynccontextmanager
+async def _executor[App: BaseApplication, Main, U: FeatureUnit](
+    args: CvlrArgs,
+    summary: RunSummary,
+    chain: CvlrChain[App, Main, U],
+    *,
+    project_root: pathlib.Path,
+    main_source: str,
+    identifier: str,
+    run_mode: RunMode,
+) -> AsyncIterator[CvlrRunner]:
+    thread_id = f"cvlr_{uuid.uuid4().hex[:12]}"
     ecosystem = chain.ecosystem
 
     # Before any service starts: a workspace cargo cannot read, a package that is not a member, and
@@ -419,13 +431,6 @@ async def cvlr_executor[App: BaseApplication, Main, U: FeatureUnit](
             "analysis will be told to declare %r",
             identifier, crate, identifier,
         )
-    # Read before any service starts: a malformed pin file should cost nothing, and the shape
-    # error is far easier to act on when it is the first thing printed.
-    pinned = (
-        load_pinned_run(pathlib.Path(args.properties).resolve(), ecosystem.system_model)
-        if args.properties is not None else None
-    )
-
     # After the workspace read, which already names a missing cargo, and before anything is staged:
     # the build subcommand is the one prerequisite nothing else touches until the first submission.
     if chain.tag == "solana":
@@ -441,9 +446,10 @@ async def cvlr_executor[App: BaseApplication, Main, U: FeatureUnit](
             task_handler=fact,
             design_doc_phase=CvlrPhase.DISCOVER_DESIGN_DOC,
             ecosystem=ecosystem,
-            at_exit=_usage_exit_logger(summary, selected),
-            pinned=pinned,
-            pin_to=pathlib.Path(args.pin_to).resolve() if args.pin_to else None,
+            report_dir=CVLR_REPORT_DIR,
+            report_backend="prover",
+            at_exit=_usage_exit_logger(summary, selected, run_mode),
+            run_mode=run_mode,
             workflow="cvlr",
             package=selected.name,
             confined=sandbox.enabled,

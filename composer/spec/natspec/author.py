@@ -11,7 +11,7 @@ from langgraph.types import Command
 from graphcore.summary import SummaryConfig
 from graphcore.graph import tool_state_update
 from graphcore.tools.schemas import WithInjectedId, WithInjectedState, WithAsyncDependencies
-from composer.authoring.state import check_completion
+from composer.authoring.state import check_completion, make_validation_stamper
 from composer.authoring.tools import give_up_tool
 from composer.spec.cvl_generation import (
     static_tools, property_tools, run_cvl_generator, CVLGenerationInput, CVLGenerationState,
@@ -27,7 +27,7 @@ from composer.spec.feedback import property_feedback_judge, Properties, Feedback
 from composer.spec.gen_types import TypedTemplate
 from composer.spec.system_model import ContractComponentInstance, ContractName, component_context
 from composer.authoring.state import SkippedProperty
-from composer.spec.cvl_generation import CVL_JUDGE_KEY
+from composer.spec.cvl_generation import CVL_JUDGE_KEY, FEEDBACK_VALIDATION_KEY
 from composer.spec.service_host import ServiceHost
 from composer.kb.kb_context import with_cvl_context
 from composer.ui.tool_display import tool_display, suppress_ack
@@ -144,7 +144,7 @@ class PublishTool(WithAsyncDependencies[Command | str, TypeChecker], WithInjecte
     async def run(self) -> Command | str:
         if self.state["curr_spec"] is None:
             return "No spec put yet"
-        if (msg := check_completion(self.state)) is not None:
+        if (msg := check_completion(self.state, (make_validation_stamper(FEEDBACK_VALIDATION_KEY),))) is not None:
             return msg
         with self.tool_deps() as checker:
             tycheck = await checker(

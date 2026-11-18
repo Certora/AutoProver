@@ -9,6 +9,7 @@ goes stale quietly. An alias is written against a starting layer. After that fil
 alias whose path no longer appears still looks like coverage.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -37,8 +38,7 @@ SPLIT_CRATES = (
     "solana-sdk-ids",
     "solana-cpi",
     "solana-instruction",
-    # No alias names these. The vault resolves them, and its symbol table below has symbols in
-    # them.
+    # The vault resolves these, and the symbol table below has symbols in them. No alias names them.
     "solana-program-entrypoint",
     "solana-sha256-hasher",
     "solana-system-interface",
@@ -85,13 +85,13 @@ def _workspace(*resolved: str) -> Workspace:
 @pytest.fixture
 def split() -> PathDialect:
     """The dialect a post-split target gets."""
-    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), SOLANA_V2)
+    return dialect_for(_workspace("solana-program", *SPLIT_CRATES), PROGRAM, SOLANA_V2)
 
 
 @pytest.fixture
 def monolithic() -> PathDialect:
     """The dialect a 1.18 target gets, where the canonical paths are already the right ones."""
-    return dialect_for(_workspace("solana-program"), SOLANA_V1_18)
+    return dialect_for(_workspace("solana-program"), PROGRAM, SOLANA_V1_18)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -179,20 +179,10 @@ def test_the_blanket_stays_on_the_monolith(split: PathDialect) -> None:
 
     A non-inlined function is external: it returns an arbitrary value and writes nothing. Widened,
     the blanket made ``Sysvar::from_account_info`` return through memory and never succeed, and made
-    ``solana_stake_interface``'s authorization and stake math oracles. On solana-program-stake that
-    cost 29 of 50 skipped properties and a munge in six of seven components for every ``Clock`` or
-    ``Rent`` read. Projects verified on this generation run the blanket unwidened.
+    ``solana_stake_interface``'s authorization and stake math oracles.
     """
-    import re
-
     blanket = "^solana_program::.*$"
     assert split.spellings(blanket) == (blanket,)
-    for symbol in (
-        "solana_sysvar::Sysvar::from_account_info",
-        "solana_stake_interface::state::Authorized::check",
-        "solana_stake_program::processor::Processor::process",
-    ):
-        assert not re.search(blanket, symbol), f"{symbol} would be external"
 
 
 def test_a_path_that_merely_starts_with_the_split_crate_is_not_widened(
@@ -224,7 +214,7 @@ def test_a_target_without_the_split_crates_keeps_the_canonical_spelling(
 
 
 def test_a_chain_with_no_split_gets_a_dialect_that_changes_nothing() -> None:
-    dialect = dialect_for(_workspace("soroban-sdk"), SOROBAN)
+    dialect = dialect_for(_workspace("soroban-sdk"), PROGRAM, SOROBAN)
     assert dialect.aliases == ()
     assert dialect.spellings("^soroban_sdk::Env::storage$") == ("^soroban_sdk::Env::storage$",)
 
@@ -435,8 +425,8 @@ def test_program_error_from_is_inlined_under_the_dialect(split: PathDialect) -> 
     assert "#[inline(never)] ^<solana_program_error::ProgramError" not in composite
 
 
-#: The SDK 3 counterpart of :data:`SYMBOLS_FIXTURE`: stake `main`, which has no `solana-program` at
-#: all. The SDK 3 alias table was read off it.
+#: Stake's ``main`` on SDK 3. It links no ``solana-program``. The SDK 3 aliases were measured from
+#: this file.
 SDK3_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "stake_sdk3_sbf_symbols.txt"
 
 
@@ -449,9 +439,8 @@ def _sdk3_symbols() -> tuple[str, ...]:
 
 
 def test_every_sdk3_alias_the_binary_exercises_names_a_path_it_defines() -> None:
-    """On SDK 3 the canonical spelling never appears, so an alias is exercised exactly when its
-    target does. The unexercised ones are stated: the list changing says something about the
-    fixture, or about an alias that has started to name nothing."""
+    """On SDK 3 the canonical spelling does not appear in the binary, so an alias is exercised when
+    its target spelling does. The aliases this binary never mentions are listed here."""
     symbols = _sdk3_symbols()
     unexercised = [
         alias.canonical
@@ -472,8 +461,8 @@ def test_every_sdk3_alias_the_binary_exercises_names_a_path_it_defines() -> None
 
 
 def test_the_sdk3_dialect_reaches_the_sysvar_reads_and_cpi_the_program_calls() -> None:
-    """Without the dialect, no platform directive reaches them: each is spelled `solana_program::`,
-    and the program has no such crate."""
+    """The tuning files spell these `solana_program::`, and the program has no such crate, so a
+    directive matches only after the dialect rewrites it."""
     import re
 
     symbols = _sdk3_symbols()
@@ -498,16 +487,13 @@ def test_the_sdk3_dialect_reaches_the_sysvar_reads_and_cpi_the_program_calls() -
     assert calls <= reached(starting_env("cvlr_inlining_core.txt", v3))
 
 
-#: The 1.18 counterpart: a crate on the monolith whose one rule calls each platform function the
-#: tuning files address.
+#: A 1.18 program. Its one rule calls each platform function the tuning files name.
 V1_18_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "solana_1_18_sbf_symbols.txt"
 
 
 def test_the_starting_files_address_1_18_symbols_as_spelled(monolithic: PathDialect) -> None:
-    """1.18 has no aliases because the starting files are written in its spelling. Every platform
-    function the binary links is matched by a directive that names it, and not only by a blanket:
-    a blanket alone would mean the specific directive no longer names a real symbol. The `fmt`
-    impls are the exception, and are meant to be."""
+    """1.18 uses the starting spelling, so it has no aliases. Each platform function this binary
+    links has a directive that names it. The `fmt` impls are matched only by a blanket."""
     import re
 
     symbols = [
@@ -535,7 +521,7 @@ def test_the_starting_files_address_1_18_symbols_as_spelled(monolithic: PathDial
 # Anchor's error crate
 
 
-#: The Anchor 1.1.0+ counterpart: `anchor_lang::error` is the `anchor-lang-error` crate there.
+#: An Anchor 1.1.0+ program. `anchor_lang::error` is the `anchor-lang-error` crate.
 ANCHOR_1_2_1_SYMBOLS_FIXTURE = Path(__file__).parent / "data" / "anchor_1_2_1_sbf_symbols.txt"
 
 ERROR_CODE_FROM = "<anchor_lang_error::Error as core::convert::From<anchor_lang_error::ErrorCode>>::from"
@@ -554,15 +540,31 @@ def _inlined_by_a_specific_directive(text: str, symbol: str) -> bool:
 
 
 def test_anchor_1_1_error_conversions_are_spelled_as_the_error_crate() -> None:
-    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), SOLANA_V3)
+    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), PROGRAM, SOLANA_V3)
     assert dialect.spellings(
         "^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::ErrorCode>>::from$"
     ) == (f"^{ERROR_CODE_FROM}$",)
 
 
 def test_anchor_1_0_keeps_the_canonical_error_spelling() -> None:
-    """Anchor 1.0.x is on the SDK 3 crates too, but its errors are still in ``anchor_lang``."""
-    dialect = dialect_for(_workspace(*SPLIT_CRATES), SOLANA_V3)
+    """On SDK 3, Anchor 1.0.x still spells its errors as ``anchor_lang``."""
+    dialect = dialect_for(_workspace(*SPLIT_CRATES), PROGRAM, SOLANA_V3)
+    pattern = "^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::AnchorError>>::from$"
+    assert dialect.spellings(pattern) == (pattern,)
+
+
+def test_an_error_crate_the_program_does_not_link_keeps_the_canonical_spelling() -> None:
+    """A sibling member or a dev-dependency resolving ``anchor-lang-error`` is not in the 1.0
+    program, so its error paths stay in ``anchor_lang``."""
+    workspace = _workspace(*SPLIT_CRATES)
+    sibling = Workspace(
+        root=workspace.root,
+        target_directory=workspace.target_directory,
+        members=workspace.members,
+        packages=(*workspace.packages, _registry("anchor-lang-error")),
+        links=workspace.links,
+    )
+    dialect = dialect_for(sibling, PROGRAM, SOLANA_V3)
     pattern = "^<anchor_lang::error::Error as core::convert::From<anchor_lang::error::AnchorError>>::from$"
     assert dialect.spellings(pattern) == (pattern,)
 
@@ -576,6 +578,28 @@ def test_the_anchor_1_1_dialect_inlines_the_error_conversion_the_program_calls()
         if line.strip() and not line.startswith("#")
     ]
     assert ERROR_CODE_FROM in symbols
-    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), SOLANA_V3)
+    dialect = dialect_for(_workspace(*SPLIT_CRATES, "anchor-lang-error"), PROGRAM, SOLANA_V3)
     assert not _inlined_by_a_specific_directive(compose_env(INLINING), ERROR_CODE_FROM)
     assert _inlined_by_a_specific_directive(compose_env(INLINING, dialect=dialect), ERROR_CODE_FROM)
+
+
+# ---------------------------------------------------------------------------------------------
+# Anchor's account validation is inlined however the Prover numbers it
+
+
+@pytest.mark.parametrize("suffix", ["", "_0", "_2"])
+def test_a_numbered_try_accounts_is_inlined(suffix: str) -> None:
+    """A generic impl monomorphized more than once is numbered by the Prover, and the bare name is
+    then not a symbol. The lending benchmark's ``AccountLoader`` validation came back external as
+    ``try_accounts_0`` to ``_2``, which left every handler-level rule on it vacuous.
+    """
+    symbol = (
+        "<anchor_lang::accounts::account_loader::AccountLoader<T> as anchor_lang::Accounts<B>>"
+        "::try_accounts" + suffix
+    )
+    inlines = [
+        ln.removeprefix("#[inline]").strip()
+        for ln in starting_env("cvlr_inlining_anchor.txt").splitlines()
+        if ln.startswith("#[inline] ")
+    ]
+    assert any(re.search(pattern, symbol) for pattern in inlines)

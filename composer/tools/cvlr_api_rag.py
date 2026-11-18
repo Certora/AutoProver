@@ -64,8 +64,8 @@ class ApiCorpus:
 
     The corpus holds every platform generation's crates (``cvlr-solana`` 0.5.x and 0.6.x side by
     side), and each row's header path is ``[API_ROOT, crate, version, ...]``. A row for a crate the
-    run pins at another version is another generation's, and a tool that showed it would describe,
-    with full authority, an API the run's build does not have.
+    run pins on another release line is another generation's, and a tool that showed it would
+    describe, with full authority, an API the run's build does not have (:meth:`admits`).
     """
 
     db: ComposerRAGDB
@@ -74,10 +74,40 @@ class ApiCorpus:
     pinned: Mapping[str, str]
 
     def admits(self, headers: Sequence[str]) -> bool:
+        """A pinned crate's row is admitted from an earlier release of the pin's semver line, not
+        only from the pin itself.
+
+        A compatible release only adds to its line's API, so an earlier one describes a subset of
+        what the build has, and the corpus need not be re-seeded for a patch release. A later
+        release may describe items the build lacks, and is refused like another line."""
         if len(headers) < 3:
             return True
         crate, version = headers[1], headers[2]
-        return self.pinned.get(crate, version) == version
+        pin = self.pinned.get(crate)
+        if pin is None or version == pin:
+            return True
+        row, pinned = _semver(version), _semver(pin)
+        if row is None or pinned is None:
+            return False
+        return _release_line(row) == _release_line(pinned) and row <= pinned
+
+
+def _semver(version: str) -> tuple[int, int, int] | None:
+    """``major.minor.patch``, or ``None`` for anything else (a pre-release, build metadata)."""
+    parts = version.split(".")
+    if len(parts) != 3 or not all(p.isdigit() for p in parts):
+        return None
+    major, minor, patch = (int(p) for p in parts)
+    return major, minor, patch
+
+
+def _release_line(version: tuple[int, int, int]) -> tuple[int, ...]:
+    """Cargo's caret compatibility: the leading components up to and including the first
+    non-zero one. ``0.5.2`` is on ``0.5``, ``1.4.0`` on ``1``, ``0.0.3`` only on itself."""
+    for i, part in enumerate(version):
+        if part != 0:
+            return version[: i + 1]
+    return version
 
 
 class CvlrApiSearch(WithAsyncDependencies[str, ApiCorpus]):
@@ -174,7 +204,7 @@ class CvlrApiLookup(WithAsyncDependencies[str, ApiCorpus]):
 class CvlrApiSurface(WithAsyncDependencies[str, ApiCorpus]):
     __doc__ = (
         "List a CVLR crate's **complete** public surface — every item it exports, at the release "
-        "this build pins.\n\n"
+        "this build pins or an earlier patch release of it.\n\n"
         "This is the tool that answers *does X exist?*, and it is the only one that can: it "
         "returns a closed list, so a name that is absent from it is a name you do not have. Do "
         "not infer absence from an empty search, and do not write a helper you could not find "

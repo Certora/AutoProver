@@ -47,6 +47,7 @@ AUTOPROVE_INTERNAL_DIR = INTERNAL_DIR / "autoProve"
 #: lone exception being the foundry .t.sol tests (which must live in the foundry
 #: project's own test/ for forge to find them).
 FOUNDRY_DELIVERABLE_DIR = CERTORA_DIR / "foundry"
+FOUNDRY_REPORT_DIR = FOUNDRY_DELIVERABLE_DIR / "reports"
 #: Foundry counterpart to AUTOPROVE_INTERNAL_DIR — diagnostics (token usage)
 #: under a foundry-specific subdir so a co-located autoprove run doesn't collide.
 FOUNDRY_INTERNAL_DIR = INTERNAL_DIR / "foundry"
@@ -54,6 +55,7 @@ FOUNDRY_INTERNAL_DIR = INTERNAL_DIR / "foundry"
 #: The CVLR backend's deliverables other than the harness, which goes into the verified package
 #: (:mod:`composer.spec.cvlr.scaffold`): properties, commentary, and the run report.
 CVLR_DELIVERABLE_DIR = CERTORA_DIR / "cvlr"
+CVLR_REPORT_DIR = CVLR_DELIVERABLE_DIR / "reports"
 #: CVLR counterpart to AUTOPROVE_INTERNAL_DIR.
 CVLR_INTERNAL_DIR = INTERNAL_DIR / "cvlr"
 

@@ -19,3 +19,6 @@ class NatspecRunTags(BaseModel):
     memory_namespace: str | None
     from_source: bool
     interactive: bool
+    max_bug_rounds: int | None = None
+    """The run's property-inference round limit, which parameterizes ``BUG_ANALYSIS_KEY``.
+    ``None`` on records written before this field existed."""

@@ -1,0 +1,20 @@
+[
+ {
+  "uiId": 0,
+  "label": "verification phase: static analysis",
+  "value": null,
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ },
+ {
+  "uiId": 1,
+  "label": "per call stats",
+  "value": null,
+  "children": [],
+  "jumpToDefinition": null,
+  "severity": 0,
+  "hSev": 0
+ }
+]

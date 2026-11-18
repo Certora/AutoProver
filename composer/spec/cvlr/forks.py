@@ -129,9 +129,28 @@ class AlreadyRedirected:
         )
 
 
+@dataclass(frozen=True)
+class NotLinked:
+    """A copy of the crate some other member links, and the target does not.
+
+    It keeps its upstream source. The patch entry carries the version the target links, and
+    cargo applies a patch only where that version satisfies the requirement, so this copy is not
+    redirected. Typical cause: a sibling program's dependency pinned to an older release.
+    """
+
+    crate: str
+    copy: CratePackage
+
+    def describe(self) -> str:
+        return (
+            f"{self.crate} {_copies((self.copy,))} is not linked into the target, so it stays "
+            f"on its own source"
+        )
+
+
 #: What the planner reports when a crate is already in the manifest's patch table but not yet in the
 #: resolved graph — the graph is a snapshot, and it can predate the table.
-type LeftAlone = AlreadySourced | AlreadyRedirected
+type LeftAlone = AlreadySourced | AlreadyRedirected | NotLinked
 
 
 @dataclass(frozen=True)
@@ -161,8 +180,8 @@ class ForkPlan:
     #: Crates the target does not resolve. Kept in the plan: "Anchor was not replaced" is what a
     #: reader of a [3006] failure needs, and omitting it looks like success.
     inapplicable: tuple[str, ...] = ()
-    #: Crates left alone because the target already decides where they come from. See
-    #: :data:`LeftAlone`.
+    #: Crates, or copies of them, left alone: the target already decides where they come from,
+    #: or does not link them. See :data:`LeftAlone`.
     already: tuple[LeftAlone, ...] = ()
 
     def __bool__(self) -> bool:
@@ -191,10 +210,16 @@ class ForkRefused:
 
 
 #: Anchor. Branch names taken from the fork. Listed, not derived, so a release the fork has not
-#: been updated for is reported as uncovered. The fork has nothing before 0.26.0 or after 1.2.1.
+#: been updated for is reported as uncovered. The fork has nothing before 0.26.0 and nothing after
+#: 1.2.1.
+#:
+#: From 1.1.0, ``anchor_lang::error`` is the separate ``anchor-lang-error`` crate. The fork's
+#: ``anchor-lang`` takes it from its own workspace, so redirecting ``anchor-lang`` redirects it too.
+#: It is listed for a project that also names it directly: that copy would otherwise stay on
+#: crates.io, beside the fork's, with an ``Error`` type of its own.
 ANCHOR_FORK = ForkOverride(
     repo="https://github.com/Certora/anchor.git",
-    crates=("anchor-lang", "anchor-spl"),
+    crates=("anchor-lang", "anchor-spl", "anchor-lang-error"),
     branches={
         "0.26.0": "certora-v0.26.0",
         "0.27.0": "certora-v0.27.0",
@@ -264,12 +289,30 @@ def _copies(copies: tuple[CratePackage, ...]) -> str:
     )
 
 
+def _copies_that_matter(
+    workspace: Workspace, target: CratePackage, crate: str
+) -> tuple[tuple[CratePackage, ...], tuple[CratePackage, ...]]:
+    """The copies of ``crate`` to redirect for ``target``, and the copies it can leave alone.
+
+    Only what the target links has to be on the fork. When the graph says the target links no
+    copy at all, every copy is kept: an incomplete link map must not turn a needed redirect into
+    a skipped one.
+    """
+    copies = workspace.resolved(crate)
+    linked = set(workspace.linked_into(target))
+    used = tuple(c for c in copies if c in linked)
+    if not used:
+        return copies, ()
+    return used, tuple(c for c in copies if c not in linked)
+
+
 def plan_overrides(
     workspace: Workspace,
+    target: CratePackage,
     overrides: tuple[ForkOverride, ...],
     already_redirected: frozenset[str] = frozenset(),
 ) -> ForkPlan | ForkRefused:
-    """What redirecting ``workspace`` at the forks would change, without changing anything.
+    """What redirecting ``target`` at the forks would change, without changing anything.
 
     Each crate lands in one of four outcomes:
 
@@ -278,9 +321,10 @@ def plan_overrides(
       in ``already_redirected``. Overriding it would replace a choice, which may already be this
       fork. The graph is what cargo computed. ``already_redirected``
       (:func:`already_patched`) covers a snapshot taken before the patch table was applied.
-    * blocked — resolved more than once, since one patch entry redirects one of the copies; or
-      resolved at a version the fork has no branch for, since skipping the fork leaves the
-      failure it exists to fix.
+    * blocked — linked into ``target`` more than once, since one patch entry redirects one of the
+      copies; or resolved at a version the fork has no branch for, since skipping the fork leaves
+      the failure it exists to fix. Copies only other members link are reported as
+      :class:`NotLinked`, not blocked.
     * overridden — redirected at the fork.
 
     Any blocked crate makes the whole result a :class:`ForkRefused`.
@@ -292,20 +336,21 @@ def plan_overrides(
 
     for fork in overrides:
         for crate in fork.crates:
-            copies = workspace.resolved(crate)
+            copies, unlinked = _copies_that_matter(workspace, target, crate)
             if not copies:
                 inapplicable.append(crate)
                 continue
             if crate in already_redirected:
                 already.append(AlreadyRedirected(crate=crate))
                 continue
+            already.extend(NotLinked(crate=crate, copy=c) for c in unlinked)
             resolved, *others = copies
             if others:
                 blocked.append(
                     Blocked(
                         crate=crate,
                         problem=(
-                            f"this project resolves {crate} more than once "
+                            f"{target.name} links {crate} more than once "
                             f"({_copies(copies)}), and {fork.repo} can replace only one of them"
                         ),
                         resolution=f"move the project onto one {crate} release",

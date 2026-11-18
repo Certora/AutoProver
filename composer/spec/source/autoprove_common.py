@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from typing import cast, AsyncIterator, Protocol, Callable, Awaitable
 
 from composer.diagnostics.timing import RunSummary
-from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, RAGDBOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, ExtendedModelOptions, PropertySetOptions, RAGDBOptions
 from composer.input.parsing import add_extra_context_args, add_protocol_args
 from composer.rag.db import PostgreSQLRAGDatabase
 from composer.pipeline.core import CorePipelineResult
@@ -18,9 +18,10 @@ from composer.spec.context import (
     SourceFields
 )
 from composer.pipeline.cli import cli_pipeline, user_ns
-from composer.pipeline.run_mode import RunMode, resolve_run_mode
+from composer.pipeline.run_mode import add_run_mode_arg, resolve_run_mode
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
+from composer.spec.prop_inference import DEFAULT_MAX_BUG_ROUNDS
 from composer.spec.source.pipeline import ProverBackend, GeneratedCVL
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.prover.core import make_prover_options
@@ -30,6 +31,7 @@ from composer.spec.source.live_explorer import setup_live_edits
 from composer.spec.source.munge.edit_store import EditStore
 from composer.spec.source.munge.edit_oracle import mk_oracle
 from composer.spec.source.artifacts import ProverArtifactStore
+from composer.spec.gen_types import AP_REPORT_DIR
 from composer.spec.agent_index import AgentIndex, AgentIndexConfig, agent_index_config_from_env
 from composer.core.user import get_uid
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
@@ -44,7 +46,7 @@ _logger = logging.getLogger(__name__)
 # Args
 # ---------------------------------------------------------------------------
 
-class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, Protocol):
+class AutoProveArgs(ExtendedModelOptions, RAGDBOptions, PropertySetOptions, Protocol):
     project_root: str
     main_contract: str
     system_doc: str | None
@@ -89,7 +91,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     parser.add_argument("--interactive", action="store_true", help="Interactively refine the security properties after extraction")
     parser.add_argument("--threat-model", type=str, default=None, help="Path to a 'threat' model (text or pdf) with which to seed the property extraction process")
     add_extra_context_args(parser)
-    parser.add_argument("--max-bug-rounds", type=int, default=3, help="Maximum number of bug-extraction rounds run per component during property analysis (default: 3)")
+    add_protocol_args(parser, PropertySetOptions)
+    parser.add_argument("--max-bug-rounds", type=int, default=DEFAULT_MAX_BUG_ROUNDS, help=f"Maximum number of property-inference rounds run per component; a round runs only if the previous one found a new property (default: {DEFAULT_MAX_BUG_ROUNDS})")
     # One budget, two spellings: the file shapes spend across phases, the scalar
     # sets the pool alone. argparse reports taking both, and renders the choice in
     # --help; resolve_budget re-checks it for callers that skip the parser.
@@ -97,13 +100,7 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[Executor]:
     budget_group.add_argument("--budget", default=None, help="Path to a run-budget file (JSON or YAML): {total: USD, caps: {phase: USD, ...}}. Omit to run unbudgeted.")
     budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
-    parser.add_argument(
-        "--run-mode", choices=[m.value for m in RunMode], default=None,
-        help="How much of the inferred property set to pursue. 'comprehensive' (the default) "
-             "formalizes every property of every component. 'prioritized' ranks them all, then "
-             "spends the run on the highest-contribution property and the properties it rests "
-             "on. Also settable as AUTOPROVER_RUN_MODE; this flag wins.",
-    )
+    add_run_mode_arg(parser)
 
     args = cast(AutoProveArgs, parser.parse_args())
     async with autoprove_executor(args, summary) as runner:
@@ -152,6 +149,8 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 thread_id=thread_id,
                 task_handler=handler,
                 ecosystem=EVM,
+                report_dir=AP_REPORT_DIR,
+                report_backend="prover",
                 at_exit=exit_logger,
                 run_mode=run_mode,
                 workflow="autoprove"
@@ -204,4 +203,5 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 CexAnalysisStore(store=staged.conns.store, namespace=("cex_analyses", thread_id)),
             )
             return await cont(source_env, backend)
+
     yield callback

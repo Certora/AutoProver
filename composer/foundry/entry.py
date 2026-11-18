@@ -24,13 +24,14 @@ from typing import Annotated, AsyncIterator, Awaitable, Callable, Protocol, cast
 from composer.core.user import get_uid
 from composer.diagnostics.timing import RunSummary
 from composer.input.parsing import Arg, add_extra_context_args, add_protocol_args
-from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions
+from composer.input.types import DEFAULT_RECURSION_LIMIT, RAGDBOptions, ExtendedModelOptions, PropertySetOptions
 from composer.io.multi_job import HandlerFactory
 from composer.io.thread_logging import RunDataLogger
 from composer.rag.db import FOUNDRY_DEFAULT_CONNECTION, PostgreSQLRAGDatabase
 from composer.spec.context import SourceFields
 
 from composer.foundry.artifacts import FoundryArtifactStore
+from composer.spec.gen_types import FOUNDRY_REPORT_DIR
 from composer.foundry.env import build_foundry_env
 from composer.foundry.pipeline import (
     FoundryPhase, FoundryPipelineResult, backend
@@ -39,6 +40,7 @@ from composer.pipeline.cli import cli_pipeline, user_ns, AtExit
 from composer.pipeline.run_mode import RunMode
 from composer.pipeline.ptypes import DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import EVM
+from composer.spec.prop_inference import DEFAULT_MAX_BUG_ROUNDS
 
 _log = logging.getLogger(__name__)
 
@@ -59,7 +61,7 @@ class FoundryRAGDBOptions(RAGDBOptions, Protocol):
     )]
 
 
-class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, Protocol):
+class FoundryArgs(ExtendedModelOptions, FoundryRAGDBOptions, PropertySetOptions, Protocol):
     project_root: str
     main_contract: str
     system_doc: str | None
@@ -138,7 +140,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
     parser.add_argument("--interactive", action="store_true", help="Interactively refine extracted properties")
-    parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
+    parser.add_argument("--max-bug-rounds", type=int, default=DEFAULT_MAX_BUG_ROUNDS, help=f"Max property-inference rounds per component; a round runs only if the previous one found a new property (default: {DEFAULT_MAX_BUG_ROUNDS})")
     parser.add_argument("--forge-binary", default="forge", help="`forge` executable on PATH (default: forge)")
     parser.add_argument("--forge-timeout-s", type=int, default=600, help="Per-`forge test` invocation timeout in seconds (default: 600)")
     # One budget, two spellings: the file shapes spend across phases, the scalar
@@ -149,6 +151,7 @@ def _build_parser() -> argparse.ArgumentParser:
     budget_group.add_argument("--budget-total", default=None, type=float, help="The run pool in USD as a bare number — the budget file's `total` with no per-phase caps. Omit both budget flags to run unbudgeted.")
     parser.add_argument("--time-budget", default=None, type=float, help="Total wall time to run the entire execution. Omit to run without in process limit")
     add_extra_context_args(parser)
+    add_protocol_args(parser, PropertySetOptions)
     parser.set_defaults(threat_model=None)
     return parser
 
@@ -170,6 +173,8 @@ async def _entry_point(summary: RunSummary) -> AsyncIterator[FoundryRunner]:
                   task_handler=fact,
                   design_doc_phase=cast(FoundryPhase, FoundryPhase.DISCOVER_DESIGN_DOC),
                   ecosystem=EVM,
+                  report_dir=FOUNDRY_REPORT_DIR,
+                  report_backend="foundry",
                   at_exit=_usage_exit_logger(summary),
                   workflow="foundry"
             ) as (staged, cont),

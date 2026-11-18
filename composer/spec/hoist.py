@@ -13,12 +13,15 @@ dropped from its unit. A unit-local property stays where it is.
 Usually a group's shared property is one of its members, exactly as extracted. Extraction is not
 reliable about stating a claim whole, though: one run stated lamport conservation once over every
 instruction, the next only per instruction group. So when no member states the whole claim, the
-model may write one property that is exactly the conjunction of its members, over the union of the
-entry points they name. Validation holds it to that union, and :class:`Hoisted` records which
-shared properties were written here rather than extracted. Like :mod:`composer.spec.prioritize`,
-this is one structured call validated in Python.
-Unlike prioritization, a plan that will not validate does not fail the run: the caller formalizes
-the units unhoisted, which costs duplicate work and loses nothing.
+model may write one property that is exactly the conjunction of its members. Validation holds it
+to its members: it names no entry point none of them names, keeps one of every member's, and spans
+more than one component. Not the exact union, because a member also names the instructions it
+excludes ("every handler except `delegate_stake`"). :class:`Hoisted` records which shared properties
+were written here rather than extracted. Like :mod:`composer.spec.prioritize`, this is one
+structured call validated in Python.
+Unlike prioritization, a plan that will not validate does not fail the run: its valid groups are
+kept (:func:`salvage`), and with none the caller formalizes the units unhoisted, which costs
+duplicate work and loses nothing.
 """
 
 import logging
@@ -31,6 +34,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
+from composer.llm.structured import with_structured_output
 from composer.spec.types import ComponentName, PropertyFormulation, PropertyKey, PropertyTitle
 from composer.templates.loader import load_jinja_template
 
@@ -124,7 +128,7 @@ def build_candidates(
     ]
 
 
-def _named(text: str, names: set[str]) -> set[str]:
+def named_entry_points(text: str, names: set[str]) -> set[str]:
     """The entry points in ``names`` that ``text`` names, each matched as a whole identifier."""
     return {
         name
@@ -169,7 +173,7 @@ def validate_plan(candidates: Sequence[HoistCandidate], plan: HoistPlan) -> str 
                     )
                 elif key in by_key:
                     home, prop = by_key[key]
-                    if not _named(prop.description, everyone - set(home.entry_points)):
+                    if not named_entry_points(prop.description, everyone - set(home.entry_points)):
                         problems.append(
                             f"The property chosen for {g.claim!r}, {key}, names no entry point "
                             f"outside its own component ({', '.join(home.entry_points)}). Only a "
@@ -188,8 +192,8 @@ def validate_plan(candidates: Sequence[HoistCandidate], plan: HoistPlan) -> str 
                 # also names instructions it excludes ("every handler except `delegate_stake`").
                 # So the property may not name anything no member names, and must keep a named
                 # entry point of every member.
-                named = [_named(m.description, everyone) for m in members]
-                stated = _named(prop.description, everyone)
+                named = [named_entry_points(m.description, everyone) for m in members]
+                stated = named_entry_points(prop.description, everyone)
                 if extra := stated - set().union(*named):
                     problems.append(
                         f"The property synthesized for {g.claim!r} names entry points no member "
@@ -270,7 +274,7 @@ async def plan_hoist(
     user = load_jinja_template(
         "property_hoisting_prompt.j2", contract_name=contract_name, candidates=candidates
     )
-    bound = llm.with_structured_output(HoistPlan)
+    bound = with_structured_output(llm, HoistPlan)
 
     messages: list[BaseMessage] = [SystemMessage(system), HumanMessage(user)]
     problem: str | None = None

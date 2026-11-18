@@ -17,13 +17,13 @@ import pytest
 
 from composer.prover import core
 from composer.prover.core import TrivialFanoutCexHandler
-from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+from composer.prover.ptypes import Counterexample, RulePath, RuleResult, UserAssertion
 
 
 def _violated(rule: str) -> RuleResult:
     return RuleResult(
         path=RulePath(rule=rule),
-        counterexample=Counterexample(trace=f"<cex {rule}/>"),
+        counterexample=Counterexample(trace=f"<cex {rule}/>", origin=UserAssertion()),
         status="VIOLATED",
     )
 
@@ -95,3 +95,23 @@ async def test_cancellation_is_not_swallowed(monkeypatch, tmp_path) -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await _analyze(handler_for(), [_violated("first")], tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_with_no_threshold_a_large_report_is_never_summarized(monkeypatch, tmp_path) -> None:
+    async def fake_analyze(llm, messages, rule: RuleResult, tool_call_id: str) -> str:
+        return f"explanation for {rule.name}"
+
+    async def no_summary(llm, report: str) -> str:
+        raise AssertionError("summarized a report the handler was told to keep whole")
+
+    monkeypatch.setattr(core, "analyze_cex_raw", fake_analyze)
+    monkeypatch.setattr(core, "_report_to_todo_list", no_summary)
+
+    handler = TrivialFanoutCexHandler(
+        llm=None, state={"messages": []}, summarization_threshold=None  # type: ignore[arg-type]
+    )
+    rules = [_violated(f"rule_{i}") for i in range(12)]
+    report, _ = await _analyze(handler, rules, tmp_path)
+
+    assert all(f"explanation for rule_{i}" in report for i in range(12))

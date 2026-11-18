@@ -21,17 +21,20 @@ from pathlib import Path
 
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
+from composer.cargo.rustup import ToolchainMissing
 from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.cargo.session import (
     CargoSession,
     CheckWith,
     CompileFailed,
     Compiled,
+    CompileVerdict,
     HostCheck,
     WarmFailed,
 )
+from composer.pipeline.refusal import RunRefusal
 from composer.sandbox.config import SandboxConfig
-from composer.sandbox.recipes import sandbox_cargo_home
+from composer.sandbox.recipes import prepare_sandbox_cargo_home
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
     HOST_RUST_TOOLCHAIN,
@@ -54,7 +57,7 @@ from composer.spec.cvlr.tree import ProjectSource
 _log = logging.getLogger(__name__)
 
 
-class PreflightFailed(RuntimeError):
+class PreflightFailed(RunRefusal):
     """The project cannot be prepared for verification, so the run stops.
 
     Separate from :class:`composer.rustapp.adapter.PreflightFailed`, which says the same thing
@@ -179,6 +182,7 @@ async def select_package(
     reference = select_generation(workspace, member, candidates)
     if reference is None:
         linked = workspace.linked_into(member)
+        # An ordered set: the refusal names the witnesses in candidate order.
         witnesses = dict.fromkeys(w.name for r in candidates for w in r.platform.witnesses)
         builds = [
             f"{name} {', '.join(c.version for c in copies)}"
@@ -187,7 +191,7 @@ async def select_package(
         ]
         supported = "; ".join(f"{r.platform.label} ({r.line()})" for r in candidates)
         raise PreflightFailed(
-            f"{member.name} is on no Solana platform generation this build supports. It builds "
+            f"{member.name} is on no platform generation this build supports. It builds "
             f"{', '.join(builds) or 'none of the platform crates that identify one'}. Supported: "
             f"{supported}."
         )
@@ -206,7 +210,7 @@ async def _workspace_at(
         workspace = await Workspace.read(
             root, features=features, toolchain=HOST_RUST_TOOLCHAIN, cargo_home=cargo_home
         )
-    except CargoUnavailable as exc:
+    except (CargoUnavailable, ToolchainMissing) as exc:
         raise PreflightFailed(str(exc)) from exc
     if not isinstance(workspace, Workspace):
         raise PreflightFailed(
@@ -228,7 +232,8 @@ async def prepare_workspace(
 
     Writes into the project it is given. For a pipeline run that is the copy the run owns. The
     harness files under ``src/certora/`` are replaced by AutoProver's. The project's manifests
-    and sources are only added to.
+    are only added to. A framework program's sources are rewritten to build with ``std``, and
+    without the framework's allocator and panic handler, under the feature.
 
     ``reference`` is the set rather than a chain name because a run may narrow it, in exactly one
     way: a target that *is* the program a :class:`~composer.spec.cvlr.reference.ProgramModel`
@@ -236,9 +241,11 @@ async def prepare_workspace(
     (:meth:`~composer.spec.cvlr.reference.ChainReference.withholding`). Every function this calls
     already takes the set, so passing it in removes a lookup rather than adding an argument.
     """
-    # The cargo home the gate's warm step fills (CargoSession.cargo_home), so what these reads fetch
-    # is not fetched again.
-    cargo_home = sandbox_cargo_home(project_root) if sandbox.enabled else None
+    # The cargo home the gate's warm fills (:attr:`composer.cargo.session.CargoSession.cargo_home`),
+    # so these reads reuse the registry crates it fetched. Git sources are fetched again: these
+    # reads use the host cargo, and the platform-tools cargo does not see the host cargo's git
+    # checkouts (:func:`composer.cargo.sbf.platform_tools_cargos`).
+    cargo_home = prepare_sandbox_cargo_home(project_root) if sandbox.enabled else None
     workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     member = _pick_package(workspace, package)
 
@@ -264,7 +271,10 @@ async def prepare_workspace(
     )
     fresh = resolved_in.member(member.name) or member
     if fresh.lib is None:
-        raise PreflightFailed(f"{fresh.name} has no library target to build")
+        raise PreflightFailed(
+            f"{fresh.name} has no library target to build. Point the run at the program's crate, "
+            "which needs a [lib] target."
+        )
 
     sources = CvlrSources.of(resolved_in)
     # The backstop behind the scaffold's gate. That gate reads the manifests and the pre-scaffold
@@ -317,40 +327,17 @@ async def gate_workspace(
 ) -> None:
     """Check that the scaffolded project compiles with the harness in, or fail the run.
 
-    ``cargo check`` as the chain checks (:func:`session_settings`), not the build. What this has
-    to catch is a scaffold that does not compile. The build is a later gate, and running it here
-    would cost more than the failure it would be catching.
+    ``cargo check`` as the chain checks (:func:`session_settings`), after building the contracts
+    the package imports (Soroban). The full build runs at a later gate.
     """
-    try:
-        toolchain, check_with = session_settings(chain)
-    except PlatformToolsMissing as exc:
-        raise PreflightFailed(str(exc)) from exc
-    session = CargoSession(
-        workdir=pre.workspace_root,
-        sandbox=sandbox,
-        toolchain=toolchain,
-        check_with=check_with,
-    )
-    warmed = await session.warm()
-    if isinstance(warmed, WarmFailed):
-        raise PreflightFailed(
-            f"could not fetch the dependency graph for {pre.workspace_root} "
-            f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
-        )
+    session = await chain_session(pre.workspace_root, sandbox=sandbox, chain=chain)
     if pre.contract_imports:
         failure = await build_imports(
             session, pre.contract_imports, target_directory=pre.target_directory
         )
         if failure is not None:
             raise PreflightFailed(failure)
-    run = await session.check(manifest_dir=pre.package_dir, features=features)
-    _log.info(
-        "preflight gate: %s in %dms%s",
-        "ok" if run.ok else "FAILED",
-        run.duration_ms,
-        "" if run.confined else " (UNCONFINED)",
-    )
-    match run.verdict:
+    match await _check(session, pre.package_dir, features):
         case Compiled():
             return
         case CompileFailed(diagnostics=diagnostics):
@@ -358,3 +345,61 @@ async def gate_workspace(
                 f"the scaffolded {pre.package} does not compile with --features "
                 f"{','.join(features)}:\n{diagnostics}"
             )
+
+
+async def check_package(
+    workspace_root: Path,
+    package_dir: Path,
+    *,
+    sandbox: SandboxConfig,
+    features: tuple[CargoFeature, ...],
+) -> CompileVerdict:
+    """``cargo check`` the package at ``package_dir`` for the SBF target with ``features``.
+
+    Raises :class:`PreflightFailed` as :func:`sbf_session` does."""
+    return await _check(await sbf_session(workspace_root, sandbox=sandbox), package_dir, features)
+
+
+async def _check(
+    session: CargoSession, package_dir: Path, features: tuple[CargoFeature, ...]
+) -> CompileVerdict:
+    run = await session.check(manifest_dir=package_dir, features=features)
+    _log.info(
+        "preflight gate: %s in %dms%s",
+        "ok" if run.ok else "FAILED",
+        run.duration_ms,
+        "" if run.confined else " (UNCONFINED)",
+    )
+    return run.verdict
+
+
+async def sbf_session(workspace_root: Path, *, sandbox: SandboxConfig) -> CargoSession:
+    """A session that checks and builds for the SBF target, its dependency graph fetched.
+
+    Raises :class:`PreflightFailed` as :func:`chain_session` does."""
+    return await chain_session(workspace_root, sandbox=sandbox, chain="solana")
+
+
+async def chain_session(workspace_root: Path, *, sandbox: SandboxConfig, chain: str) -> CargoSession:
+    """A session that checks and builds as ``chain`` does (:func:`session_settings`), its
+    dependency graph fetched.
+
+    Raises :class:`PreflightFailed` when the platform tools are missing or the graph cannot be
+    fetched."""
+    try:
+        toolchain, check_with = session_settings(chain)
+    except PlatformToolsMissing as exc:
+        raise PreflightFailed(str(exc)) from exc
+    session = CargoSession(
+        workdir=workspace_root,
+        sandbox=sandbox,
+        toolchain=toolchain,
+        check_with=check_with,
+    )
+    warmed = await session.warm()
+    if isinstance(warmed, WarmFailed):
+        raise PreflightFailed(
+            f"could not fetch the dependency graph for {workspace_root} "
+            f"(exit {warmed.exit_code}):\n{warmed.diagnostics}"
+        )
+    return session

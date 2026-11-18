@@ -5,8 +5,13 @@ import json
 from prover_output_utility.models import JobStatus
 
 from composer.prover.cloud import CloudJobError
-from composer.prover.core import cloud_job_failure_message
+from composer.prover.core import JobFailed, ResultsUnavailable
 from composer.prover.results import OUT_OF_RESOURCES, SOLANA_ENCODING, ErrorAlert, error_alerts
+
+
+def cloud_job_failure_message(exc: CloudJobError) -> str:
+    """What ``run_prover`` makes of ``exc``, as its reader gets it."""
+    return JobFailed(exc.status, exc.link, exc.alerts).render()
 
 _LINK = "https://prover.certora.com/jobStatus/37632/9fc4c8ae6e1944dca697e568d679772f?anonymousKey=k"
 _HINT = (
@@ -151,4 +156,13 @@ def test_a_failure_without_alerts_is_the_status_and_the_link():
     assert text == (
         "Prover cloud job did not produce results (status CANCELED). "
         f"The job and its failure output are at {_LINK}"
+    )
+
+
+def test_a_download_failure_reads_as_it_did_when_it_was_a_string():
+    """The CVL agents read this text whatever the type behind it."""
+    assert ResultsUnavailable(_LINK, "connection reset").render() == (
+        "The prover job finished, but its results could not be downloaded (connection reset). "
+        "This is an infrastructure failure, not a problem with the specification; the "
+        f"verdicts are at {_LINK}. Retrying may succeed."
     )

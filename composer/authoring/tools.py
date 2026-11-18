@@ -246,20 +246,28 @@ class GatedGiveUpState(MessagesState):
     failed: ReadOnly[bool | None]
 
 
-def _verify_attempts(state: GatedGiveUpState) -> int:
+@dataclass(frozen=True)
+class GiveUpFloor:
+    """What :class:`GatedGiveUp` holds a surrender to: how many prover attempts it owes, and the
+    tool whose calls are the attempts. The tool differs by backend — ``submit_buffer`` for CVL,
+    ``verify_rules`` for CVLR — and a gate counting the wrong one counts zero forever."""
+    min_attempts: int
+    verify_tool: str
+
+
+def _verify_attempts(state: GatedGiveUpState, verify_tool: str) -> int:
     """How many times this session has put a spec in front of the prover.
 
-    Counted from the message history rather than from ``prover_history``: that list only grows
-    when the prover returns a *report*, and the failures worth escalating through — a spec that
-    will not type-check, a toolchain that will not run — return early without one. Counting
-    calls counts attempts, which is what the gate is about. The same walk over ``messages`` is
-    how the prover tool identifies its own prior calls."""
+    Counted from the message history rather than from the backend's own record of prover
+    results: that only grows when the prover returns a *report*, and the failures worth
+    escalating through — a spec that will not compile, a toolchain that will not run — return
+    early without one. Counting calls counts attempts, which is what the gate is about."""
     return sum(
         1
         for msg in state.get("messages", [])
         if isinstance(msg, AIMessage)
         for call in msg.tool_calls
-        if call["name"] == "submit_buffer"
+        if call["name"] == verify_tool
     )
 
 
@@ -268,7 +276,7 @@ def _verify_attempts(state: GatedGiveUpState) -> int:
 class GatedGiveUp[S: GatedGiveUpState](
     WithInjectedId,
     WithInjectedState[S],
-    WithAsyncDependencies[str | Command, int],
+    WithAsyncDependencies[str | Command, GiveUpFloor],
 ):
     """{description}"""
     sort: Literal["environment", "exhausted"] = Field(
@@ -286,10 +294,11 @@ class GatedGiveUp[S: GatedGiveUpState](
     @override
     async def run(self) -> str | Command:
         with self.tool_deps() as floor:
-            if self.sort == "exhausted" and (ran := _verify_attempts(self.state)) < floor:
+            ran = _verify_attempts(self.state, floor.verify_tool)
+            if self.sort == "exhausted" and ran < floor.min_attempts:
                 return (
                     f"Rejected: you have run the prover {ran} time(s) on this task, and this run "
-                    f"requires at least {floor} before a property may be abandoned. This is the "
+                    f"requires at least {floor.min_attempts} before a property may be abandoned. This is the "
                     "property the run exists to establish. Prove a smaller statement it is built "
                     "out of, or formalize the strongest version of it that holds and state what "
                     "you could not prove — then verify. Do not reach a passing rule by assuming "
@@ -310,12 +319,13 @@ def gated_give_up_tool[S: GatedGiveUpState](
     description: str,
     label: str,
     min_attempts: int,
+    verify_tool: str,
     state_ty: type[S],
     reason_description: str = "The reason for giving up on your task",
 ) -> BaseTool:
     """:func:`give_up_tool` with a floor under it: an ``exhausted`` surrender is refused until
-    the session has actually put a spec in front of the prover ``min_attempts`` times, and the
-    reason must enumerate what was tried.
+    the session has called ``verify_tool`` — the tool that puts its draft in front of the prover
+    — ``min_attempts`` times, and the reason must enumerate what was tried.
 
     For a run that has staked itself on one property, where an early surrender is the whole run.
     The ``environment`` escape is not optional: a missing prover or compiler produces no prover
@@ -329,4 +339,26 @@ def gated_give_up_tool[S: GatedGiveUpState](
         description=description,
         reason=reason_description,
         label=label,
-    )[state_ty].bind(min_attempts).as_tool(name)
+    )[state_ty].bind(GiveUpFloor(min_attempts, verify_tool)).as_tool(name)
+
+
+# ---------------------------------------------------------------------------
+# A prioritized run's focus
+# ---------------------------------------------------------------------------
+
+#: How many prover runs a prioritized author owes before an ``exhausted`` surrender is even
+#: considered. Three is enough to have compiled a spec, seen a real counterexample, and tried
+#: something about it — the shortest honest account of "I tried".
+FOCUS_MIN_GIVE_UP_ATTEMPTS = 3
+
+
+@dataclass(frozen=True)
+class FocusPolicy:
+    """The tightened exits a prioritized author runs under: the properties it may not retire,
+    and the prover-run floor under an ``exhausted`` give-up.
+
+    Both are static. Whether the skip protection currently applies is read from
+    ``budget_curtailed`` in the graph state, which the budget monitor already sets and which a
+    checkpoint carries — a flag here would shadow it and could disagree with it on resume."""
+    protected: tuple[PropertyTitle, ...]
+    min_give_up_attempts: int = FOCUS_MIN_GIVE_UP_ATTEMPTS

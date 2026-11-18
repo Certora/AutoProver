@@ -12,17 +12,30 @@ from dataclasses import dataclass
 from pathlib import Path
 import re
 import json
+import logging
 
 from pydantic import Field, BaseModel, ValidationError
 
 from composer.certora_env import ProverApp
 from composer.prover.ptypes import (
+    AnalysisErrorKind,
+    AssertOrigin,
     Counterexample,
+    GeneratedAssertion,
+    GeneratedKind,
+    ProverMessage,
     RulePath,
     RuleResult,
     SourceSpan,
     StatusCodes,
+    UnclassifiedAssertion,
+    Uncoded,
+    UnknownCode,
+    UnknownKind,
+    UserAssertion,
 )
+
+_log = logging.getLogger(__name__)
 
 T = TypeVar('T')
 R = TypeVar('R')
@@ -89,11 +102,20 @@ class TraceShape:
     prover's format string writes it, with ``{}`` where its value goes. ``dropped`` removes a frame
     *and everything under it*, which is only safe where nothing interesting can nest inside it — a
     per-chain fact, see :data:`SOLANA_TRACE`. ``elided`` keeps the frame and replaces its subtree
-    with a count.
+    with a count. ``elided_in_any_crate`` does the same for a frame whose function lives in the
+    program's own crate, named there by its path below the crate root, since the crate's name is
+    the program's.
     """
 
     dropped: frozenset[str] = frozenset()
     elided: frozenset[str] = frozenset()
+    elided_in_any_crate: frozenset[str] = frozenset()
+
+    def elides(self, frame: str) -> bool:
+        if frame in self.elided:
+            return True
+        crate, sep, path = frame.partition("::")
+        return bool(crate) and bool(sep) and path in self.elided_in_any_crate
 
 
 #: Frames the prover emits on every chain and no counterexample needs.
@@ -119,9 +141,18 @@ EVM_TRACE = TraceShape(
 #:
 #: rustc 1.89 and later name the allocator shim ``__rustc::__rust_alloc``, so both spellings are
 #: dropped.
+#:
+#: A Pinocchio or jiminy program builds its accounts in the shim setup writes into its crate
+#: (``harness_files/``), whose region choices are the same setup noise, one frame per account.
 SOLANA_TRACE = TraceShape(
     dropped=_GENERIC_NOISE | {"__rust_alloc: {}", "__rustc::__rust_alloc: {}", "CVT_alloc_slice: {}"},
     elided=frozenset({"cvlr_solana::layout::cvlr_deserialize_nondet_accounts(...)"}),
+    elided_in_any_crate=frozenset(
+        {
+            "certora::pinocchio::cvlr_pinocchio_accounts(...)",
+            "certora::jiminy::cvlr_jiminy_accounts(...)",
+        }
+    ),
 )
 
 
@@ -208,18 +239,20 @@ def flatten_tree_view(
                 path=effective_path,
                 counterexample=None,
                 status=stat,
-                error_messages=list(messages)
+                messages=[prover_message(m) for m in sorted(messages)]
             )]
     elif stat == "SKIPPED":
         warning_message = [
-            i.message for i in r.errors if i.severity == "error" or i.severity == "warning"
+            prover_message(i.message)
+            for i in r.errors
+            if i.severity == "error" or i.severity == "warning"
         ]
         return [
             RuleResult(
                 path=effective_path,
                 counterexample=None,
                 status=stat,
-                error_messages=warning_message
+                messages=warning_message
             )
         ]
     if stat == "VERIFIED":
@@ -274,8 +307,6 @@ def flatten_tree_view(
 #: Where a job's alert report lives, relative to its results directory.
 ALERT_REPORT = Path("Reports") / "alertReport.json"
 
-_EXTERNALS_ALERT = "The following functions are neither inlined nor summarized"
-
 #: ``type`` of the alert the prover writes when it hits the global timeout.
 OUT_OF_RESOURCES = "Out of Resources"
 #: ``type`` of the alert the prover writes when Solana rule encoding fails.
@@ -328,28 +359,64 @@ def error_alerts(text: str) -> tuple[ErrorAlert, ...]:
     return tuple(found)
 
 
-def external_functions(results_root: Path) -> tuple[str, ...]:
-    """The Prover's warnings about functions it treated as external, deduplicated.
+@dataclass(frozen=True)
+class AlertReport:
+    """The messages of a job's alert report, in the Prover's words and order.
 
-    Read from the alert report. Each warning is the Prover's own text. The alerts
-    do not name their rule, so the same warning is repeated. An external call
-    writes nothing but its return value, and no verdict says so.
+    Empty when the job raised no alerts. The alerts do not name their rule, so a
+    message repeats once per rule that raised it.
+    """
 
-    Empty when the report is absent or unreadable. Callers show a non-empty list
-    and say nothing otherwise.
+    messages: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class UnreadableAlertReport:
+    """The alert report could not be fetched, or is not a JSON list of alerts."""
+
+
+@dataclass(frozen=True)
+class FetchedResults:
+    """A finished run's results directory, and its alert report."""
+
+    root: Path
+    #: The prover's queue-free run time, when it is known.
+    runtime_ms: int | None
+    alerts: AlertReport | UnreadableAlertReport
+    #: The job hit the time limit, so rules it had not finished are ``TIMEOUT``.
+    halted: bool = False
+
+
+def parse_alert_report(text: str) -> AlertReport | UnreadableAlertReport:
+    """The alerts named in ``text``.
+
+    ``text`` that is not a JSON list of alerts is :class:`UnreadableAlertReport`: that
+    is not an empty list.
     """
     try:
-        alerts = json.loads((results_root / ALERT_REPORT).read_text())
-    except (OSError, ValueError):
-        return ()
+        alerts = json.loads(text)
+    except ValueError:
+        return UnreadableAlertReport()
     if not isinstance(alerts, list):
-        return ()
-    found: set[str] = set()
-    for alert in alerts:
-        message = alert.get("message") if isinstance(alert, dict) else None
-        if isinstance(message, str) and _EXTERNALS_ALERT in message:
-            found.add(message)
-    return tuple(sorted(found))
+        return UnreadableAlertReport()
+    messages = (alert.get("message") if isinstance(alert, dict) else None for alert in alerts)
+    return AlertReport(tuple(m for m in messages if isinstance(m, str)))
+
+
+def read_alert_report(results_root: Path) -> AlertReport | UnreadableAlertReport:
+    """The alert report under ``results_root`` (:func:`parse_alert_report`).
+
+    An absent report is an empty :class:`AlertReport`. A report that cannot be read
+    is :class:`UnreadableAlertReport`.
+    """
+    path = results_root / ALERT_REPORT
+    try:
+        text = path.read_text()
+    except FileNotFoundError:
+        return AlertReport()
+    except OSError:
+        return UnreadableAlertReport()
+    return parse_alert_report(text)
 
 
 class NoTreeViewResultError(RuntimeError):
@@ -393,6 +460,170 @@ def get_final_treeview(s: Path) -> tuple[TreeViewStatus, Path]:
         raise MalformedTreeVew(e)
 
 
+#: Statuses that are verdicts. A node of a ``HALTED`` job that the Prover cut off is still
+#: ``RUNNING``, and a timeout can be written as an ``ERROR``; both read as ``TIMEOUT``.
+_FINISHED = frozenset({"VERIFIED", "VIOLATED", "SANITY_FAILED", "SKIPPED"})
+
+
+def unfinished_statistics_files(tree: TreeViewStatus) -> frozenset[str]:
+    """The statistics files (``LiveCheckInfo``) of every node without a verdict."""
+    found: set[str] = set()
+
+    def walk(node: RuleNodeModel) -> None:
+        if node.status not in _FINISHED and node.LiveCheckInfo is not None:
+            found.add(node.LiveCheckInfo)
+        for child in node.children:
+            walk(child)
+
+    for rule in tree.rules:
+        walk(rule)
+    return frozenset(found)
+
+
+@dataclass(frozen=True)
+class Hotspot:
+    function: str
+    #: The function's share of the rule's branching or nonlinear operations, in percent.
+    share: int
+
+
+@dataclass(frozen=True)
+class StaticAnalysis:
+    """The rule never reached the solver: the program it drives is too large to encode."""
+
+    def render(self) -> str:
+        return "static analysis (the rule did not reach the solver)"
+
+
+@dataclass(frozen=True)
+class Solving:
+    attempted: int
+    #: The total weight of the splits proved, in percent.
+    proved: int
+    depth: int
+    max_depth: int
+
+    def render(self) -> str:
+        return (
+            f"solving (splits attempted {self.attempted}, {self.proved} % proved, "
+            f"splitting depth {self.depth} of {self.max_depth})"
+        )
+
+
+@dataclass(frozen=True)
+class OtherPhase:
+    """A phase this build does not recognise, in the Prover's words with line breaks collapsed."""
+
+    detail: str
+
+    def render(self) -> str:
+        return self.detail
+
+
+type VerificationPhase = StaticAnalysis | Solving | OtherPhase
+
+
+@dataclass(frozen=True)
+class RuleStatistics:
+    """Where an unfinished rule stood, from the Prover's ``rule_live_statistics_*.json``."""
+
+    phase: VerificationPhase
+    path_count: str | None
+    branching: tuple[Hotspot, ...]
+    nonlinear: tuple[Hotspot, ...]
+
+    @property
+    def top_share(self) -> int | None:
+        """The largest share any one function holds, of branching or of nonlinear operations."""
+        shares = [spots[0].share for spots in (self.branching, self.nonlinear) if spots]
+        return max(shares, default=None)
+
+    def render(self, top: int = 2) -> str:
+        parts = [self.phase.render()]
+        if self.path_count is not None:
+            parts.append(f"path count {self.path_count}")
+        for what, spots in (("branching", self.branching), ("nonlinear ops", self.nonlinear)):
+            if spots:
+                listed = ", ".join(f"{h.function} {h.share} %" for h in spots[:top])
+                parts.append(f"{what}: {listed}")
+        return "; ".join(parts)
+
+
+_SHARE = re.compile(r"contrib\. to (?:branching|nonlinear ops): (\d+) %")
+_PHASE_PREFIX = "verification phase:"
+
+
+def _hotspots(section: object) -> tuple[Hotspot, ...]:
+    if not isinstance(section, dict) or not isinstance(children := section.get("children"), list):
+        return ()
+    found: list[Hotspot] = []
+    for child in children:
+        if not isinstance(child, dict):
+            continue
+        label, value = child.get("label"), child.get("value")
+        if not isinstance(label, str) or not label.startswith("function: ") or not isinstance(value, str):
+            continue
+        if (share := _SHARE.search(value)) is None:
+            continue
+        found.append(Hotspot(label.removeprefix("function: "), int(share.group(1))))
+    return tuple(sorted(found, key=lambda h: -h.share))
+
+
+_SPLITS = re.compile(
+    r"splits attempted \(solved or split again\): (\d+) "
+    r"total weight of splits proved: (\d+) % "
+    r"splitting depth reached: (\d+) "
+    r"configured max\. splitting depth: (\d+)"
+)
+
+
+def _phase(label: str) -> VerificationPhase:
+    detail = " ".join(label.removeprefix(_PHASE_PREFIX).split())
+    if detail == "static analysis":
+        return StaticAnalysis()
+    if (splits := _SPLITS.fullmatch(detail)) is not None:
+        attempted, proved, depth, max_depth = (int(g) for g in splits.groups())
+        return Solving(attempted, proved, depth, max_depth)
+    return OtherPhase(detail)
+
+
+def parse_rule_statistics(text: str) -> RuleStatistics | None:
+    """A ``rule_live_statistics_*.json`` body, or None when it has no verification phase."""
+    try:
+        sections = json.loads(text)
+    except ValueError:
+        return None
+    if not isinstance(sections, list):
+        return None
+    by_label: dict[str, dict] = {}
+    phase: VerificationPhase | None = None
+    for section in sections:
+        if not isinstance(section, dict) or not isinstance(label := section.get("label"), str):
+            continue
+        if label.startswith(_PHASE_PREFIX):
+            phase = _phase(label)
+        else:
+            by_label[label] = section
+    if phase is None:
+        return None
+    path_count = by_label.get("path count", {}).get("value")
+    return RuleStatistics(
+        phase=phase,
+        path_count=path_count if isinstance(path_count, str) else None,
+        branching=_hotspots(by_label.get("path count hotspots")),
+        nonlinear=_hotspots(by_label.get("nonlinearity hotspots")),
+    )
+
+
+def read_rule_statistics(tree_view_dir: Path, name: str) -> RuleStatistics | None:
+    """The statistics file ``name`` in ``tree_view_dir``, or None when it is absent or unreadable."""
+    try:
+        text = (tree_view_dir / name).read_text()
+    except OSError:
+        return None
+    return parse_rule_statistics(text)
+
+
 def read_and_format_run_result(s: Path, app: ProverApp) -> dict[str, RuleResult] | str:
     """Every rule in a finished run's final treeView, keyed by rule name.
 
@@ -431,7 +662,7 @@ def calltrace_to_xml(node: CallTraceModel, shape: TraceShape) -> str:
         frame = child.message.frame
         if frame in shape.dropped:
             continue
-        if frame in shape.elided:
+        if shape.elides(frame):
             xml_parts.append(
                 f"<child><message>{child.message.render()}</message>"
                 f"<elided>{_descendants(child)} frames of setup</elided></child>"
@@ -442,13 +673,48 @@ def calltrace_to_xml(node: CallTraceModel, shape: TraceShape) -> str:
     return "".join(xml_parts)
 
 
+def assert_origin(reported: object) -> AssertOrigin:
+    """Where a violated assertion came from, from the ``assertOrigin`` of its rule's output.
+
+    A Prover that predates ``assertOrigin`` does not write the key, and its assertions read as
+    unclassified, the rule's own. Only a run on a Prover that writes it can tell a limit of the
+    Prover from a finding.
+    """
+    match reported:
+        case "user":
+            return UserAssertion()
+        case str(kind) if kind in GeneratedKind:
+            return GeneratedAssertion(GeneratedKind(kind))
+        case str(kind):
+            _log.warning("the Prover reported a kind of generated assertion not in GeneratedKind: %s", kind)
+            return GeneratedAssertion(UnknownKind(kind))
+        case _:
+            return UnclassifiedAssertion()
+
+
+#: The code at the start of a Prover error. A Prover before EVMVerifier#8815 prefixes an encoding
+#: failure with ``In <rule>: ``.
+_ERROR_CODE = re.compile(r"(?:In \S+: )?\[(\d+)\]")
+
+
+def prover_message(text: str) -> ProverMessage:
+    """A message the Prover reported on a rule, with the ``[NNNN]`` code that starts it."""
+    match _ERROR_CODE.match(text):
+        case None:
+            return ProverMessage(Uncoded(), text)
+        case m if int(m[1]) in AnalysisErrorKind:
+            return ProverMessage(AnalysisErrorKind(int(m[1])), text)
+        case m:
+            return ProverMessage(UnknownCode(int(m[1])), text)
+
+
 def counterexample(dump: dict[str, object], shape: TraceShape) -> Counterexample | None:
     """One violated rule's counterexample, or None when its output carries no call trace.
 
-    ``assertMessage`` matters twice over: on a Solana loop-unwinding violation it is the only
-    statement of what failed — the trace just shows the loop getting two iterations in and stopping
-    — and it is what separates a violation that found a bug from one that ran into an analysis
-    bound (:func:`~composer.prover.ptypes.classify_violation`).
+    On a Solana loop-unwinding violation ``assertMessage`` is the only statement of what failed:
+    the trace just shows the loop getting two iterations in and stopping. ``assertOrigin`` is what
+    separates a violation that found a bug from one that ran into an analysis bound
+    (:func:`~composer.prover.ptypes.classify_violation`).
     """
     if "callTrace" not in dump:
         return None
@@ -466,6 +732,7 @@ def counterexample(dump: dict[str, object], shape: TraceShape) -> Counterexample
             pass
     return Counterexample(
         trace=calltrace_to_xml(CallTraceModel.model_validate(dump["callTrace"]), shape),
+        origin=assert_origin(dump.get("assertOrigin")),
         assertion=assertion,
         source=source,
     )

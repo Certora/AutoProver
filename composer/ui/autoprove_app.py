@@ -44,6 +44,8 @@ class AutoProvePhase(enum.Enum):
     COMPONENT_ANALYSIS = "component_analysis"
     BUG_ANALYSIS = "bug_analysis"
     CVL_GEN = "cvl_gen"
+    #: An external run mode's own work (``evaluate``), in place of CVL generation.
+    EVALUATION = "evaluation"
     REPORT = "report"
 
 
@@ -55,6 +57,7 @@ AUTOPROVE_PHASE_LABELS: dict[AutoProvePhase, str] = {
     AutoProvePhase.COMPONENT_ANALYSIS: "Component Analysis",
     AutoProvePhase.BUG_ANALYSIS: "Property Extraction",
     AutoProvePhase.CVL_GEN: "CVL Generation",
+    AutoProvePhase.EVALUATION: "Evaluation",
     AutoProvePhase.REPORT: "Report Generation"
 }
 
@@ -66,6 +69,7 @@ AUTOPROVE_SECTION_ORDER: list[str] = [
     "Component Analysis",
     "Property Extraction",
     "CVL Generation",
+    "Evaluation",
 ]
 
 # ---------------------------------------------------------------------------

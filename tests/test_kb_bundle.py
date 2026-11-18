@@ -16,6 +16,7 @@ from composer.kb.kb_context import (
     ContextSpec,
     CvlChannel,
     IndexModel,
+    KBRecipe,
     KnowledgeBundle,
     context_documents,
     kb_loader,
@@ -23,10 +24,10 @@ from composer.kb.kb_context import (
 from composer.kb.knowledge_base import kb_tools
 
 
-def _stub_bundle() -> KnowledgeBundle[CvlChannel]:
+def _stub_bundle() -> KnowledgeBundle[CvlChannel, KBRecipe[CvlChannel]]:
     """A second bundle over CVL's own resources: enough to tell what a bundle contributes to its
     rendering from what the resources do."""
-    return KnowledgeBundle[CvlChannel](
+    return KnowledgeBundle[CvlChannel, KBRecipe[CvlChannel]](
         label="STUB",
         recipes=CVL_RECIPES,
         specs=(ContextSpec(title="Stub Facts", loader=lambda: "nothing to declare"),),
@@ -58,7 +59,7 @@ def test_a_channel_outside_the_vocabulary_is_rejected():
     """A channel names a tool the reading agent has. A vocabulary wide enough for two agent
     families would validate a recipe pointing at an action its readers cannot take."""
     with pytest.raises(ValidationError):
-        IndexModel[CvlChannel].model_validate(
+        IndexModel[CvlChannel, KBRecipe[CvlChannel]].model_validate(
             {"recipes": [{"id": "R0", "name": "n", "triggers": [], "file": "f.md",
                           "channel": "SKIP"}]}
         )
@@ -78,7 +79,7 @@ def test_the_loader_resolves_an_id_to_its_file_and_nothing_else():
 def test_a_bundle_without_recipes_contributes_no_tool_and_no_index():
     """A family acquires recipes after it has knowledge worth indexing. Until then the tool would
     answer every id with a miss, and the index document would advertise it."""
-    facts_only = KnowledgeBundle[CvlChannel](
+    facts_only = KnowledgeBundle[CvlChannel, KBRecipe[CvlChannel]](
         label="STUB", specs=(ContextSpec(title="Stub Facts", loader=lambda: "x"),)
     )
     assert kb_tools(facts_only) == []

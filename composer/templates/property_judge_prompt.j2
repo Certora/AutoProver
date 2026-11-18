@@ -293,10 +293,28 @@ When rejecting, prescribe feeding the free inputs into the relevant contract fun
 state it writes), instead of comparing a CVL derivation against another CVL derivation of the same quantity — comparing
 against a *contract* output is the cure, not the defect.
 
-### Criteria 8: Property Coverage
+### Criteria 8: Unsourced Tolerances
+
+A rule that permits a loss, a rounding error, or any other tolerance must name the source of its bound: the
+design document, a code comment, or the property itself. Examples of such rules: `assert balanceAfter >= balanceBefore - 1`,
+`assert assetsOut + DUST >= assetsIn`, a relative error bound on a conversion, or a property titled "loses at most dust".
+A bound the author picked so that the rule passes accepts the very behavior under test: if the implementation loses value
+it should not, the bounded rule still verifies, and a real bug hides behind a VERIFIED verdict.
+
+Reject every such rule whose bound has no stated source, with this feedback: the tolerance accepts the behavior under
+test; state the strict property (no loss, or the exact rounding direction) as its own rule, and record any tolerance as a
+separate rule that cites where its bound comes from. If the strict rule then fails because the loss is real, that is the
+intended result (Criteria 6).
+
+A cited source must state the bound itself. A design document that says "rounding favors the vault" licenses a rounding
+direction, not a magnitude; a tolerance of `1` wei per conversion needs a source that says so, or an argument from the code
+that the error of each conversion is at most one unit. Do not apply this criterion to bounds that are part of the
+property's own statement (e.g. "the fee never exceeds `MAX_FEE`"), where the bound is the property.
+
+### Criteria 9: Property Coverage
 
 Verify that the specification covers all {{ properties | length }} listed properties. For each property:
-- If the spec contains rules/invariants addressing it: evaluate those rules under criteria 1-7.
+- If the spec contains rules/invariants addressing it: evaluate those rules under criteria 1-8.
 - If the spec neither addresses the property NOR carries an author skip: reject the spec and flag the missing property.
 - If the author declared a skip: evaluate it by the rules below.
 
@@ -445,7 +463,7 @@ The following properties were explicitly skipped by the author:
 
 {%if rebuttals%}
 The author has filed the following rebuttals against feedback from prior rounds.
-Evaluate each per the Step 1 rebuttal rule (and the Criteria 7 exception for skip-related rebuttals).
+Evaluate each per the Step 1 rebuttal rule (and the Criteria 9 skip rules for skip-related rebuttals).
 Empirical evidence types (`typecheck_failure`, `counterexample`, `manual_citation`) 
 carry near-binding weight; `reasoned` rebuttals are a conversation, 
 not a veto.

@@ -228,10 +228,13 @@ property on the backend: `None` everywhere except CVLR, so Crucible and EVM are 
 Solana unit is `protocol_unit`, a "Protocol invariants" component spanning every instruction,
 appended to a copy of the analyzed model. Two choices beyond the design above:
 
-- **The model never writes a property.** A group's shared property is one of its members, copied
-  verbatim; validation checks that it names an entry point outside its own component.
-- **A plan that does not validate is skipped, not fatal.** The run formalizes the units unhoisted
-  and pays for the duplicates.
+- **The model chose a member; it did not write one.** A group's shared property was one of its
+  members, copied verbatim; validation checks that it names an entry point outside its own
+  component. Since 2026-10-13 the hoist may also write one, the conjunction of its members, when
+  no member states the claim whole (see "Follow-up: the hoist may synthesize" below).
+- **A plan that does not validate is not fatal.** The run formalizes the units unhoisted and pays
+  for the duplicates. Since the same follow-up, the last attempt's valid groups are kept first,
+  and only a plan with none falls back to that.
 
 On arm 1's 145 properties the plan validated on its first attempt: 15 groups absorbing 64
 properties, leaving 96 to formalize (15 shared, 81 in their components). Solvency's representative

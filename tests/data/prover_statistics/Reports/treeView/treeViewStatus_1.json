@@ -1,0 +1,60 @@
+{
+ "rules": [
+  {
+   "name": "rule_fee_is_bounded",
+   "output": [],
+   "children": [
+    {
+     "name": "Assertions",
+     "output": [
+      "rule_output_1.json"
+     ],
+     "children": [],
+     "status": "VERIFIED",
+     "nodeType": "ASSERT_SUBRULE_AUTO_GEN",
+     "errors": [],
+     "LiveCheckInfo": "rule_live_statistics_1.json"
+    }
+   ],
+   "status": "VERIFIED",
+   "nodeType": "ROOT",
+   "errors": []
+  },
+  {
+   "name": "rule_swap_output_rounds_down",
+   "output": [],
+   "children": [
+    {
+     "name": "Assertions",
+     "output": [],
+     "children": [],
+     "status": "RUNNING",
+     "nodeType": "ASSERT_SUBRULE_AUTO_GEN",
+     "errors": [],
+     "LiveCheckInfo": "rule_live_statistics_2.json"
+    }
+   ],
+   "status": "RUNNING",
+   "nodeType": "ROOT",
+   "errors": []
+  },
+  {
+   "name": "rule_swap_preserves_invariant",
+   "output": [],
+   "children": [
+    {
+     "name": "Assertions",
+     "output": [],
+     "children": [],
+     "status": "TIMEOUT",
+     "nodeType": "ASSERT_SUBRULE_AUTO_GEN",
+     "errors": [],
+     "LiveCheckInfo": "rule_live_statistics_3.json"
+    }
+   ],
+   "status": "TIMEOUT",
+   "nodeType": "ROOT",
+   "errors": []
+  }
+ ]
+}

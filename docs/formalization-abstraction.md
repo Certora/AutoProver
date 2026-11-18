@@ -385,9 +385,10 @@ it:
 - **Gates stamp, they do not return.** A checker or judge that accepts the draft writes
   `spec_digest(buffer, skips)` into `validations`. `check_completion` then requires every
   `required_validations` key to carry a stamp equal to the digest *as it now stands*, so editing
-  after a green run invalidates that run without anything having to remember to clear it. The digest
-  covers the skip declarations too, because "this property is left out, here is why" is part of what
-  was accepted.
+  after a green run invalidates that run without anything having to remember to clear it. A judge's
+  digest covers the skip declarations too, because "this property is left out, here is why" is part
+  of what it accepted. A gate that runs checks leaves them out, since the checks are the same
+  whichever properties are skipped.
 - **A judge that must state a verdict.** `build_feedback_judge` compiles a sub-agent with the
   session's tool belt, a rough-draft scratchpad, the run memory, and an enforced rough draft of the
   verdict (`drafted` — the write echoes the draft back as the tool result, so the next turn reviews

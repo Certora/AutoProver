@@ -63,9 +63,8 @@ from composer.authoring.judge import (
 from composer.authoring.state import (
     SkippedProperty,
     ValidationStamper,
-    make_validation_stamper,
 )
-from composer.authoring.tools import give_up_tool, skip_tools
+from composer.authoring.tools import FocusPolicy, gated_give_up_tool, give_up_tool, skip_tools
 from composer.diagnostics.budget import (
     BudgetExceeded,
     budget_monitor,
@@ -79,11 +78,13 @@ from composer.spec.cvlr.anchor_surface import read_surface
 from composer.spec.cvlr.editor import EditingJudgeHost, ProgramEditing, editor_tools
 from composer.spec.cvlr.example import WorkedExample, worked_example
 from composer.spec.cvlr.harness import GeneratedHarness
+from composer.spec.cvlr.reference import HarnessShim
 from composer.spec.cvlr.scaffold import HARNESS_DIR
 from composer.spec.cvlr.soroban_tokens import modelled
 from composer.spec.cvlr.state import (
     CVLR_JUDGE_KEY,
     FEEDBACK,
+    FEEDBACK_STAMPER,
     PROVER_VALIDATION_KEY,
     CvlrGenerationInput,
     CvlrGenerationState,
@@ -99,7 +100,7 @@ from composer.spec.cvlr.state import (
 from composer.spec.cvlr.vacuity import vacuity_analyzer
 from composer.spec.cvlr.author_tools import ExpectRuleFailure, ExpectRulePassage
 from composer.spec.guidance import CvlrInvariantGuidance
-from composer.spec.cvlr.verify import HarnessTarget, VerifyDeps, gate_tools
+from composer.spec.cvlr.verify import VERIFY_TOOL, HarnessTarget, VerifyDeps, gate_tools
 from composer.kb.kb_context import with_cvlr_context
 from composer.spec.gen_types import TemplateInstantiation, TypedTemplate
 from composer.spec.graph_builder import run_to_completion
@@ -113,6 +114,7 @@ from composer.spec.solana.model import SolanaComponentInstance
 from composer.spec.soroban.model import SorobanComponentInstance
 from composer.spec.system_model import component_context
 from composer.spec.types import Curtailed, PropertyFormulation, PropertyTitle, RuleName
+from composer.templates.loader import load_jinja_template
 from composer.pipeline.ptypes import GaveUp
 from composer.ui.tool_display import ToolDisplay, suppress_ack, tool_display
 
@@ -185,6 +187,16 @@ _SKIP_REASON = (
 _GIVE_UP_DESCRIPTION = """
     Last-resort exit when you have exhausted other mechanisms to complete the task. The batch will
     be reported as failed with your ``reason``. Prefer skipping individual properties.
+    """
+
+_FOCUS_GIVE_UP_DESCRIPTION = """
+    Call this tool to stop work on this task.
+
+    This run exists to establish the properties you were given, so stopping is gated: an
+    `exhausted` stop is rejected until you have run `verify_rules` several times, and you must
+    enumerate what you tried. If the toolchain itself is unusable — the crate will not build for
+    reasons unrelated to your module, the prover is unreachable — stop immediately with
+    sort='environment'; that is not gated.
     """
 
 
@@ -346,6 +358,10 @@ class CvlrAuthorSystemParams(CvlrVersionParams):
     module: str
     example: WorkedExample | None
     conf: dict
+    #: The run's harness module for a framework no CVLR chain crate covers
+    #: (:attr:`~composer.spec.cvlr.reference.ChainReference.shim`). Its section replaces the
+    #: Anchor-only parts of "Reaching a handler".
+    shim: HarnessShim | None
 
 
 _JudgeTemplate = TypedTemplate[_CvlrJudgeParams]("cvlr_feedback_prompt.j2")
@@ -353,6 +369,14 @@ _JudgeSystemTemplate = TypedTemplate[CvlrVersionParams]("cvlr_property_judge_sys
 _PropertyGenSysTemplate = TypedTemplate[CvlrAuthorSystemParams](
     "cvlr_property_generation_system_prompt.j2"
 )
+
+
+def render_author_system(params: CvlrAuthorSystemParams) -> str:
+    return _PropertyGenSysTemplate.bind(params).render_to(load_jinja_template)
+
+
+def render_judge_system(params: CvlrVersionParams) -> str:
+    return _JudgeSystemTemplate.bind(params).render_to(load_jinja_template)
 
 
 def _rules_sentence(listed: tuple[str, ...] | None) -> str:
@@ -579,6 +603,10 @@ class CvlrPropertyGenParams(TypedDict):
     module: str
     cvlr_versions: str
     sort: Literal["existing"]
+    #: Whether this batch is a prioritized run's focus rather than a unit's full property list. A
+    #: focused batch has no other work to fall back on, so the prompt directs the author to
+    #: decompose rather than to skip.
+    focused: bool
 
 
 _PropertyGenTemplate = TypedTemplate[CvlrPropertyGenParams]("cvlr_property_generation_prompt.j2")
@@ -613,6 +641,7 @@ class SorobanCvlrPropertyGenParams(TypedDict):
     module: str
     cvlr_versions: str
     sort: Literal["existing"]
+    focused: bool
 
 
 class SorobanCvlrAuthorSystemParams(CvlrVersionParams):
@@ -662,7 +691,9 @@ class CvlrPrompts:
 class CvlrPromptBuilder[U](Protocol):
     """Binds a chain's four prompts for one batch. ``package_root`` is the crate inside the working
     tree, for rendering a worked example from the program's own declarations; ``conf`` is the
-    prover configuration the unit's submissions start from."""
+    prover configuration the unit's submissions start from. ``shim`` is the run's harness module
+    for a framework no CVLR chain crate covers (Solana only). ``focused`` says the batch is a
+    prioritized run's focus (:class:`CvlrPropertyGenParams`)."""
 
     def __call__(
         self,
@@ -675,6 +706,8 @@ class CvlrPromptBuilder[U](Protocol):
         caveats: Sequence[str],
         conf: dict,
         package_root: Path,
+        shim: HarnessShim | None,
+        focused: bool,
     ) -> CvlrPrompts: ...
 
 
@@ -688,7 +721,11 @@ def solana_prompts(
     caveats: Sequence[str],
     conf: dict,
     package_root: Path,
+    shim: HarnessShim | None,
+    focused: bool,
 ) -> CvlrPrompts:
+    """A framework program (``shim``) gets no worked example: the example is an Anchor handler's,
+    and its names would be read off a program that has no accounts struct or ``Context``."""
     return CvlrPrompts(
         author_system=_PropertyGenSysTemplate.bind(
             {
@@ -697,10 +734,11 @@ def solana_prompts(
                 "caveats": list(caveats),
                 "example": (
                     worked_example(component, props, read_surface(package_root))
-                    if component
+                    if component and shim is None
                     else None
                 ),
                 "conf": conf,
+                "shim": shim,
             }
         ),
         author_task=_PropertyGenTemplate.bind(
@@ -711,6 +749,7 @@ def solana_prompts(
                 "module": module,
                 "cvlr_versions": cvlr_versions,
                 "sort": "existing",
+                "focused": focused,
             }
         ),
         judge_system=_JudgeSystemTemplate.bind(
@@ -733,7 +772,12 @@ def soroban_prompts(
     caveats: Sequence[str],
     conf: dict,
     package_root: Path,
+    shim: HarnessShim | None,
+    focused: bool,
 ) -> CvlrPrompts:
+    """No Soroban reference set carries a ``shim``, which is for Solana framework programs."""
+    if shim is not None:
+        raise ValueError(f"a Soroban run has no harness shim, got {shim!r}")
     return CvlrPrompts(
         author_system=_SorobanPropertyGenSysTemplate.bind(
             {
@@ -755,6 +799,7 @@ def soroban_prompts(
                 "module": module,
                 "cvlr_versions": cvlr_versions,
                 "sort": "existing",
+                "focused": focused,
             }
         ),
         judge_system=_SorobanJudgeSystemTemplate.bind(
@@ -854,6 +899,7 @@ async def batch_cvlr_generation(
     verify: VerifyDeps,
     editing: ProgramEditing,
     program_editing: bool,
+    focus: FocusPolicy | None = None,
 ) -> BatchHarnessResult:
     """Author one harness module covering ``props``.
 
@@ -870,6 +916,10 @@ async def batch_cvlr_generation(
     decides whether the author also gets the tools that make edits; see
     :attr:`~composer.spec.cvlr.chains.CvlrChain.program_editing`.
 
+    ``focus`` is a prioritized run's: the properties ``record_skip`` refuses until the budget orders
+    a wrap-up, and the ``verify_rules`` floor under an ``exhausted`` give-up. ``prompts`` must have
+    been bound with ``focused`` set to match, so the author is told what the tools enforce.
+
     CVLR itself is not mounted here. The author and the judge both reach it through
     ``cvlr_research`` in ``env.rag_tools`` (``docs/cvlr-api-docs-plan.md`` §5), which is the one
     place the ordering between the generated API reference and the hand-written manual is applied.
@@ -878,7 +928,7 @@ async def batch_cvlr_generation(
     judge_ctx = ctx.child(CVLR_JUDGE_KEY)
     feedback_deps = FeedbackDependencies(
         thunk=build_feedback_thunk(judge_ctx, env, prompts, editing),
-        stamper=make_validation_stamper(FEEDBACK),
+        stamper=FEEDBACK_STAMPER,
         editing=editing,
         project=target.tree.pristine,
     )
@@ -904,7 +954,10 @@ async def batch_cvlr_generation(
                 PutHarness.as_tool("put_harness"),
                 get_harness_tool(CvlrGenerationState),
                 *skip_tools(
-                    titles, skip_description=_SKIP_DESCRIPTION, skip_reason=_SKIP_REASON
+                    titles,
+                    skip_description=_SKIP_DESCRIPTION,
+                    skip_reason=_SKIP_REASON,
+                    protected=focus.protected if focus is not None else (),
                 ),
                 ExpectRuleFailure.as_tool("expect_rule_failure"),
                 ExpectRulePassage.as_tool("expect_rule_passage"),
@@ -925,6 +978,16 @@ async def batch_cvlr_generation(
                     name="give_up",
                     description=_GIVE_UP_DESCRIPTION,
                     label="CVLR harness generation",
+                    reason_description="Why you are giving up on this batch",
+                )
+                if focus is None
+                else gated_give_up_tool(
+                    name="give_up",
+                    description=_FOCUS_GIVE_UP_DESCRIPTION,
+                    label="CVLR harness generation",
+                    min_attempts=focus.min_give_up_attempts,
+                    verify_tool=VERIFY_TOOL,
+                    state_ty=CvlrGenerationState,
                     reason_description="Why you are giving up on this batch",
                 ),
                 ctx.get_memory_tool(),

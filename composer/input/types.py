@@ -139,10 +139,29 @@ class ModelOptions(_ModelOptionsCommon, Protocol):
 
 class ExtendedModelOptions(_ModelOptionsCommon, Protocol):
     heavy_model: Annotated[str, Arg(
-        help="Model to use for complex tasks (default: {default})", default="claude-opus-5"
+        help="Model to use for complex tasks (default: {default})", default="claude-opus-5-5"
     )]
     lite_model: Annotated[str, Arg(
-        help="Model to use for simpler tasks(default: {default})", default="claude-sonnet-5"
+        help="Model to use for simpler tasks(default: {default})", default="claude-sonnet-5-5"
+    )]
+
+class PropertySetOptions(Protocol):
+    """``--predefined-properties`` and ``--stop-after-properties`` (see
+    ``composer.pipeline.property_set``)."""
+    predefined_properties: Annotated[Optional[str], OptionalArg(
+        help="Path to a property set (the property_set.json a previous run wrote to its report "
+             "directory). Skips component analysis and property extraction and formalizes "
+             "exactly the file's components and properties."
+    )]
+    stop_after_properties: Annotated[bool, Arg(
+        help="End the run once the components and properties are final and property_set.json "
+             "is written, without formalizing or reporting.",
+        default=False,
+    )]
+    property_generator: Annotated[Optional[str], OptionalArg(
+        help="The installed property generator that replaces component analysis and property "
+             "inference ('native', the default, runs the built-in ones). Also settable as "
+             "AUTOPROVER_PROPERTY_GENERATOR; this flag wins."
     )]
 
 class UploadPaths(Protocol):

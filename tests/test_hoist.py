@@ -115,8 +115,8 @@ def test_a_malformed_plan_is_rejected_with_a_reason_the_model_can_act_on(plan, c
 
 def test_an_entry_point_is_matched_as_a_whole_name():
     """``merge`` in ``merged`` or ``split_merge`` is not the instruction."""
-    assert hoist._named("The merged account and split_merge helper.", {"merge"}) == set()
-    assert hoist._named("After `merge`, the account is solvent.", {"merge"}) == {"merge"}
+    assert hoist.named_entry_points("The merged account and split_merge helper.", {"merge"}) == set()
+    assert hoist.named_entry_points("After `merge`, the account is solvent.", {"merge"}) == {"merge"}
 
 
 # --------------------------------------------------------------------------------------------

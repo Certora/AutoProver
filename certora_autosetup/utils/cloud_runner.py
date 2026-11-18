@@ -25,7 +25,7 @@ from .early_stop import (
     FirstViolationCheck,
     PreprocessingCheck,
 )
-from .job_utils import extract_job_url_from_text
+from .job_utils import extract_job_url_from_text, extract_job_urls_from_text
 from .prover_runner import (
     EarlyTerminationCallback,
     ProverRunner,
@@ -44,6 +44,37 @@ from .logger import log_with_contract
 def extract_job_url(output: str) -> Optional[str]:
     """Extract job URL from certoraRun output."""
     return extract_job_url_from_text(output)
+
+
+def _conf_has_split_rules(job_spec: ProverJobSpec) -> bool:
+    """True when the conf enables per-rule job splitting — its ``split_rules`` key is non-empty.
+    Splitting, not the mere presence of a group link, is what makes a run a job group."""
+    try:
+        data = json.loads(Path(job_spec.config_file.path).read_text())
+    except (OSError, ValueError):
+        return False
+    return bool(data.get("split_rules"))
+
+
+#: How many times a submission is tried in all when the server fails it transiently.
+SUBMISSION_ATTEMPTS = 3
+#: Seconds before the first resubmission; each later one waits that much longer again.
+SUBMISSION_RETRY_DELAY_S = 10
+
+#: Server responses that create no job and that a resubmission can clear: a unique-key race
+#: between concurrent submissions (two jobs registering the same contract record at once), and a
+#: gateway that did not reach the server.
+_TRANSIENT_SUBMISSION_MARKERS = (
+    "UniqueViolationError",
+    "Error Status:: 502",
+    "Error Status:: 503",
+    "Error Status:: 504",
+)
+
+
+def _is_transient_submission_error(output: str) -> bool:
+    """True when certoraRun's output reports a server failure a resubmission can clear."""
+    return any(marker in output for marker in _TRANSIENT_SUBMISSION_MARKERS)
 
 
 class CloudProverRunner(ProverRunner):
@@ -688,6 +719,38 @@ class CloudProverRunner(ProverRunner):
             transformed_result=None,
         )
 
+    async def _run_certora_once(self, cmd: list[str]) -> tuple[str, int]:
+        """Run one certoraRun submission; its combined output and return code."""
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=self.project_root,
+        )
+        stdout, _ = await process.communicate()
+        return (stdout.decode("utf-8") if stdout else ""), (process.returncode or -1)
+
+    async def _run_certora_with_retry(
+        self, cmd: list[str], contract_name: str
+    ) -> tuple[str, int]:
+        """Run a certoraRun submission, resubmitting after a transient server error
+        (``_is_transient_submission_error``) up to ``SUBMISSION_ATTEMPTS`` times in all."""
+        output, return_code = await self._run_certora_once(cmd)
+        for attempt in range(2, SUBMISSION_ATTEMPTS + 1):
+            if extract_job_url(output) or not _is_transient_submission_error(output):
+                break
+            delay = SUBMISSION_RETRY_DELAY_S * (attempt - 1)
+            log_with_contract(
+                self.component,
+                "info",
+                contract_name,
+                f"Transient server error on submission; retrying in {delay}s "
+                f"(attempt {attempt}/{SUBMISSION_ATTEMPTS})",
+            )
+            await asyncio.sleep(delay)
+            output, return_code = await self._run_certora_once(cmd)
+        return output, return_code
+
     async def _submit_new_job(
         self, job_spec: ProverJobSpec, cache_key: str
     ) -> SubmissionResult:
@@ -728,19 +791,8 @@ class CloudProverRunner(ProverRunner):
 
             self.log(f"Executing: {' '.join(cmd)}")
 
-            # Execute command
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=self.project_root,
-            )
-
-            stdout, _ = await process.communicate()
-            output = stdout.decode("utf-8") if stdout else ""
-
+            output, return_code = await self._run_certora_with_retry(cmd, job_spec.contract_name)
             duration = time.time() - start_time
-            return_code: int = process.returncode or -1
 
             # Check for symlink creation error which is not a real failure
             # This can appear in either stdout or stderr
@@ -751,6 +803,15 @@ class CloudProverRunner(ProverRunner):
 
             # For cloud jobs, always try to extract job URL regardless of return code
             job_url = extract_job_url(output)
+            # A --split_rules conf makes certoraRun submit one job per rule and print each URL;
+            # job_url is then just one of them. Capture the whole set so the wait and read-back
+            # cover every sibling. Only split runs are multi-job, so key off the conf's split_rules
+            # (a job can also belong to an unrelated execution-level group, which is not this).
+            job_urls = (
+                extract_job_urls_from_text(output)
+                if _conf_has_split_rules(job_spec)
+                else None
+            )
 
             if return_code == 0 or has_symlink_error or job_url:
                 if has_symlink_error:
@@ -772,10 +833,20 @@ class CloudProverRunner(ProverRunner):
                         f"Cloud job submitted successfully in {duration:.1f}s - {job_url}",
                     )
 
+                    if job_urls and len(job_urls) > 1:
+                        log_with_contract(
+                            self.component,
+                            "info",
+                            job_spec.contract_name,
+                            f"Run split into {len(job_urls)} per-rule jobs "
+                            f"(representative {job_url})",
+                        )
+
                     return SubmissionResult(
                         job_url=job_url,
                         output=output,
                         return_code=return_code,
+                        job_urls=job_urls,
                     )
                 else:
                     self.log(
@@ -835,6 +906,15 @@ class CloudProverRunner(ProverRunner):
             runner_type=RunnerType.CLOUD,
             status=JobStatus.RUNNING,
         )
+
+        # A --split_rules run is several per-rule jobs; job_url is only one of them. Wait for every
+        # one and hand the whole list to the caller through output_data for its own read-back. The
+        # single-job parse/early-stop path below runs only for an ordinary (single-job) run.
+        job_urls = submission_result.job_urls if submission_result else None
+        if job_urls:
+            return await self._wait_and_record_split(
+                job_urls, job_url, job_handle, job_spec, submission_result, start_time
+            )
 
         try:
             # Initialize ProverOutputAPI
@@ -1071,6 +1151,104 @@ class CloudProverRunner(ProverRunner):
                 return decision
         return None
 
+    async def _wait_and_record_split(
+        self,
+        job_urls: List[str],
+        job_url: Optional[str],
+        job_handle: JobHandle,
+        job_spec: ProverJobSpec,
+        submission_result: Optional[SubmissionResult],
+        start_time: float,
+    ) -> ProverResult:
+        """Wait for every job of a --split_rules run to finish, and return a result carrying the
+        full URL list in ``output_data`` for the caller's own read-back.
+
+        Each per-rule job checks only a subset of the rules, so this does not parse rules here — it
+        establishes that all jobs are done and records their URLs (the caller reads each back)."""
+        prover_api = ProverOutputAPI(use_local=False)
+        log_with_contract(
+            self.component,
+            "info",
+            job_spec.contract_name,
+            f"Waiting for {len(job_urls)} per-rule split jobs to finish",
+        )
+        all_succeeded = await self._wait_for_urls_completion(
+            prover_api, job_urls, self.job_wait_timeout
+        )
+        duration = time.time() - start_time
+
+        # Best-effort: record the split's total prover runtime for the usage ledger.
+        try:
+            runtime = self._urls_runtime_seconds(prover_api, job_urls)
+            if runtime is not None:
+                self._record_prover_runtime_seconds(runtime)
+        except Exception as e:  # noqa: BLE001 - usage accounting must not fail the run
+            self.log(f"Could not record split-run runtime: {e}", "DEBUG")
+
+        job_handle.status = JobStatus.COMPLETED if all_succeeded else JobStatus.FAILED
+        output_data = {
+            "job_url": job_url,
+            "job_urls": job_urls,
+            "output": submission_result.output if submission_result else "",
+            "return_code": submission_result.return_code if submission_result else 0,
+        }
+        if all_succeeded:
+            log_with_contract(
+                self.component,
+                "info",
+                job_spec.contract_name,
+                f"All {len(job_urls)} split jobs completed in {duration:.1f}s",
+            )
+            return ProverResult(
+                job_handle=job_handle,
+                success=True,
+                report_path=None,
+                output_data=output_data,
+                job_spec=job_spec,
+            )
+        # A job failing, timing out or stopping early does not lose the others: the caller reads
+        # back whatever each job produced. success=False only flags that not all ran cleanly.
+        self.log("Not every split job completed successfully", "WARNING")
+        return ProverResult(
+            job_handle=job_handle,
+            success=False,
+            report_path=None,
+            output_data=output_data,
+            job_spec=job_spec,
+            error_message="not every --split_rules job completed successfully",
+        )
+
+    async def _wait_for_urls_completion(
+        self, prover_api: ProverOutputAPI, job_urls: List[str], timeout_seconds: int
+    ) -> bool:
+        """Wait for all of a split run's jobs by running the single-job wait on each concurrently —
+        same completion test, auth-retry and early-stop as an ordinary run. Returns True when every
+        job finished successfully, False if any failed, timed out or stopped early."""
+        import asyncio
+
+        results = await asyncio.gather(
+            *(
+                self._wait_for_job_completion_with_api(prover_api, url, timeout_seconds)
+                for url in job_urls
+            )
+        )
+        return all(success for success, _early_stop in results)
+
+    def _urls_runtime_seconds(
+        self, prover_api: ProverOutputAPI, job_urls: List[str]
+    ) -> Optional[float]:
+        """Sum of the split jobs' prover runtimes in seconds, or None when none is available."""
+        runtimes: List[float] = []
+        for url in job_urls:
+            try:
+                job_info = prover_api.get_job_info(url)
+            except Exception:  # noqa: BLE001 - best-effort accounting
+                continue
+            value = getattr(job_info, "runtime", None)
+            if isinstance(value, (int, float)):
+                runtimes.append(float(value))
+        return sum(runtimes) if runtimes else None
+
     async def _wait_for_job_completion_with_api(
         self, prover_api: ProverOutputAPI, job_url: str, timeout_seconds: int
     ) -> tuple[bool, Optional[EarlyStop]]:
@@ -1086,6 +1264,10 @@ class CloudProverRunner(ProverRunner):
 
         start_time = time.time()
         poll_interval = 10  # Poll every 10 seconds for faster completion detection
+        # Authentication errors in a row before the wait stops polling; any status read resets it.
+        max_consecutive_auth_errors = 3
+        auth_retry_interval = 5
+        consecutive_auth_errors = 0
 
         # Conditions that can end the wait before the job reaches a terminal status
         # (preprocessing stall, first violation, ...). Empty ⇒ no early stop.
@@ -1113,6 +1295,7 @@ class CloudProverRunner(ProverRunner):
                     )
                     continue  # Skip this iteration and try again
 
+                consecutive_auth_errors = 0
                 if job_info and hasattr(job_info, "status"):
                     self.log(f"📊 Job status for {job_url}: {job_info.status}", "DEBUG")
                     # Log additional job info if available
@@ -1161,10 +1344,14 @@ class CloudProverRunner(ProverRunner):
                 self.log(f"Error checking job status for {job_url}: {e}", "WARNING")
                 # If there are persistent authentication issues, assume job completed
                 if "authentication" in str(e).lower() or "keyring" in str(e).lower():
-                    self.log(
-                        f"Authentication issue detected, assuming job completed: {job_url}"
-                    )
-                    return True, None
+                    consecutive_auth_errors += 1
+                    if consecutive_auth_errors >= max_consecutive_auth_errors:
+                        self.log(
+                            f"Authentication issue detected, assuming job completed: {job_url}"
+                        )
+                        return True, None
+                    await asyncio.sleep(auth_retry_interval)
+                    continue
                 await asyncio.sleep(poll_interval)
 
         # Timeout reached

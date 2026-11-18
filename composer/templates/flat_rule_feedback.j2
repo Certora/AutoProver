@@ -9,12 +9,12 @@ Analyzing the counterexample yielded no results
 {%endif%}
 {%endif%}
 {% if rule_res.status == "ERROR" or rule_res.status == "SKIPPED" %}
-{% if not rule_res.error_messages %}
+{% if not rule_res.messages %}
 There were no error messages reported by the prover
 {% else %}
 The messages reported by the prover were:
-{% for err in rule_res.error_messages %}
-* {{ err }}
+{% for err in rule_res.messages %}
+* {{ err.text }}
 {% endfor %}
 {% endif %}
 {% endif %}

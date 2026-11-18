@@ -1,0 +1,85 @@
+{#- The Pinocchio parts of "Reaching a handler" in cvlr_property_generation_system_prompt.j2, for both
+    of Pinocchio's account types. cvlr_reaching_pinocchio_view_handler.j2 and
+    cvlr_reaching_pinocchio_info_handler.j2 call these with their type's spellings. -#}
+
+{% macro opening(account, key, signature, note) -%}
+## Reaching a handler on a Pinocchio program
+
+This program is written on Pinocchio, not on Anchor or the Solana SDK. There is no accounts struct,
+no `Context` and no SDK `AccountInfo`. A Pinocchio handler takes the program id, a slice of Pinocchio's
+own account type, `{{ account }}`, and the instruction data:
+
+```rust
+{{ signature }}
+```
+
+{{ note }}
+
+An `{{ account }}` is a pointer to the account's bytes in the input region. `{{ key }}`, `owner()`,
+`lamports()`, `is_signer()`, `is_writable()` and `data_len()` read the header, and the borrow methods
+the program uses give its data. The harness's `crate::certora::pinocchio` module builds them:
+
+* `cvlr_pinocchio_account()` — one account with arbitrary key, owner, flags, lamports and data, in a
+  memory region of its own, not borrowed, as the runtime hands it over.
+* `cvlr_pinocchio_accounts()` — sixteen of them, as `[{{ account }}; 16]`. Pass a prefix,
+  `&accounts[..n]`, to a function that takes a slice (`&mut accounts[..n]` where it takes
+  `&mut [{{ account }}]`).
+
+These idioms are the difference between a rule that says something about the program and a rule
+that fails, or passes, for reasons unrelated to its property.
+
+**Call the instruction's own functions, not the dispatcher.** The entrypoint's `process_instruction`
+matches the instruction's discriminator, parses its data and logs, and none of that is what a property
+in your batch is about. Pinocchio programs usually give each instruction its own processor
+(`process_*`), often with an accounts type built by `TryFrom<&[{{ account }}]>` that does the account
+checks, and an instruction-data type parsed from bytes. Call them the way the dispatcher does, with
+the arguments it would have parsed as `nondet()` values. A property about who may run the instruction
+is enforced by those checks, so a rule that skips them has skipped the validation it is about.
+{%- endmacro %}
+
+{% macro building_accounts(account, key) -%}
+**Build the accounts from `cvlr_pinocchio_accounts()`, and constrain only what the instruction
+needs.** The accounts are unconstrained, so two of them may have the same key, and an account's data
+may be any length. Assume what the real runtime would hand the program and nothing more:
+`cvlr_assume!(a.{{ key }} != b.{{ key }})` where the program relies on distinct accounts, and the owner
+or data length a state account must have where the property starts from a valid account. A check the
+program makes itself does not need an assumption: the checking code rejects what does not pass it.
+
+Accounts built this way are separate regions, so two with the same key are still different memory.
+Where a property is about the same account appearing twice, copy one: an `{{ account }}` is `Copy`,
+and a copy points at the same bytes, as a duplicate the runtime passes does.
+
+An `{{ account }}` owns nothing, so there is no array to keep from dropping and nothing to `forget`.
+{%- endmacro %}
+
+{% macro observing_state(account, key, read_data, write_lamports) -%}
+**Read post-state through the same accounts.** An `{{ account }}` is a view of the account's bytes,
+not a copy of them: what a handler writes is in the account when it returns, with no write-back step
+to call. Read the state your property is about before the call, keep it in locals, and read it again
+afterwards. Decode an account's data with the program's own accessor, the one its processors use
+(often a `from_bytes` or `load` on the account's state type), rather than by hand. Data is borrowed
+with {{ read_data }}, and a borrow still held when the handler runs makes it fail, so read inside a
+block and let the borrow end before the call.
+
+The whole shape, on a withdraw instruction whose names are the example's:
+
+```rust
+use crate::certora::pinocchio::cvlr_pinocchio_accounts;
+
+let mut accounts = cvlr_pinocchio_accounts();
+let (authority, vault) = (accounts[0], accounts[1]);
+let before = vault.lamports();
+let amount: u64 = nondet();
+clog!(before, amount);
+
+crate::processor::withdraw::process_withdraw(&mut accounts[..2], amount).unwrap();
+cvlr_assert!(authority.is_signer());
+cvlr_assert!(vault.lamports() == before - amount);
+```
+
+Find the program's own processors in its dispatcher, and their account order in the instruction's
+accounts type. Lamports are written with {{ write_lamports }}, so a property about a lamport
+transfer the program makes itself is visible here; one made by a CPI is not. An error type with no
+`Debug` implementation cannot be `.unwrap()`ped; `.ok().unwrap()` takes the same failure path to a
+panic and prunes it the same way.
+{%- endmacro %}

@@ -18,7 +18,7 @@ from typing import Any, cast
 import pytest
 from langchain_core.messages import ToolMessage
 
-from composer.authoring.state import SkippedProperty, spec_digest
+from composer.authoring.state import SkippedProperty, marked_digest, spec_digest
 from composer.rustapp import adapter
 from composer.rustapp.descriptor import AppDescriptor
 from composer.rustapp.session import (
@@ -146,7 +146,7 @@ async def test_every_covered_check_gets_its_verdict_recorded(tmp_path):
 @pytest.mark.asyncio
 async def test_a_clean_full_run_stamps_the_draft_it_saw(tmp_path):
     command = await _validate(_Wheel(), tmp_path)
-    assert command.update["validations"] == {VALIDATE_KEY: spec_digest(SPEC, [])}
+    assert command.update["validations"] == {VALIDATE_KEY: marked_digest(spec_digest(SPEC, []), [])}
 
 
 @pytest.mark.asyncio

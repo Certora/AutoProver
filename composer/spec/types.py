@@ -115,6 +115,22 @@ class PropertyFormulation(UntitledPropertyFormulation):
     title: PropertyTitle = Field(description="A short, descriptive snake_case identifier for the property (e.g. 'total_supply_preserved'). Must be unique within the batch of properties.")
 
 
+class ScopedPropertyFormulation(PropertyFormulation):
+    """A property a prioritized run checks at only some of the entry points it names.
+
+    A unit's extraction may state a property over other units' entry points too, and a backend
+    whose rules each drive the entry points they name pays for each one. A comprehensive run hoists
+    such a property into a shared unit; a prioritized run formalizes one unit, and checks the
+    property at that unit's own entry points. The narrowing is part of what the run claims, the way
+    a CVL ``filtered`` block is: ``excluded`` were left out because of the run's scope, not because
+    of anything about the code."""
+    #: The focus unit's entry points the property names. Never empty: a property naming none of
+    #: them is not the focus unit's to check.
+    checked_at: list[str]
+    #: The other units' entry points the property names, which this run does not check.
+    excluded: list[str]
+
+
 class VerificationArtifact(BaseModel):
     """A verification-supporting file produced by a plugin's contributed tool — a
     Lean proof discharging instrumented lemmas, an auxiliary certificate, etc.

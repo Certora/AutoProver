@@ -61,6 +61,21 @@ jobs:
           sudo chmod +x /usr/local/bin/solc8.29
           solc8.29 --version
 
+      # The CVLR tests run cargo with composer's host toolchain, not the project's
+      # pin, and rustup is told not to install it on demand. Their compile gate
+      # uses the platform tools' cargo and rustc. Both versions are read from
+      # composer so this job tracks them.
+      - name: Install the CVLR host toolchain and Solana platform tools
+        env:
+          CARGO_CERTORA_SBF_VERSION: "0.3.5"
+        run: |
+          read -r toolchain tools_version < <(uv run --no-dev python -c \
+            'from composer.spec.cvlr.conf import HOST_RUST_TOOLCHAIN as t, PLATFORM_TOOLS_VERSION as v; print(t, v)')
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+          cargo +"$toolchain" install --locked cargo-certora-sbf --version "$CARGO_CERTORA_SBF_VERSION"
+          cargo +"$toolchain" certora-sbf --no-build --no-rustup --tools-version "$tools_version"
+          test -d "$HOME/.cache/solana/$tools_version"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:

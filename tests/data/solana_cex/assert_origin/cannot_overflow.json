@@ -1,0 +1,114 @@
+{
+  "treeViewPath": "rule_cannot_overflow-Assertions-Cannot overflow: pointer addition at 308_49-14: r1 = r1 +  r0 /* 0xb58 */",
+  "graph_link": "Report-rule_cannot_overflow-Assertions-example1.html",
+  "jumpToDefinition": null,
+  "assertMessage": "Cannot overflow: pointer addition at 308_49-14: r1 = r1 +  r0 /* 0xb58 */",
+  "assertOrigin": "cannotOverflow",
+  "valueRepresentations": [
+    {
+      "name": "PRETTY",
+      "example": "MAX_UINT8"
+    },
+    {
+      "name": "DEC",
+      "example": "255"
+    },
+    {
+      "name": "HEX",
+      "example": "0xff"
+    }
+  ],
+  "callResolution": [],
+  "callResolutionWarnings": [],
+  "callTrace": {
+    "message": {
+      "text": "rule_cannot_overflow()",
+      "arguments": []
+    },
+    "status": "",
+    "childrenList": [
+      {
+        "message": {
+          "text": "Global State",
+          "arguments": []
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": null,
+        "storageId": null
+      },
+      {
+        "message": {
+          "text": "__rust_alloc: '{0}'",
+          "arguments": [
+            {
+              "value": "0x300000018",
+              "values": [
+                "0x300000018",
+                "12884901912",
+                "0x300000018"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": "/home/runner/work/certora-solana-platform-tools/certora-solana-platform-tools/out/rust/library/alloc/src/alloc.rs",
+          "start": {
+            "line": 102,
+            "col": 9
+          },
+          "end": {
+            "line": 103,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "CVT_nondet_u64: '{0}'",
+          "arguments": [
+            {
+              "value": "0xfffffffe7ffffff3",
+              "values": [
+                "0xfffffffe7ffffff3",
+                "18446744067267100659",
+                "0xfffffffe7ffffff3"
+              ],
+              "tooltip": "value",
+              "truncatable": true
+            }
+          ]
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": {
+          "file": ".certora_internal/sandbox/cargo/registry/src/index.crates.io-6f17d22bba15001f/cvlr-nondet-0.4.1/src/scalars.rs",
+          "start": {
+            "line": 59,
+            "col": 22
+          },
+          "end": {
+            "line": 60,
+            "col": 1
+          }
+        }
+      },
+      {
+        "message": {
+          "text": "Global State",
+          "arguments": []
+        },
+        "status": "",
+        "childrenList": [],
+        "jumpToDefinition": null,
+        "storageId": null
+      }
+    ],
+    "jumpToDefinition": null
+  },
+  "variables": []
+}

@@ -247,3 +247,29 @@ async def test_the_retry_shows_the_model_what_it_produced():
 
     replayed = "".join(str(m.content) for m in seen[1])
     assert "solvency" in replayed and "missing from `ranked`" in replayed
+
+
+@pytest.mark.asyncio
+async def test_the_ranker_is_told_the_bonus_that_decides_the_pick():
+    """The pick is score plus the critical-match bonus. A ranker told only "a fixed bonus" names
+    the highest raw score in its justification, and the artifact then argues for a claim the run
+    did not pursue."""
+    import composer.spec.prioritize as prioritize
+
+    seen: list[list] = []
+
+    class _Bound:
+        async def ainvoke(self, messages):
+            seen.append(list(messages))
+            return _default()
+
+    class _LLM:
+        def with_structured_output(self, _ty, **_kwargs): return _Bound()
+
+    await prioritize.rank_properties(
+        llm=_LLM(), contract_name="Vault", candidates=_cands(),  # type: ignore[arg-type]
+        design_doc=None, threat_model=None, extra_context=[],
+    )
+    system = " ".join(str(seen[0][0].content).split())
+    assert f"plus {CRITICAL_MATCH_BONUS} if `critical_match` is set" in system
+    assert f"adds {CRITICAL_MATCH_BONUS} to the property's priority" in system

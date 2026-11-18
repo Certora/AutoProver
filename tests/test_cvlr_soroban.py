@@ -532,13 +532,13 @@ def test_soroban_scaffold_declares_the_releases_and_reads_them_from_the_branch_c
     for name in ("cvlr-soroban", "cvlr-soroban-derive"):
         patch = parsed["patch"]["crates-io"][name]
         assert patch["git"] == "https://github.com/Certora/cvlr-soroban.git"
-        assert patch["rev"] == SOROBAN_V22.chain_crate.unpublished.rev  # type: ignore[union-attr]
+        assert patch["rev"] == SOROBAN_V22.binding.commit.rev  # type: ignore[union-attr]
 
 
 def test_both_soroban_lines_share_solanas_core_release():
     # cvlr 0.6.2 is no_std and declares its env imports, so one core serves every chain.
     assert SOROBAN_V22.core == SOROBAN_V25.core
-    assert SOROBAN_V22.core.unpublished is None
+    assert SOROBAN_V22.core.commit is None
 
 
 def test_soroban_scaffold_is_idempotent(tmp_path):
@@ -554,7 +554,7 @@ def test_soroban_scaffold_turns_off_core_cvlrs_std_default(tmp_path):
     deps = _scaffolded(tmp_path)["dependencies"]
     assert deps[SOROBAN_V22.core.name]["default-features"] is False
     # Only the core: cvlr-soroban's defaults are empty, and upstream leaves them on.
-    assert "default-features" not in deps[SOROBAN_V22.chain_crate.name]
+    assert "default-features" not in deps[SOROBAN_V22.binding.name]  # type: ignore[union-attr]
 
 
 def test_soroban_workspace_pin_also_turns_off_core_cvlrs_std_default(tmp_path):
@@ -562,7 +562,7 @@ def test_soroban_workspace_pin_also_turns_off_core_cvlrs_std_default(tmp_path):
     parsed = _scaffolded(tmp_path, manifest="[workspace]\n" + MANIFEST)
     pins = parsed["workspace"]["dependencies"]
     assert pins[SOROBAN_V22.core.name]["default-features"] is False
-    assert "default-features" not in pins[SOROBAN_V22.chain_crate.name]
+    assert "default-features" not in pins[SOROBAN_V22.binding.name]  # type: ignore[union-attr]
     assert parsed["dependencies"][SOROBAN_V22.core.name]["workspace"] is True
 
 
@@ -609,11 +609,12 @@ def test_scaffold_for_knows_both_chains_and_refuses_others():
 # The backend and CLI, reached through the chain value
 
 
-def _prompts(chain, component=None, package_root=Path("/nonexistent")):
+def _prompts(chain, component=None, package_root=Path("/nonexistent"), *, focused=False):
     props = [PropertyFormulation(title="p", sort="invariant", description="supply is conserved")]
     bound = chain.prompts(
         component, props, program="token", module="unit_a", cvlr_versions="cvlr 0.6.2",
         caveats=(), conf=soroban_tunable_conf(TunableConf()), package_root=package_root,
+        shim=None, focused=focused,
     )
     return {
         name: " ".join(getattr(bound, name).render_to(load_jinja_template).split())
@@ -677,11 +678,32 @@ def test_the_solana_prompts_are_still_solanas():
     assert "Solana program `token`" in prompts["judge_task"]
 
 
+def test_a_focused_soroban_author_is_told_its_properties_cannot_be_skipped():
+    # A prioritized run protects its batch from record_skip and gates give_up on either chain, so
+    # the Soroban author has to be told so too.
+    focused = _prompts(SOROBAN_CVLR, focused=True)["author_task"]
+    assert "`record_skip` will refuse them" in focused
+    assert "sort='environment'" in focused
+    assert "use `record_skip(property_title, reason)`" not in focused
+    unfocused = _prompts(SOROBAN_CVLR)["author_task"]
+    assert "use `record_skip(property_title, reason)`" in unfocused
+    assert "will refuse them" not in unfocused
+
+
+def test_the_soroban_prompts_refuse_a_harness_shim():
+    # Shims are for Solana framework programs; no Soroban reference set carries one.
+    with pytest.raises(ValueError, match="no harness shim"):
+        SOROBAN_CVLR.prompts(
+            None, [], program="token", module="unit_a", cvlr_versions="", caveats=(), conf={},
+            package_root=Path("/nonexistent"), shim=object(), focused=False,  # type: ignore[arg-type]
+        )
+
+
 def test_only_solana_wraps_its_prompts_in_the_solana_knowledge_bundle():
     def bound(chain):
         return chain.prompts(
             None, [], program="token", module="unit_a", cvlr_versions="",
-            caveats=(), conf={}, package_root=Path("/nonexistent"),
+            caveats=(), conf={}, package_root=Path("/nonexistent"), shim=None, focused=False,
         )
 
     marker = object()

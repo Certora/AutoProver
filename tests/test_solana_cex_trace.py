@@ -9,13 +9,23 @@ backend fails:
 * ``loop_unwinding`` — not a violation of the property at all, but the prover reporting that it
   could not discharge a loop bound. Worth a fixture precisely because a findings synthesizer handed
   this would write it up as a bug in the program.
+
+``assert_origin`` is a run of the Prover that reports ``assertOrigin``.
 """
 
 import json
 import re
 from pathlib import Path
 
-from composer.prover.ptypes import LoopUnwound, OverflowUnproven, PropertyViolation, classify_violation
+import pytest
+
+from composer.prover.ptypes import (
+    GeneratedKind,
+    IncompleteCheck,
+    PropertyViolation,
+    UnclassifiedAssertion,
+    classify_violation,
+)
 from composer.prover.results import (
     EVM_TRACE,
     GENERIC_TRACE,
@@ -24,6 +34,7 @@ from composer.prover.results import (
     read_and_format_run_result,
     trace_shape,
 )
+from composer.spec.cvlr.reference import REFERENCE_SET, HarnessShim
 
 FIXTURES = Path(__file__).parent / "data" / "solana_cex"
 
@@ -114,6 +125,63 @@ def test_account_setup_is_elided_rather_than_dropped():
     assert len(_messages(cex)) == 15
 
 
+_SETUP_FRAME = "cvlr_solana::layout::cvlr_deserialize_nondet_accounts(...)"
+
+
+def _loop_unwinding_dump_with_setup_frame(frame: str) -> dict:
+    path = FIXTURES / "loop_unwinding" / "Reports" / "treeView" / "rule_output_2.json"
+    text = path.read_text()
+    assert _SETUP_FRAME in text
+    return json.loads(text.replace(_SETUP_FRAME, frame))
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        "escrow::certora::pinocchio::cvlr_pinocchio_accounts(...)",
+        "my_amm::certora::jiminy::cvlr_jiminy_accounts(...)",
+    ],
+)
+def test_a_shim_s_account_setup_is_elided_in_whatever_crate_holds_it(frame: str):
+    """Pinocchio and jiminy programs build their accounts in the shim setup writes into their own
+    crate, so the frame carries the program's crate name."""
+    cex = _rendered(_loop_unwinding_dump_with_setup_frame(frame), SOLANA_TRACE)
+    assert "<elided>128 frames of setup</elided>" in cex
+    assert frame in cex
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        "certora::pinocchio::cvlr_pinocchio_accounts(...)",
+        "escrow::specs::certora::pinocchio::cvlr_pinocchio_accounts(...)",
+    ],
+)
+def test_a_shim_frame_is_elided_only_directly_below_a_crate_root(frame: str):
+    cex = _rendered(_loop_unwinding_dump_with_setup_frame(frame), SOLANA_TRACE)
+    assert "<elided>" not in cex
+
+
+_SHIMS = sorted(
+    {ref.binding for ref in REFERENCE_SET["solana"] if isinstance(ref.binding, HarnessShim)},
+    key=lambda shim: shim.template,
+)
+
+
+@pytest.mark.parametrize("shim", _SHIMS, ids=lambda shim: shim.template)
+def test_every_shim_builds_its_accounts_in_a_function_the_shape_elides(shim: HarnessShim):
+    """The shape names the shims' account builders by hand; a renamed one would bring the noise
+    back without failing anything else."""
+    template = (
+        Path(__file__).parents[1] / "composer" / "spec" / "cvlr" / "harness_files"
+        / f"{shim.template}.template.rs"
+    )
+    builders = re.findall(r"pub fn (cvlr_\w+_accounts)\(", template.read_text())
+    assert builders
+    for name in builders:
+        assert f"certora::{shim.module}::{name}(...)" in SOLANA_TRACE.elided_in_any_crate
+
+
 def test_allocator_frames_are_matched_by_name_not_by_the_value_they_hold():
     """Every allocation is its own frame, but the prover keeps the address in ``arguments`` and
     emits the same ``__rust_alloc: '{0}'`` template for all 33 of them. A shape naming that template
@@ -155,39 +223,40 @@ def test_a_loop_bound_the_prover_could_not_discharge_is_not_a_property_violation
     """Both of these are VIOLATED with a counterexample attached, and only one is a bug in the
     program: the other is the prover reporting that it stopped."""
     loop = counterexample(_loop_unwinding_dump(), SOLANA_TRACE)
+    assert loop is not None
     match classify_violation(loop):
-        case LoopUnwound(assertion=assertion):
+        case IncompleteCheck(kind=GeneratedKind.LOOP_UNWINDING, assertion=str(assertion)):
             assert assertion.startswith("Unwinding condition in a loop")
         case other:
             raise AssertionError(f"loop bound classified as {other}")
 
     real = counterexample(_assertion_failed_dump(), SOLANA_TRACE)
+    assert real is not None
     assert classify_violation(real) == PropertyViolation()
 
 
-def test_the_sound_math_pass_reporting_its_own_limit_is_not_a_property_violation():
-    """The sound-signed-math pass asserting its own inference (see ``_GENERATED_ASSERTIONS``).
-    Misclassified as the rule's own it becomes evidence, and the findings synthesizer writes the
-    prover's limitation up as a bug in the code under verification."""
-    cex = counterexample(
-        {
-            "assertMessage": "Cannot overflow: inferred pointer",
-            "callTrace": {"message": {"text": "r()", "arguments": []}, "childrenList": []},
-        },
-        SOLANA_TRACE,
-    )
+@pytest.mark.parametrize(
+    "fixture, expected",
+    [
+        ("user", PropertyViolation()),
+        ("loop_unwinding", GeneratedKind.LOOP_UNWINDING),
+        ("cannot_overflow", GeneratedKind.CANNOT_OVERFLOW),
+    ],
+)
+def test_the_prover_s_own_origin_decides(fixture: str, expected: object):
+    dump = json.loads((FIXTURES / "assert_origin" / f"{fixture}.json").read_text())
+    cex = counterexample(dump, SOLANA_TRACE)
+    assert cex is not None
     match classify_violation(cex):
-        case OverflowUnproven(assertion=assertion):
-            assert assertion.startswith("Cannot overflow")
-        case other:
-            raise AssertionError(f"sound-math assertion classified as {other}")
+        case IncompleteCheck(kind=kind):
+            assert kind == expected
+        case verdict:
+            assert verdict == expected
 
 
-def test_an_unrecognized_assertion_is_treated_as_the_rule_s_own():
-    """The classification fails safe: drift in the list of prover-generated assertions costs a
-    spuriously reported finding, never a suppressed real one."""
-    assert classify_violation(None) == PropertyViolation()
-    assert classify_violation(
-        counterexample({"callTrace": {"message": {"text": "r()", "arguments": []},
-                                      "childrenList": []}}, SOLANA_TRACE)
-    ) == PropertyViolation()
+def test_output_from_a_prover_that_does_not_report_the_origin_still_parses():
+    """The CVL pipeline runs on a released Prover, which may predate ``assertOrigin``."""
+    dump = {k: v for k, v in _loop_unwinding_dump().items() if k != "assertOrigin"}
+    cex = counterexample(dump, SOLANA_TRACE)
+    assert cex is not None
+    assert cex.origin == UnclassifiedAssertion()

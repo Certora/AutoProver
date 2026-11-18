@@ -1,0 +1,82 @@
+{#- The jiminy parts of "Reaching a handler" in cvlr_property_generation_system_prompt.j2. Each macro
+    takes the place of an Anchor-only part of that section; the parts between them apply to both. -#}
+
+{% macro opening() -%}
+## Reaching a handler on a jiminy program
+
+This program is written on jiminy, not on Anchor or the Solana SDK. There is no accounts struct, no
+`Context` and no `AccountInfo`. A jiminy handler takes the account borrow registry and a slice of
+account handles:
+
+```rust
+fn process_ix(abr: &mut Abr, accounts: &[AccountHandle<'_>], data: &[u8], prog_id: &[u8; 32])
+    -> Result<(), ProgramError>
+```
+
+Every read and write of an account goes through the registry: `abr.get(handle)` gives `&Account`,
+`abr.get_mut(handle)` gives `&mut Account`. `Account` has `key()`, `owner()`, `lamports()`,
+`is_signer()`, `is_writable()`, `is_executable()`, `data()` and `data_len()`, and the mutators the
+program uses. The harness's `crate::certora::jiminy` module builds both halves:
+
+* `cvlr_jiminy_abr()` — the registry. Call it **once** per rule and pass the same one everywhere:
+  jiminy's borrow rules assume there is only one.
+* `cvlr_jiminy_account()` — one account with arbitrary key, owner, flags, lamports and data, in a
+  memory region of its own.
+* `cvlr_jiminy_accounts()` — sixteen of them, as `[AccountHandle<'static>; 16]`. Pass a prefix,
+  `&accounts[..n]`, to a function that takes a slice.
+
+These idioms are the difference between a rule that says something about the program and a rule
+that fails, or passes, for reasons unrelated to its property.
+
+**Call the instruction's own functions, not the dispatcher.** The entrypoint's `process_ix` matches
+the instruction's discriminant, parses its data and logs, and none of that is what a property in your
+batch is about. jiminy programs usually split each instruction into a function that checks the
+accounts (`*_accs_checked`, `verify_*`) and one that does the work (`process_*`). Call both, in the
+order the dispatcher does, with the arguments the dispatcher would have parsed as `nondet()` values.
+A property about who may run the instruction is enforced by the checking function, so a rule that
+skips it has skipped the validation it is about.
+{%- endmacro %}
+
+{% macro building_accounts() -%}
+**Build the accounts from `cvlr_jiminy_accounts()`, and constrain only what the instruction
+needs.** The handles are unconstrained, so two of them may name the same key, and an account's data
+may be any length. Assume what the real runtime would hand the program and nothing more:
+`cvlr_assume!(abr.get(a).key() != abr.get(b).key())` where the program relies on distinct accounts,
+and the owner or data length a state account must have where the property starts from a valid
+account. A check the program makes itself does not need an assumption: the checking function
+rejects what does not pass it.
+
+Handles are `Copy` and own nothing, so there is no array to keep from dropping and nothing to
+`forget`.
+{%- endmacro %}
+
+{% macro observing_state() -%}
+**Read post-state through the same handles.** A jiminy `Account` is a view of the account's bytes,
+not a copy of them: what a handler writes is in the account when it returns, with no write-back step
+to call. Read the state your property is about through `abr.get(handle)` before the call, keep it in
+locals, and read it again afterwards. Decode an account's data with the program's own accessor, the
+one its handlers use, rather than by hand.
+
+The whole shape, on a withdraw instruction whose names are the example's:
+
+```rust
+use crate::certora::jiminy::{cvlr_jiminy_abr, cvlr_jiminy_accounts};
+
+let mut abr = cvlr_jiminy_abr();
+let accounts = cvlr_jiminy_accounts();
+let (authority, vault) = (accounts[0], accounts[1]);
+let before = abr.get(vault).lamports();
+let amount: u64 = nondet();
+clog!(before, amount);
+
+let checked = crate::instructions::withdraw::withdraw_accs_checked(&mut abr, &accounts[..2])
+    .unwrap();
+crate::instructions::withdraw::process_withdraw(&mut abr, &checked, amount).unwrap();
+cvlr_assert!(abr.get(authority).is_signer());
+cvlr_assert!(abr.get(vault).lamports() == before - amount);
+```
+
+Find the program's own checking and processing functions in its dispatcher, and their account order
+in the instruction's accounts type. An error type with no `Debug` implementation cannot be
+`.unwrap()`ped; `.ok().unwrap()` takes the same failure path to a panic and prunes it the same way.
+{%- endmacro %}

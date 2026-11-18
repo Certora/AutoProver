@@ -35,6 +35,7 @@ from composer.llm.registry import get_provider_for
 from composer.pipeline.ecosystem import EVM
 from composer.spec.natspec.pipeline import run_natspec_pipeline
 from composer.spec.natspec.run_tags import NatspecRunTags
+from composer.spec.prop_inference import DEFAULT_MAX_BUG_ROUNDS
 from composer.spec.util import fs_forbidden_read
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
 from composer.ui.tool_display import async_tool_context
@@ -114,10 +115,11 @@ async def _main() -> int:
              "switcher to navigate.",
     )
     parser.add_argument(
-        "--max-bug-rounds", type=int, default=3,
-        help="Maximum number of bug-extraction rounds run per component during property "
-             "analysis (default: 3). Lower for faster runs at the cost of less thorough "
-             "property surfacing; higher to give the agent more room to refine.",
+        "--max-bug-rounds", type=int, default=DEFAULT_MAX_BUG_ROUNDS,
+        help="Maximum number of property-inference rounds run per component (default: "
+             f"{DEFAULT_MAX_BUG_ROUNDS}). A round runs only if the previous one found a new "
+             "property. Lower for faster runs at the cost of less thorough property "
+             "surfacing; higher to give the agent more room to refine.",
     )
     parser.add_argument(
         "--output-root", default=None,
@@ -167,6 +169,7 @@ async def _main() -> int:
             memory_namespace=args.memory_ns,
             from_source=source_root_path is not None,
             interactive=args.interactive,
+            max_bug_rounds=args.max_bug_rounds,
         )
 
         print(f"[natspec] run_id={run_id}  thread={thread_id}", file=sys.stderr)

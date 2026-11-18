@@ -25,7 +25,7 @@ _SOURCE = "pub fn redeem_fees() -> Result<u64> {\n    let amount = calculate_fee
 
 def _formalizer() -> CvlrFormalizer:
     return CvlrFormalizer(
-        GeneratedHarness, "prover", SimpleNamespace(), SimpleNamespace()  # type: ignore[arg-type]
+        GeneratedHarness, "prover", SimpleNamespace(), SimpleNamespace(), ()  # type: ignore[arg-type]
     )
 
 

@@ -125,7 +125,7 @@ def _prover_complete(st: StateWithSkips) -> str | None:
     """None once every run-target buffer carries a prover stamp at its current digest."""
     return check_buffer_completion(
         st["buffers"], st["validations"], ["prover"], skipped=[], version_history=[],
-        config=st["config"],
+        config=st["config"], rule_skips=st["rule_skips"].keys(),
     )
 
 
@@ -276,3 +276,38 @@ class TestRuleSkipReducer:
             _unskip("ruleA"),
         ).map_run(_rule_skips)
         assert "ruleA" not in skips
+
+
+# =========================================================================
+# A marking re-decides the buffer's prover stamp
+# =========================================================================
+
+
+class TestMarkingRestamp:
+    async def test_marking_after_the_run_lets_collect_stamp_without_a_run(self, certora_prover: ProverMock):
+        st = await _scenario(
+            certora_prover, _buffers(b=_buf("b", "ruleA", "ruleB")),
+            b=_raw_report(ruleA=False, ruleB=True),
+        ).turns(
+            _submit("b"), _collect(wait=True),
+        ).turn(
+            _skip("ruleA", "real bug"),
+        ).turn(
+            _collect(wait=False),
+        ).run()
+        assert _prover_complete(st) is None
+        assert len(certora_prover.calls) == 1
+
+    async def test_unmarking_leaves_the_stamp_stale(self, certora_prover: ProverMock):
+        st = await _scenario(
+            certora_prover, _buffers(b=_buf("b", "ruleA", "ruleB")),
+            b=_raw_report(ruleA=False, ruleB=True),
+        ).turn(
+            _skip("ruleA", "real bug"),
+        ).turns(
+            _submit("b"), _collect(wait=True),
+        ).turn(
+            _unskip("ruleA"),
+        ).run()
+        assert st["validations"]
+        assert _prover_complete(st) is not None

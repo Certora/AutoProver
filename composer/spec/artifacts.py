@@ -98,6 +98,27 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         target_path.write_text(artifact.content)
         return target_path.relative_to(self._project_root)
 
+    def write_deliverable(self, relpath: str | Path, content: bytes | str) -> Path:
+        """Write a file the run delivers to ``{deliverable}/{relpath}`` and return its
+        project-relative path (what a report records).
+
+        For a writer outside the store's own bundles (an external run mode's copied specs and
+        confs, for one). ``relpath`` must stay inside the deliverable directory: an absolute path
+        or one that climbs out with ``..`` raises ``ValueError``. An existing file is replaced,
+        with a warning, as a leftover of an earlier run in the same project."""
+        rel = Path(relpath)
+        if rel.is_absolute() or ".." in rel.parts or not rel.parts:
+            raise ValueError(f"deliverable path {relpath!r} must be relative and stay inside the deliverable directory")
+        target = self._deliverable_dir() / rel
+        if target.exists():
+            _log.warning("deliverable %s already exists; replacing it", target)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(content, bytes):
+            target.write_bytes(content)
+        else:
+            target.write_text(content)
+        return target.relative_to(self._project_root)
+
     def _deliverable_dir(self) -> Path:
         """Absolute base dir (under the project root) for human-facing deliverables."""
         return ensure_dir(under_project(self._project_root, self.store_conf["deliverable_dir"]))
@@ -139,19 +160,25 @@ class ArtifactStore[I: ArtifactIdentifier, FormT: FormalResult](ABC):
         )
 
     def write_report(self, report: AutoProverReport):
-        report_dir = self._report_dir()
-        out = report_dir / "report.json"
-        out.write_text(report.model_dump_json(indent=2) + "\n")
+        write_report_file(self._report_dir(), report)
 
     def write_ranking(self, ranking: BaseModel) -> Path:
-        """A prioritized run's full property ranking → ``{report}/property_ranking.json``.
+        """A prioritized run's full property ranking → ``{internal}/property_ranking.json``.
 
-        Written whether or not the report phase later succeeds: it is the record of a decision
-        the run has already acted on, and the only place the scores and rationales behind the
-        deprioritized properties survive."""
-        out = self._report_dir() / "property_ranking.json"
+        The report carries what a reader needs of it (``prioritization`` and ``deprioritized``),
+        so this is a diagnostic, not a deliverable. It is written as soon as the ranking exists,
+        so a run whose report phase fails still records the decision it acted on, and it is the
+        only record of the claims the run did not choose."""
+        out = ensure_dir(self._internal_dir()) / "property_ranking.json"
         out.write_text(ranking.model_dump_json(indent=2) + "\n")
         _log.info("prioritization: wrote %s", out)
+        return out
+
+    def write_property_set(self, property_set: BaseModel) -> Path:
+        """The run's analyzed model + per-component properties → ``{report}/property_set.json``."""
+        out = self._report_dir() / "property_set.json"
+        out.write_text(property_set.model_dump_json(indent=2) + "\n")
+        _log.info("wrote property set %s", out)
         return out
 
 
@@ -197,6 +224,16 @@ def job_info_payload(summary: RunSummary, *, user_id: str, run_mode: str) -> dic
         "run_mode": run_mode,
         "token_usage": summary.token_usage_summary(),
     }
+
+
+REPORT_FILE = "report.json"
+
+
+def write_report_file(report_dir: Path, report: AutoProverReport) -> Path:
+    """Write ``report`` to ``{report_dir}/report.json`` and return the path."""
+    out = ensure_dir(report_dir) / REPORT_FILE
+    out.write_text(report.model_dump_json(indent=2) + "\n")
+    return out
 
 
 def write_job_info_file(report_dir: Path, payload: Mapping[str, object]) -> Path:

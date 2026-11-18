@@ -5,10 +5,10 @@ nothing in the harness says so. A rule starts from every state the types allow u
 rules it out. So it can start from a pool whose recorded deposits exceed what its vault holds, or
 from a position with debt and no collateral.
 
-The fix is to state that relationship as an invariant and prove it. This document is about
-*choosing* what to state. The mechanics are in the "State invariants" section of your instructions:
-listing the writers, the base case, one step rule per writer, strengthening, and the ladder to use
-when an invariant cannot be stated.
+The fix is to state that relationship as an invariant and prove it. Most of this document is about
+*choosing* what to state. The outline is in the "State invariants" section of your instructions:
+listing the writers, the base case, and one step rule per writer. How to write the steps, and what to
+do when an invariant cannot be stated, are at the end of this document.
 
 ## What makes a good candidate
 
@@ -108,4 +108,68 @@ There are two ways to handle it.
 
 The two routes prove the same thing. Assuming i2 in i1's steps and i1 in i2's is exactly proving
 `i1 && i2` inductive, so invariants that are all proved may assume one another.
+
+## Writing the steps
+
+Write the invariant once, as a function that returns `bool`. Then generate the steps with a local
+`macro_rules!`, so that each step shows only the operation it runs:
+
+```rust
+use cvlr::nondet::havoc::alloc_mut_ref_havoced;
+
+/// Writers of `queued_shares` and `total_shares`: `queue_withdrawal`, `redeem_queued`, `deposit`,
+/// `withdraw`.
+fn queued_within_supply(r: &Pool) -> bool {
+    r.queued_shares <= r.total_shares
+}
+
+macro_rules! preserves_queued_within_supply {
+    ($rule:ident, |$pool:ident| $op:block) => {
+        #[rule]
+        pub fn $rule() {
+            let $pool: &mut Pool = alloc_mut_ref_havoced();
+            cvlr_assume!(queued_within_supply($pool));
+            $op
+            cvlr_assert!(queued_within_supply($pool));
+        }
+    };
+}
+
+preserves_queued_within_supply!(queued_within_supply_queue_withdrawal, |pool| {
+    let shares: u64 = nondet();
+    clog!(pool.queued_shares, pool.total_shares, shares);
+    pool.queue_withdrawal(shares).unwrap();
+});
+// ... one invocation per writer in the list above
+```
+
+Those names are illustrative. The state, its fields and the writers all come from the program you
+are given. Each step is a rule of its own with its own verdict, so a failure names the operation
+that breaks the invariant. `cvlr_invariant_rules!` in cvlr-spec builds the same set of rules from a
+predicate and a list of base functions. Ask `cvlr_research` about it if that shape suits better.
+
+**A step that fails is not yet a finding.** The pre-state ranges over every state that satisfies the
+invariant, and that includes states the program never produces. Read the counterexample. If no
+operation could have produced its pre-state, the invariant is too weak to be inductive. Strengthen
+it by adding the conjunct that rules that state out, and the new conjunct then needs its own steps.
+This is how an invariant becomes inductive, and it is usually how a reviewer learns what the program
+actually maintains.
+
+## When a counterexample starts from a state the program cannot be in
+
+Add whatever excludes that state, trying these remedies in order.
+
+1. **An invariant**, proved as in "Writing the steps" and assumed in the failing rule. This is the default move, not
+   the last one, because an invariant is proved against the code, while an assumption is only
+   assumed.
+2. **A justification rule**, when the relationship cannot be stated as an invariant. That happens
+   when no step can preserve it on its own, or when it relates accounts that no single writer is
+   given together. The justification rule is a rule of its own that proves the assumption is valid
+   where it arises: for example, that the only operation producing the value always produces it in
+   range. Then assume the relationship in the failing rule with `cvlr_assume!`, and name the
+   justification rule in a comment beside it.
+3. **A bare `cvlr_assume!`** with nothing behind it. This is the last resort, and it leaves the
+   property proved only under an assumption that nothing checks. If you use one, say three things
+   in a comment beside it and in the rule's commentary: what you assumed, why the program cannot
+   reach a state that violates it, and what the property therefore no longer covers.
 </guidance>

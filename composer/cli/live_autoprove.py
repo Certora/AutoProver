@@ -32,6 +32,8 @@ async def _main() -> int:
             for f in result.failures:
                 print(f"    - {f}")
         print(f"{'=' * 60}")
+        if result.all_failed:
+            print(f"  {result.failure_headline}")
         return 0
 
 

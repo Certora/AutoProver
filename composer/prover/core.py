@@ -29,7 +29,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator, Callable, Protocol, cast, override, Awaitable
+from typing import Any, AsyncIterator, Callable, Mapping, Protocol, cast, override, Awaitable
 from abc import ABC, abstractmethod
 import json
 import logging
@@ -49,8 +49,11 @@ from prover_output_utility import cloud_server_for_env
 
 from composer.prover.analysis import analyze_cex_raw
 from composer.prover.cloud import CloudJobError, CloudResultsUnavailable, cloud_results
+from prover_output_utility.models import JobStatus
 from composer.prover.ptypes import (
     IncompleteCheck,
+    PropertyViolation,
+    ProverMessage,
     RulePath,
     RuleResult,
     StatusCodes,
@@ -59,9 +62,14 @@ from composer.prover.ptypes import (
 from composer.prover.results import (
     OUT_OF_RESOURCES,
     SOLANA_ENCODING,
+    AlertReport,
     ErrorAlert,
-    external_functions,
+    FetchedResults,
+    UnreadableAlertReport,
+    read_alert_report,
     read_and_format_run_result,
+    RuleStatistics,
+    read_rule_statistics,
 )
 from composer.templates.loader import load_jinja_template
 from composer.certora_env import ProverApp
@@ -154,24 +162,32 @@ class ProverReport:
     result_str: str
     link: str
     certora_run_stdout: str
-    #: The Prover's own warnings about functions it treated as external, from the
-    #: job's alert report (:func:`composer.prover.results.external_functions`).
-    #: Empty when there were none or the report was missing. The verdicts do not
-    #: name them.
-    external_functions: tuple[str, ...] = ()
-    #: Rules that stopped on an assertion the prover generated, keyed by rule
-    #: name. The counterexample is not kept. Empty when every violation is the
-    #: rule's own assertion, or the run reported none.
-    incomplete: dict[str, IncompleteCheck] = field(default_factory=dict)
+    #: The job's alert report. Alerts carry what the verdicts do not, e.g. soundness
+    #: caveats about how the program was modeled.
+    alerts: AlertReport | UnreadableAlertReport = field(default_factory=AlertReport)
+    #: The violated instances that stopped on an assertion the Prover generated because it reached
+    #: a limit of its own (:func:`composer.prover.ptypes.classify_violation`). Every other violated
+    #: instance found something about the program.
+    incomplete: dict[RulePath, IncompleteCheck] = field(default_factory=dict)
+    #: What the Prover said about each instance that ended in ``ERROR``.
+    errors: dict[RulePath, list[ProverMessage]] = field(default_factory=dict)
+    #: Where each ``TIMEOUT`` instance stood when it was stopped, for those with statistics.
+    statistics: dict[RulePath, RuleStatistics] = field(default_factory=dict)
+    #: The job hit its time limit, so the rules it had not finished are ``TIMEOUT``.
+    halted: bool = False
+
+    def rule_outcomes(self) -> dict[str, StatusCodes]:
+        """One status per rule. A non-``VERIFIED`` instance is kept over a later ``VERIFIED`` one."""
+        found: dict[str, StatusCodes] = {}
+        for path, code in self.raw_rule_status.items():
+            if path.rule in found and found[path.rule] != "VERIFIED":
+                continue
+            found[path.rule] = code
+        return found
 
     @property
     def rule_status(self) -> dict[str, bool]:
-        to_ret = {}
-        for (k, v) in self.raw_rule_status.items():
-            if k.rule in to_ret and not to_ret[k.rule]:
-                continue
-            to_ret[k.rule] = v == "VERIFIED"
-        return to_ret
+        return {name: code == "VERIFIED" for name, code in self.rule_outcomes().items()}
 
     @property
     def all_verified(self) -> bool:
@@ -379,14 +395,15 @@ class TrivialFanoutCexHandler(CexHandler):
     Owns its own report-volume summarization: when failed-rule count
     exceeds ``summarization_threshold`` the rendered report is
     post-processed into a TODO-list summary. Local to this strategy —
-    aggregating handlers don't run into runaway-output problems.
+    aggregating handlers don't run into runaway-output problems. With no
+    threshold the report is never summarized.
     """
 
     def __init__(
         self,
         llm: LLM,
         state: MessagesState,
-        summarization_threshold: int = 10,
+        summarization_threshold: int | None = 10,
         cache_marker: CacheManager | None = None,
     ) -> None:
         super().__init__()
@@ -474,7 +491,7 @@ class TrivialFanoutCexHandler(CexHandler):
             1 for instance in violated
             if instance.status != "VERIFIED"
         )
-        if failed_count > self.summarization_threshold:
+        if self.summarization_threshold is not None and failed_count > self.summarization_threshold:
             return await _report_to_todo_list(self.llm, report)
         return report
 
@@ -492,25 +509,9 @@ def _report_without_analysis(results: list[RuleResult]) -> str:
     lines: list[str] = []
     for r in results:
         lines.append(f"{r.name}: {r.status}")
-        for message in r.error_messages or ():
-            lines.append(f"  {message}")
+        for message in r.messages:
+            lines.append(f"  {message.text}")
     return "\n".join(lines)
-
-
-def _incomplete_checks(results: dict[str, RuleResult]) -> dict[str, IncompleteCheck]:
-    """Which violated rules stopped on an assertion the prover generated.
-
-    Keyed by rule name. The counterexample is not stored on the report, and
-    the gate tells these apart from a rule whose own assertion failed.
-    """
-    found: dict[str, IncompleteCheck] = {}
-    for result in results.values():
-        if result.status != "VIOLATED":
-            continue
-        kind = classify_violation(result.counterexample)
-        if isinstance(kind, IncompleteCheck):
-            found[result.path.rule] = kind
-    return found
 
 
 # Compatibility alias for the legacy name. New code should reach for
@@ -520,14 +521,14 @@ DefaultCexHandler = TrivialFanoutCexHandler
 
 
 @asynccontextmanager
-async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[tuple[Path, int | None]]:
-    """Trivial context manager yielding ``(local results path, runtime_ms)``.
+async def _local_results(path: Path, runtime_ms: int) -> AsyncIterator[FetchedResults]:
+    """Trivial context manager yielding the local results path and ``runtime_ms``.
 
     Mirrors ``cloud_results``' interface so ``run_prover`` consumes both uniformly. Where
     ``cloud_results`` computes the runtime from the polled job, the local run already
     happened in ``run_prover_inner``, so its wall-clock (queue-free — local isn't queued)
     is measured there and handed in here."""
-    yield (path, runtime_ms)
+    yield FetchedResults(path, runtime_ms, read_alert_report(path))
 
 
 async def _report_to_todo_list(
@@ -749,6 +750,41 @@ async def declared_rules_list(
     return [s for r in all_rules.split() if (s := r.strip()) and s != "envfreeFuncsStaticCheck"]
 
 
+_HALTED_NOTE = (
+    "The prover job reached its time limit before every rule finished. The rules it finished "
+    "have their verdicts; a rule it cut off is reported as TIMEOUT. Resubmitting the same rules "
+    "will reach the limit again: simplify or split the rules that timed out."
+)
+
+
+_STUCK_HEADING = (
+    "Where each rule that timed out stood when it was stopped, from the prover's statistics. "
+    "A function's share is of the rule's branching or of its nonlinear operations:"
+)
+
+
+def _timeout_statistics(
+    results: list[RuleResult], tree_view_dir: Path
+) -> dict[RulePath, RuleStatistics]:
+    """Where each ``TIMEOUT`` instance with statistics stood when it was stopped."""
+    found: dict[RulePath, RuleStatistics] = {}
+    for result in results:
+        if result.status != "TIMEOUT" or result.live_check_info is None:
+            continue
+        if (stats := read_rule_statistics(tree_view_dir, result.live_check_info)) is not None:
+            found[result.path] = stats
+    return found
+
+
+def _stuck_note(statistics: Mapping[RulePath, RuleStatistics]) -> str | None:
+    """One line per timed-out instance: its phase, path count and hotspots."""
+    if not statistics:
+        return None
+    return "\n".join(
+        [_STUCK_HEADING, *(f"* {path.pprint()}: {stats.render()}" for path, stats in statistics.items())]
+    )
+
+
 def _failure_advice(alerts: tuple[ErrorAlert, ...]) -> str:
     """What to tell the author, given the ``ERROR`` entries on a job with no verdicts.
 
@@ -772,23 +808,76 @@ def _failure_advice(alerts: tuple[ErrorAlert, ...]) -> str:
     )
 
 
-def cloud_job_failure_message(exc: CloudJobError) -> str:
-    """The text ``run_prover`` returns when a cloud job ends without verdicts.
+@dataclass(frozen=True)
+class JobFailed:
+    """A cloud job ended without verdicts (:class:`~composer.prover.cloud.CloudJobError`)."""
 
-    The link is always included. ``exc.alerts`` are the alert report's ``ERROR``
-    entries, present when a ``FAILED`` or ``HALTED`` job wrote them.
-    """
-    lines = [
-        f"Prover cloud job did not produce results (status {exc.status.value}). "
-        f"The job and its failure output are at {exc.link}"
-    ]
-    if exc.alerts:
-        lines.append(
-            _failure_advice(exc.alerts)
-            + "\n"
-            + "\n".join(alert.text for alert in exc.alerts)
+    status: JobStatus
+    link: str
+    #: The alert report's ``ERROR`` entries, present when a ``FAILED`` or ``HALTED`` job wrote them.
+    alerts: tuple[ErrorAlert, ...] = ()
+
+    def render(self) -> str:
+        """The text the author reads. The link is always included."""
+        lines = [
+            f"Prover cloud job did not produce results (status {self.status.value}). "
+            f"The job and its failure output are at {self.link}"
+        ]
+        if self.alerts:
+            lines.append(
+                _failure_advice(self.alerts)
+                + "\n"
+                + "\n".join(alert.text for alert in self.alerts)
+            )
+        return "\n\n".join(lines)
+
+
+@dataclass(frozen=True)
+class ResultsUnavailable:
+    """A cloud job succeeded, but its results could not be downloaded."""
+
+    link: str
+    cause: str
+
+    def render(self) -> str:
+        return (
+            f"The prover job finished, but its results could not be downloaded ({self.cause}). "
+            f"This is an infrastructure failure, not a problem with the specification; the "
+            f"verdicts are at {self.link}. Retrying may succeed."
         )
-    return "\n\n".join(lines)
+
+
+@dataclass(frozen=True)
+class RunFailed:
+    """Any other run that produced no report: certoraRun raised or timed out, or its results
+    were missing or unparseable. ``message`` is the whole text the author reads."""
+
+    message: str
+
+    def render(self) -> str:
+        return self.message
+
+
+#: Why a prover run produced no :class:`ProverReport`.
+type ProverFailure = JobFailed | ResultsUnavailable | RunFailed
+
+
+def report_or_text(result: ProverReport | ProverFailure) -> ProverReport | str:
+    """``result``, with a failure rendered as the text its reader gets, for a caller whose own
+    contract reports every failure as a string."""
+    return result if isinstance(result, ProverReport) else result.render()
+
+def _incomplete(results: dict[str, RuleResult]) -> dict[RulePath, IncompleteCheck]:
+    found: dict[RulePath, IncompleteCheck] = {}
+    for result in results.values():
+        if result.status != "VIOLATED" or result.counterexample is None:
+            continue
+        match classify_violation(result.counterexample):
+            case IncompleteCheck() as check:
+                found[result.path] = check
+            case PropertyViolation():
+                pass
+    return found
 
 
 async def run_prover(
@@ -798,16 +887,37 @@ async def run_prover(
     prover_opts: ProverOptions,
     callbacks: ProverCallbacks,
     cex: CexHandler | None,
-) -> ProverReport | str:
+) -> ProverReport | ProverFailure:
     """Execute the Certora prover and return structured results.
 
     ``cex`` analyzes a violated rule. None reports the status and the
     counterexample dump, with no analysis.
-
-    Returns:
-        ProverReport — rule outcomes and the rendered report text
-        str — error message
     """
+    job = await submit_prover_job(folder, args, prover_opts, callbacks)
+    if not isinstance(job, SubmittedJob):
+        return job
+    return await collect_prover_results(job, tool_call_id, prover_opts, callbacks, cex)
+
+
+@dataclass(frozen=True)
+class SubmittedJob:
+    """A job certoraRun accepted. On the cloud path nothing has been waited for yet."""
+
+    link: str
+    is_local_link: bool
+    #: certoraRun's output from the submission. Empty for a job known only by its link.
+    stdout: str = ""
+    #: The submission's wall-clock, which is the run time of a local job.
+    local_runtime_ms: int = 0
+
+
+async def submit_prover_job(
+    folder: Path,
+    args: list[str],
+    prover_opts: ProverOptions,
+    callbacks: ProverCallbacks,
+) -> SubmittedJob | RunFailed:
+    """Run certoraRun up to the job link."""
 
     # 1. Build effective args.
     effective_args = args + prover_opts.cli_args()
@@ -841,7 +951,7 @@ async def run_prover(
         # Returned rather than raised: the agent reads this as a tool result and
         # can retry or change approach, which beats stalling the run.
         _logger.error("Prover subprocess timed out: %s", e)
-        return (
+        return RunFailed(
             f"The prover did not finish within {subprocess_timeout:.0f}s and was "
             f"terminated. This is an infrastructure failure, not a problem with "
             f"the specification: the local build or type-check phase stopped "
@@ -849,31 +959,47 @@ async def run_prover(
         )
     local_runtime_ms = int((time.perf_counter() - _t0) * 1000)
     if isinstance(run_result, str):
-        return run_result
+        return RunFailed(run_result)
 
     if run_result is None or (run_result["sort"] == "success" and run_result["link"] is None):
         _logger.warning("Prover failed: %s", run_result)
-        return f"Prover did not produce results.\nstdout:\n{stdout}"
+        return RunFailed(f"Prover did not produce results.\nstdout:\n{stdout}")
 
     if run_result["sort"] == "failure":
         _logger.info("Prover run failed: %s", run_result['exc_str'])
-        return f"Certora prover raised exception: {run_result['exc_str']}\nstdout:\n{stdout}"
+        return RunFailed(f"Certora prover raised exception: {run_result['exc_str']}\nstdout:\n{stdout}")
 
     assert run_result is not None and run_result["sort"] == "success" and run_result["link"] is not None
 
     await callbacks.on_prover_link(run_result["link"])
+    return SubmittedJob(
+        link=run_result["link"],
+        is_local_link=run_result["is_local_link"],
+        stdout=stdout,
+        local_runtime_ms=local_runtime_ms,
+    )
 
+
+async def collect_prover_results(
+    job: SubmittedJob,
+    tool_call_id: str,
+    prover_opts: ProverOptions,
+    callbacks: ProverCallbacks,
+    cex: CexHandler | None,
+) -> ProverReport | ProverFailure:
+    """Wait for a submitted job's verdicts, then parse and report them."""
+    stdout = job.stdout
     # 7. Result retrieval: cloud vs local
     if prover_opts.cloud:
         results_cm = cloud_results(
-            run_result["link"],
+            job.link,
             poll_callback=callbacks.on_cloud_poll,
             poll_timeout=prover_opts.runtime_bound + 5 * 60,
         )
     else:
-        if not run_result["is_local_link"]:
-            return f"Prover did not produce local results.\nstdout:\n{stdout}"
-        results_cm = _local_results(Path(run_result["link"]), local_runtime_ms)
+        if not job.is_local_link:
+            return RunFailed(f"Prover did not produce local results.\nstdout:\n{stdout}")
+        results_cm = _local_results(Path(job.link), job.local_runtime_ms)
 
     # 8. Parse results + run analysis. Both happen inside ``results_cm`` so
     # the report directory (which contains ``inputs/.certora_sources`` —
@@ -885,13 +1011,15 @@ async def run_prover(
     # time, sourced by each context manager (cloud job window / local
     # subprocess wall-clock).
     try:
-        async with results_cm as (emv_path, runtime_ms):
+        async with results_cm as fetched:
+            emv_path = fetched.root
+            runtime_ms = fetched.runtime_ms
             parsed = read_and_format_run_result(emv_path, prover_opts.app)
 
             if isinstance(parsed, str):
-                return f"Failed to parse prover results: {parsed}"
-            externals = external_functions(emv_path)
-            incomplete = _incomplete_checks(parsed)
+                return RunFailed(f"Failed to parse prover results: {parsed}")
+            alerts = fetched.alerts
+            incomplete = _incomplete(parsed)
 
             # 9. Notify runtime + prover_result callbacks
             if runtime_ms is not None:
@@ -918,17 +1046,18 @@ async def run_prover(
                     rule_entries=[(r, None) for r in all_results],
                     diagnoses=[],
                 )
+            statistics = _timeout_statistics(all_results, emv_path / "Reports" / "treeView")
+            if (stuck := _stuck_note(statistics)) is not None:
+                result_str = f"{result_str}\n\n{stuck}"
+            if fetched.halted:
+                result_str = f"{_HALTED_NOTE}\n\n{result_str}"
     except CloudJobError as exc:
-        return cloud_job_failure_message(exc)
+        return JobFailed(exc.status, exc.link, exc.alerts)
     except CloudResultsUnavailable as exc:
         # Returned rather than raised, like the subprocess timeout: raising ends the whole
         # formalization over a read the next submission will very likely complete.
         _logger.error("Cloud job results unavailable: %s", exc)
-        return (
-            f"The prover job finished, but its results could not be downloaded ({exc.cause}). "
-            f"This is an infrastructure failure, not a problem with the specification; the "
-            f"verdicts are at {exc.link}. Retrying may succeed."
-        )
+        return ResultsUnavailable(exc.link, str(exc.cause))
 
     prover_report: dict[str, bool] = {}
     for i in parsed.values():
@@ -943,9 +1072,12 @@ async def run_prover(
 
     return ProverReport(
         raw_rule_status=raw_rule_results,
-        external_functions=externals,
+        alerts=alerts,
         incomplete=incomplete,
+        errors={r.path: r.messages for r in parsed.values() if r.status == "ERROR"},
+        statistics=statistics,
+        halted=fetched.halted,
         result_str=result_str,
-        link=run_result["link"],
+        link=job.link,
         certora_run_stdout=stdout,
     )

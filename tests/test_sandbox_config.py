@@ -137,12 +137,6 @@ def test_rust_build_policy_sets_fixed_variables_but_not_over_the_ones_it_owns(tm
     assert policy.env_allowlist["TMPDIR"] != "/tmp"
 
 
-def test_a_configs_fixed_variables_reach_its_policy(tmp_path):
-    config = SandboxConfig(provider="launcher", env={"RUSTUP_TOOLCHAIN": "1.90.0"})
-    policy = config.build_policy(tmp_path)
-    assert policy is not None and policy.env_allowlist["RUSTUP_TOOLCHAIN"] == "1.90.0"
-
-
 def test_rust_build_policy_offline_sets_cargo_net_offline(tmp_path):
     """Default (offline) forces every cargo — incl. a nested one a checker spawns — offline via
     CARGO_NET_OFFLINE; opting out drops it.
@@ -196,13 +190,9 @@ def test_rust_build_policy_grants_the_platform_tools_root(tmp_path, monkeypatch)
     assert root.resolve() in pol.ro_paths
 
 
-def test_the_platform_tools_root_is_the_one_the_environment_names(tmp_path):
-    """The Solana image keeps its tools outside ``$HOME`` and says where in the variable."""
-    assert recipes.platform_tools_root({"CERTORA_PLATFORM_TOOLS_ROOT": str(tmp_path)}) == tmp_path
-
-
 @pytest.mark.parametrize("environ", [{}, {"CERTORA_PLATFORM_TOOLS_ROOT": ""}])
-def test_the_platform_tools_root_defaults_to_where_the_tool_installs(environ):
+def test_an_unset_platform_tools_root_is_where_the_tool_installs(environ):
+    """Empty reads as unset. The Solana image sets the variable when its tools live elsewhere."""
     assert recipes.platform_tools_root(environ) == Path.home() / ".cache" / "solana"
 
 

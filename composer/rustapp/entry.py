@@ -47,6 +47,8 @@ from composer.io.thread_logging import default_logging_ns, thread_logger
 from composer.pipeline.cli import autoprover_version, root_cache_key
 from composer.pipeline.core import CorePipelineResult, DEFAULT_MAX_CPU_TASKS
 from composer.pipeline.ecosystem import Ecosystem
+from composer.pipeline.run_failure import reporting_run_failure
+from composer.pipeline.run_mode import RunMode
 from composer.rag.models import DefaultEmbedder, get_model
 from composer.rustapp.adapter import source_unit_of
 from composer.rustapp.descriptor import ArgSpec, BoolDefault, IntDefault, PhaseRole, StrDefault
@@ -56,6 +58,8 @@ from composer.rustapp.result import RustFormalResult
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.recipes import DEFAULT_ENV_PASSTHROUGH
 from composer.spec.context import SourceCode, SourceFields, WorkflowContext
+from composer.spec.gen_types import under_project
+from composer.spec.prop_inference import DEFAULT_MAX_BUG_ROUNDS
 from composer.spec.service_host import ModelProvider, PureServiceHost, ServiceHost
 from composer.spec.source.design_doc_finder import (
     DESIGN_DOC_DISCOVERY_TASK_ID,
@@ -202,7 +206,7 @@ def build_arg_parser(app: RustApplication) -> argparse.ArgumentParser:
     parser.add_argument("--cache-ns", default=None, help="Cache namespace (enables cross-run caching)")
     parser.add_argument("--memory-ns", default=None, help="Memory namespace (default: thread id)")
     parser.add_argument("--interactive", action="store_true", help="Interactively refine extracted properties")
-    parser.add_argument("--max-bug-rounds", type=int, default=3, help="Max bug-extraction rounds per component (default: 3)")
+    parser.add_argument("--max-bug-rounds", type=int, default=DEFAULT_MAX_BUG_ROUNDS, help=f"Max property-inference rounds per component; a round runs only if the previous one found a new property (default: {DEFAULT_MAX_BUG_ROUNDS})")
     _add_declared_args(parser, app.descriptor.args)
     return parser
 
@@ -318,7 +322,7 @@ async def rust_entry_point(
         )
         semaphore = asyncio.Semaphore(args.max_concurrent)
 
-        async def runner(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult]:
+        async def run(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult]:
             # 1. Resolve the design doc: use the supplied path, else discover one as a
             #    visible task (needs the handler scope, which only exists here). Discovery
             #    may come up empty, which is not fatal — see below.
@@ -405,5 +409,16 @@ async def rust_entry_point(
                 max_bug_rounds=args.max_bug_rounds,
                 interactive=args.interactive,
             )
+
+        async def runner(handler: HandlerFactory) -> CorePipelineResult[RustFormalResult]:
+            # Entered here, inside the awaited run, rather than around the yield: a TUI catches the
+            # run's exception in its worker, so it would never reach this context manager's caller.
+            with reporting_run_failure(
+                under_project(project_root, descriptor.artifact_layout.report_dir),
+                contract_name=str(contract_name), backend=descriptor.backend_tag,
+                # run_application takes no run mode: every Rust run is comprehensive.
+                run_mode=RunMode.COMPREHENSIVE.value,
+            ):
+                return await run(handler)
 
         yield runner

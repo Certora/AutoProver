@@ -15,9 +15,12 @@ No toolchain, no network, no LLM.
 """
 from typing import get_args
 
+import pytest
+
 from composer.pipeline.ecosystem import SOLANA, SOLANA_PROPERTY_SYSTEM_TEMPLATE
 from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
 from composer.spec.cvlr.author import CvlrVersionParams, Rebuttal
+from composer.spec.cvlr.reference import HarnessShim
 from composer.spec.prop_inference import PropertySystemPromptParams
 from composer.spec.types import PropertyFormulation
 from composer.templates.loader import load_jinja_template
@@ -101,7 +104,9 @@ def test_the_soroban_guidance_speaks_soroban_not_solana():
 # --------------------------------------------------------------------------------------------
 
 
-def _author_system_prompt(caveats: tuple[str, ...] = ()) -> str:
+def _author_system_prompt(
+    caveats: tuple[str, ...] = (), shim: HarnessShim | None = None
+) -> str:
     """Everything the author is told: the CVLR knowledge bundle that goes in front of every CVLR
     agent, plus this agent's own system prompt.
 
@@ -124,6 +129,7 @@ def _author_system_prompt(caveats: tuple[str, ...] = ()) -> str:
         "module": "spec",
         "example": None,
         "conf": tunable_conf(TunableConf()),
+        "shim": shim,
     }
     return "\n".join([
         *context_documents(CVLR_BUNDLE),
@@ -147,10 +153,13 @@ def test_the_author_is_told_which_prover_settings_are_its_own_and_which_are_not(
 
 
 def test_raising_the_loop_bound_is_placed_last_on_its_ladder():
-    prompt = _flat(_author_system_prompt())
+    from composer.kb.kb_context import CVLR_RECIPES, kb_loader
 
-    loop_rung = prompt.index("Raise the bound, having tried the first two")
-    assert prompt.index("Constrain what determines the trip count") < loop_rung
+    recipe = kb_loader(CVLR_RECIPES)("K4")
+    assert recipe is not None
+    ladder = _flat(recipe)
+    loop_rung = ladder.index("Raise the bound, having tried the first two")
+    assert ladder.index("Constrain what determines the trip count") < loop_rung
 
 
 def test_the_author_is_told_to_call_the_handler_not_anchors_dispatch():
@@ -269,6 +278,15 @@ def test_the_author_is_told_a_cpi_moves_nothing_in_the_model():
 # the tests for having closed them.
 
 
+def _recipe(id: str) -> str:
+    """A CVLR recipe's body, wrapping collapsed as :func:`_flat` does."""
+    from composer.kb.kb_context import CVLR_RECIPES, kb_loader
+
+    body = kb_loader(CVLR_RECIPES)(id)
+    assert body is not None, id
+    return _flat(body)
+
+
 def _flat(text: str) -> str:
     """Prompt text with line wrapping collapsed.
 
@@ -278,7 +296,7 @@ def _flat(text: str) -> str:
     return " ".join(text.split())
 
 
-def _author_task_prompt() -> str:
+def _author_task_prompt(*, focused: bool = False) -> str:
     from composer.spec.cvlr.author import CvlrPropertyGenParams, _PropertyGenTemplate
 
     params: CvlrPropertyGenParams = {
@@ -290,6 +308,7 @@ def _author_task_prompt() -> str:
         "module": "spec",
         "cvlr_versions": "cvlr 0.6.1",
         "sort": "existing",
+        "focused": focused,
     }
     return _PropertyGenTemplate.bind(params).render_to(load_jinja_template)
 
@@ -316,6 +335,56 @@ def test_an_older_generation_tells_the_author_and_the_judge_where_the_manual_is_
     assert "Where the manual is wrong" not in _judge_system_prompt()
 
 
+def test_a_jiminy_run_is_told_how_to_reach_a_jiminy_handler_instead_of_an_anchor_one():
+    """A jiminy handler takes an `Abr` and `AccountHandle`s, so the Anchor mechanics (an accounts
+    struct, `Context::new`, an `AccountInfo` array kept from dropping) would send the author after
+    types the program does not have. What applies to both stays: `.unwrap()`, the contrapositive,
+    and that a CPI is not modelled."""
+    from composer.spec.cvlr.reference import SOLANA_JIMINY
+
+    prompt = _flat(_author_system_prompt(SOLANA_JIMINY.caveats, SOLANA_JIMINY.shim))
+    assert "Reaching a handler on a jiminy program" in prompt
+    assert "cvlr_jiminy_abr()" in prompt and "cvlr_jiminy_accounts()" in prompt
+    assert "Reaching a handler on an Anchor program" not in prompt
+    assert "Context::new" not in prompt
+    assert "core::mem::forget(accounts);`.**" not in prompt
+    assert "Token movements are the exception" not in prompt
+    assert "Consume the handler's `Result` with `.unwrap()`" in prompt
+    assert "What a CPI does is not modelled" in prompt
+
+    anchor = _flat(_author_system_prompt())
+    assert "Reaching a handler on an Anchor program" in anchor
+    assert "jiminy" not in anchor
+
+
+@pytest.mark.parametrize(
+    "generation, account, key, other_account",
+    [
+        ("SOLANA_PINOCCHIO_0_11", "AccountView", "address()", "AccountInfo; 16"),
+        ("SOLANA_PINOCCHIO_0_10", "AccountView", "address()", "AccountInfo; 16"),
+        ("SOLANA_PINOCCHIO_0_9", "AccountInfo", "key()", "AccountView"),
+        ("SOLANA_PINOCCHIO_0_8", "AccountInfo", "key()", "AccountView"),
+    ],
+)
+def test_a_pinocchio_run_is_told_its_own_account_type(generation, account, key, other_account):
+    """Pinocchio's account type changed name and accessors at 0.10, so each line is told the
+    spellings its program compiles with, and none of the Anchor mechanics."""
+    from composer.spec.cvlr import reference
+
+    ref = getattr(reference, generation)
+    prompt = _flat(_author_system_prompt(ref.caveats, ref.shim))
+    assert "Reaching a handler on a Pinocchio program" in prompt
+    assert "cvlr_pinocchio_accounts()" in prompt
+    assert f"[{account}; 16]" in prompt
+    assert f"a.{key} != b.{key}" in prompt
+    assert other_account not in prompt
+    assert "Reaching a handler on an Anchor program" not in prompt
+    assert "Context::new" not in prompt
+    assert "Token movements are the exception" not in prompt
+    assert "What a CPI does is not modelled" in prompt
+    assert "pinocchio" not in _flat(_author_system_prompt()).lower()
+
+
 def test_the_author_is_told_the_subject_of_a_rule_is_the_programs_code():
     """The system prompt used to define a rule body as "call the code under test" and never say
     whose code that was. The properties are stated behaviourally, so a faithful mirror satisfies
@@ -340,11 +409,13 @@ def test_descending_below_the_handler_is_allowed_only_into_the_program_s_own_cod
     """
     prompt = _flat(_author_system_prompt())
     assert "Start at the handler, and descend only for a reason you can name" in prompt
-    assert "The function must be the program's" in prompt
-    assert "writing your own version of that function in this module is not descending" in prompt
+    # the authorship line stays standing; the shape and its obligations are recipe K7
+    assert "The function must be the program's" in prompt and "Recipe K7" in prompt
+    recipe = _recipe("K7")
+    assert "writing your own version of that function in this module is not descending" in recipe
     # the descent has to reach the report, or it is a silent narrowing
-    assert "Declare it" in prompt
-    assert "Say what it costs, in the commentary" in prompt
+    assert "Declare it" in recipe
+    assert "Say what it costs, in the commentary" in recipe
 
 
 def test_avoiding_the_dispatcher_is_justified_by_cost_not_by_pointer_analysis():
@@ -423,9 +494,8 @@ def test_the_author_is_warned_that_a_summary_is_unsound():
     """It is a sharper instrument than the mirror it replaces: summarizing the code a property is
     about gives a passing rule that checked nothing, and unlike a mirror it leaves no trace in the
     harness at all."""
-    prompt = _flat(_author_task_prompt())
-    assert "summarizing the code a property is *about*" in prompt
-    assert "never the handler" in prompt
+    assert "never the handler" in _flat(_author_task_prompt())
+    assert "summarizing the code a property is *about*" in _recipe("K10")
 
 
 def test_the_judge_weighs_summaries_the_same_way_it_weighs_mirrors():
@@ -450,8 +520,20 @@ def test_every_bundle_section_the_judge_cites_exists():
     cited = re.findall(r'the section "([^"]+)"', _flat(_judge_system_prompt()))
     bundle = (files("composer.kb") / "resources" / "cvlr_baseline_facts.md").read_text()
     headings = set(re.findall(r"^## (.+)$", bundle, re.MULTILINE))
-    assert len(cited) == 3  # vacuity (2), loops (5), clog! (7)
+    assert len(cited) == 2  # vacuity (2), clog! (7)
     assert set(cited) <= headings, set(cited) - headings
+
+
+def test_every_recipe_the_judge_cites_exists():
+    """The judge defers to recipes as it does to bundle sections, and a renumbered recipe would
+    leave it pointing at nothing."""
+    import re
+
+    from composer.kb.kb_context import CVLR_RECIPES, _kb_model
+
+    cited = set(re.findall(r"recipe (K\d+)", _flat(_judge_system_prompt())))
+    assert "K4" in cited
+    assert cited <= {r.id for r in _kb_model(CVLR_RECIPES).recipes}
 
 
 def test_the_judge_is_told_a_missing_clog_can_make_a_counterexample_wrong():
@@ -544,7 +626,7 @@ def test_an_unanalyzable_handler_skip_names_the_tool_it_tried():
 def test_the_author_is_told_a_directive_can_match_nothing():
     """Otherwise the only feedback is a repeat of the same error, and the response to that is to
     guess another spelling — which is what happened five times in one unit."""
-    prompt = _flat(_author_task_prompt())
+    prompt = _recipe("K10")
     assert "matched **no symbol at all**" in prompt
     assert "the library function one level out" in prompt
 
@@ -554,7 +636,7 @@ def test_no_specific_symbol_is_offered_as_a_worked_example():
     no build of that program — the compiler inlines it. Two separate runs wrote it because the
     prompt did, kept it after being told it matched nothing, and paid a submission each time. A
     prompt cannot know a build's symbols; the report can, so it is the report's job."""
-    prompt = _flat(_author_task_prompt())
+    prompt = _flat(_author_task_prompt()) + _recipe("K10")
     assert "VaultError" not in prompt
 
 
@@ -562,7 +644,7 @@ def test_the_author_is_told_when_to_stop_summarizing():
     """Nothing bounded the remedy, so it did not stop: eleven directives over nine submissions,
     seven matching real symbols, walking a formatting chain frame by frame while the error stayed
     identical. The code was inlined into the handler, where no summary reaches."""
-    prompt = _flat(_author_task_prompt())
+    prompt = _recipe("K10")
     assert "Give up on this remedy after about three directives down one path" in prompt
     assert "inlined *into the handler itself*" in prompt
 
@@ -594,11 +676,13 @@ def test_the_author_is_told_what_a_cpi_stand_in_cannot_do():
     can produce. The 2026-09-21 run paid two prover jobs to find them, which is the cost this text
     exists to stop repeating.
     """
-    prompt = _flat(_author_system_prompt())
+    assert "Recipe K6" in _flat(_author_system_prompt())
+    prompt = _recipe("K6")
     assert "Move nothing." in prompt
     assert "Decode nothing." in prompt
     assert "[3003] dereference of a register with unknown provenance" in prompt
     assert "Instruction::new_with_bincode" in prompt
+    prompt = _flat(_author_system_prompt())
     # And the reason the second one needs a *second* swap: the kind redirects a name, not a function.
     assert "swaps a whole module the same way" in prompt
 
@@ -675,7 +759,7 @@ def test_the_descent_example_is_real_code_against_the_test_scenario():
     The two details a first draft got wrong are pinned below: `nondet()` is implemented for scalars
     and not for `Pubkey`, and the transition returns a `Split` rather than mutating an out-param.
     """
-    prompt = _author_system_prompt()
+    prompt = _recipe("K7")
     assert "crate::vault_accounting::apply_withdrawal(&mut vault, amount, true).unwrap()" in prompt
     assert "authority: Pubkey::default()" in prompt
     assert "cvlr_assert!(before - vault.balance == amount);" in prompt

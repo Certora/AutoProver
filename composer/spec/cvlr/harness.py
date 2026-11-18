@@ -7,6 +7,7 @@ program's own file reaches into ``specs``
 (:func:`composer.spec.cvlr.scaffold._harness_files`).
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import override
@@ -16,20 +17,15 @@ from pydantic import BaseModel, Field
 from composer.authoring.state import SkippedProperty
 from composer.cargo.features import CargoFeature
 from composer.diagnostics.timing import RunSummary
-from composer.prover.conf import Conf, dump_conf
 from composer.spec.artifacts import ArtifactStore
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.scaffold import SPECS_DIR
 from composer.spec.cvlr.state import PropertyRuleMapping, RuleSubject
 from composer.spec.cvlr.tuning import SummaryDirective
-from composer.spec.gen_types import CVLR_DELIVERABLE_DIR, CVLR_INTERNAL_DIR
+from composer.spec.gen_types import CVLR_DELIVERABLE_DIR, CVLR_INTERNAL_DIR, CVLR_REPORT_DIR
 from composer.spec.source.munge.edit_store import AppliedEdit
 from composer.spec.types import CheckName, PropertyTitle, RuleName
 from composer.spec.util import ensure_dir
-
-#: One prover conf per delivered unit, for rerunning its rules.
-CONFS_DIR = CVLR_DELIVERABLE_DIR / "confs"
-
 
 @dataclass(frozen=True)
 class HarnessModule:
@@ -108,7 +104,7 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
             "property_rules",
             deliverable_dir=CVLR_DELIVERABLE_DIR,
             internal_dir=CVLR_INTERNAL_DIR,
-            report_dir=CVLR_DELIVERABLE_DIR / "reports",
+            report_dir=CVLR_REPORT_DIR,
         )
         self._package_dir = package_dir
 
@@ -131,51 +127,52 @@ class CvlrArtifactStore(ArtifactStore[HarnessModule, GeneratedHarness]):
             "prover_usage": summary.prover_usage_summary(),
         }
 
-    def write_confs(self, confs: dict[HarnessModule, Conf]) -> dict[HarnessModule, Path]:
-        """Write each unit's conf under :data:`CONFS_DIR`, and return the paths, project-relative.
-
-        A conf this call does not write is removed, so a resumed run does not keep one for a unit
-        it did not deliver.
-        """
-        directory = Path(self._project_root) / CONFS_DIR
-        written: dict[HarnessModule, Path] = {}
-        if confs:
-            directory.mkdir(parents=True, exist_ok=True)
-            for unit, conf in confs.items():
-                path = directory / f"{unit.module}.conf"
-                path.write_text(dump_conf(conf))
-                written[unit] = path.relative_to(self._project_root)
-        if directory.is_dir():
-            keep = {p.name for p in written.values()}
-            for stale in directory.glob("*.conf"):
-                if stale.name not in keep:
-                    stale.unlink()
-            if not any(directory.iterdir()):
-                directory.rmdir()
-        return written
-
     def declare_modules(self, modules: list[HarnessModule]) -> tuple[Path, ...]:
-        """Write ``specs/mod.rs``, with every unit's module behind its cargo feature.
+        """Write ``specs/mod.rs`` naming every unit (:func:`declare_modules`).
 
-        Called once, before any unit stages a draft, so the file names every unit.
-        rustc does not read a module whose ``cfg`` is disabled, and that module
-        does not enter dep-info: a missing file does not fail another unit's
-        build, and one unit's draft does not rebuild another's. The units are
-        never compiled together, so two ``impl Nondet for Foo`` do not collide
-        (``E0119``).
-
-        Names are unique. Component analysis rejects sibling components whose
-        slugs collide.
+        Called once, before any unit stages a draft, so the file names every unit. Names are
+        unique: component analysis rejects sibling components whose slugs collide.
         """
-        target = self._artifact_dir()
-        declarations = "".join(
-            f'#[cfg(feature = "{m.feature}")]\npub mod {m.module};\n'
-            for m in sorted(modules, key=lambda m: m.module)
-        )
-        mod_rs = target / "mod.rs"
-        mod_rs.write_text(
-            "//! The rules. One module per unit, each gated on its own cargo feature, so a\n"
-            "//! build selects exactly one unit's rules.\n"
-            "\n" + declarations
-        )
-        return (mod_rs,)
+        return (declare_modules(self._artifact_dir(), modules),)
+
+
+#: The module a skill run states its structural invariants in, compiled whenever the ``certora``
+#: feature is on, so every unit's rules can assume them. The rules that prove them are a unit of
+#: their own (:data:`composer.spec.cvlr.skill.INVARIANT_RULES`).
+SHARED_INVARIANTS = "invariants"
+
+
+def render_mod_rs(units: Sequence[HarnessModule], *, shared: Sequence[str] = ()) -> str:
+    """The text of ``specs/mod.rs``: every unit's module behind its cargo feature, and each module
+    in ``shared`` ungated.
+
+    rustc does not read a module whose ``cfg`` is disabled, and that module does not enter
+    dep-info: a missing file does not fail another unit's build, and one unit's draft does not
+    rebuild another's. The units are never compiled together, so two ``impl Nondet for Foo`` do
+    not collide (``E0119``). A shared module is compiled with every unit, so a trait impl it makes
+    is one no unit may repeat.
+
+    Raises :class:`ValueError` when a unit and a shared module have the same name.
+    """
+    if clashes := sorted({u.module for u in units} & set(shared)):
+        raise ValueError(f"a unit module has the name of a shared module: {', '.join(clashes)}")
+    declarations = "".join(f"pub mod {m};\n" for m in sorted(shared)) + "".join(
+        f'#[cfg(feature = "{m.feature}")]\npub mod {m.module};\n'
+        for m in sorted(units, key=lambda m: m.module)
+    )
+    header = (
+        "//! The rules. One module per unit, each gated on its own cargo feature, so a\n"
+        "//! build selects exactly one unit's rules.\n"
+    )
+    if shared:
+        header += "//! The ungated modules are compiled with every unit.\n"
+    return header + "\n" + declarations
+
+
+def declare_modules(
+    specs_dir: Path, units: Sequence[HarnessModule], *, shared: Sequence[str] = ()
+) -> Path:
+    """Write ``specs_dir/mod.rs`` (:func:`render_mod_rs`) and return its path."""
+    mod_rs = specs_dir / "mod.rs"
+    mod_rs.write_text(render_mod_rs(units, shared=shared))
+    return mod_rs

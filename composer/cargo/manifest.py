@@ -8,7 +8,7 @@ Parsing is ``tomlkit``'s for reading and editing alike, so what is validated is 
 :class:`ManifestEditor` keeps everything it does not change as it was, comments included.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,6 +69,12 @@ class WorkspaceTable(_ManifestModel):
     dependencies: dict[str, Dependency] = {}
 
 
+class TargetTable(_ManifestModel):
+    """``[target.'<platform>']``: what cargo adds on a matching target only."""
+
+    dependencies: dict[str, Dependency] = {}
+
+
 class Manifest(_ManifestModel):
     #: ``None`` for a virtual workspace manifest.
     package: PackageTable | None = None
@@ -76,9 +82,17 @@ class Manifest(_ManifestModel):
     #: the manifest a workspace root.
     workspace: WorkspaceTable | None = None
     dependencies: dict[str, Dependency] = {}
+    #: Keyed by the platform as written: a target triple or a ``cfg(...)`` expression.
+    target: dict[str, TargetTable] = {}
     features: dict[CargoFeature, list[str]] = {}
     #: Keyed by the source being patched (``crates-io``, or a registry or git URL), then by crate.
     patch: dict[str, dict[str, Dependency]] = {}
+
+    def declares(self, crate: str) -> bool:
+        """Whether ``crate`` is a normal dependency under its own name, on any target."""
+        return crate in self.dependencies or any(
+            crate in table.dependencies for table in self.target.values()
+        )
 
     @property
     def workspace_dependencies(self) -> dict[str, Dependency]:
@@ -108,9 +122,9 @@ def read_manifest(path: Path) -> Manifest:
 #: A table's name, one key per level: ``("package", "metadata", "certora")``.
 type TablePath = tuple[str, ...]
 
-#: What a table path can lead to. A table whose sub-tables are declared apart from it, as
-#: ``[package]`` is when ``[package.metadata.solana]`` follows ``[lints]``, reads back as an
-#: ``OutOfOrderTableProxy``; edits made through it land in the fragment that holds the key.
+#: ``Table``, ``InlineTable``, or an ``OutOfOrderTableProxy``. A table whose sub-tables are declared
+#: apart from it, as ``[package]`` is when ``[package.metadata.solana]`` follows ``[lints]``, reads
+#: back as the proxy. An edit through the proxy lands in the fragment that holds the key.
 _Table = Table | InlineTable | OutOfOrderTableProxy
 
 #: A value :class:`ManifestEditor` writes. A mapping is written as an inline table.
@@ -160,7 +174,7 @@ class ManifestConflict(ValueError):
 class ManifestEditor:
     """One ``Cargo.toml``, parsed once, to read and to add to.
 
-    Edits only add. A new table is built whole before it is placed, which is what keeps its keys
+    Edits add, except :meth:`remove`, which takes keys out of an existing table. A new table is built whole before it is placed, which is what keeps its keys
     together and its spacing like the tables around it.
     """
 
@@ -193,6 +207,15 @@ class ManifestEditor:
                         _insert(existing, table, key, value, note=note)
             case AddTable(table=table, body=body):
                 self._add_table(table, body, note=note)
+
+    def remove(self, table: TablePath, keys: Iterable[str]) -> None:
+        """Delete each of ``keys`` that ``table`` has. A missing table or key is no error."""
+        existing = self._find(table)
+        if existing is None:
+            return
+        for key in keys:
+            if key in existing:
+                del existing[key]
 
     def text(self) -> str:
         """The manifest with the edits, ending in as many newlines as it did."""

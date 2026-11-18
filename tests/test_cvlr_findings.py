@@ -21,14 +21,34 @@ from types import SimpleNamespace
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-from composer.prover.core import _incomplete_checks
-from composer.prover.ptypes import LoopUnwound, OverflowUnproven, RulePath, RuleResult
-from composer.prover.results import SOLANA_TRACE, counterexample
+from composer.prover.core import ProverReport, TrivialFanoutCexHandler, _incomplete
+from composer.prover.ptypes import GeneratedKind, IncompleteCheck, RulePath, RuleResult, StatusCodes
+from composer.prover.results import (
+    SOLANA_TRACE,
+    Hotspot,
+    RuleStatistics,
+    Solving,
+    StaticAnalysis,
+    VerificationPhase,
+    counterexample,
+    prover_message,
+)
 from composer.sandbox.config import SandboxConfig
 from composer.spec.cvlr.pipeline import CvlrFormalizer
 from composer.spec.source.report.schema import ConfinedBuilds, UnconfinedBuilds
-from composer.spec.cvlr.author_tools import unaccounted
-from composer.spec.cvlr.verify import BuildPermit, _CaptureCallbacks, _incomplete_note
+from composer.spec.cvlr.verify import (
+    AuthorModel,
+    BuildPermit,
+    CexAnalysis,
+    _CaptureCallbacks,
+    DOMINANT_SHARE,
+    TIMEOUT_STREAK_WARNING,
+    _verdicts_note,
+    symptoms,
+    timeout_streak,
+    unaccounted,
+)
+from composer.spec.cvlr.state import LastVerdicts
 from composer.spec.source.cex_capture import CexAnalysisStore
 
 FIXTURES = Path(__file__).parent / "data" / "solana_cex"
@@ -133,7 +153,7 @@ async def test_the_backend_opts_into_findings_and_reads_back_what_it_captured():
     await _CaptureCallbacks(store, _idle_permit()).on_analysis_complete(rule, "the collector aliases the vault")
 
     formalizer = CvlrFormalizer(
-        object, "prover", SimpleNamespace(cex_analysis=store), SimpleNamespace()
+        object, "prover", SimpleNamespace(cex_analysis=store), SimpleNamespace(), ()
     )
     fetch = formalizer.findings_evidence()
     assert fetch is not None
@@ -155,7 +175,7 @@ def test_the_report_records_how_the_builds_that_earned_its_verdicts_ran(sandbox,
     nowhere in the deliverable, so a report read a week later could not be told from a production
     one. The backend answers this unconditionally — the base's ``None`` means "compiles nothing",
     and a reader who cannot distinguish that from "nobody recorded it" has no use for the field."""
-    formalizer = CvlrFormalizer(object, "prover", SimpleNamespace(sandbox=sandbox), SimpleNamespace())
+    formalizer = CvlrFormalizer(object, "prover", SimpleNamespace(sandbox=sandbox), SimpleNamespace(), ())
 
     assert formalizer.build_environment() == expected
 
@@ -179,14 +199,14 @@ def test_the_gate_learns_which_rules_never_reached_their_property():
         "loop": _violated("loop", _LOOP_BOUND),
         "real": _violated("real", _REAL_VIOLATION),
     }
-    incomplete = _incomplete_checks(results)
+    incomplete = _incomplete(results)
 
-    assert set(incomplete) == {"loop"}
-    assert incomplete["loop"].assertion.startswith("Unwinding condition in a loop")
+    assert set(incomplete) == {RulePath(rule="loop")}
+    assert incomplete[RulePath(rule="loop")].kind == GeneratedKind.LOOP_UNWINDING
 
 
 def test_a_run_where_nothing_stalled_reports_nothing_stalled():
-    incomplete = _incomplete_checks({"real": _violated("real", _REAL_VIOLATION)})
+    incomplete = _incomplete({"real": _violated("real", _REAL_VIOLATION)})
     assert incomplete == {}
 
 
@@ -194,25 +214,64 @@ def test_an_incomplete_check_cannot_be_declared_an_expected_failure():
     """``expect_rule_failure`` says "this failure is a real defect". A rule that stopped on the
     prover's own assertion has shown no defect, so the marking must not excuse it from the gate —
     otherwise the run publishes a claim of a finding for which nothing was captured."""
-    status = {"loop": False, "real": False}
+    status: dict[str, StatusCodes] = {"loop": "VIOLATED", "real": "VIOLATED"}
     expected = {"loop": "I think this is a bug", "real": "the fee collector aliases the vault"}
 
-    assert unaccounted(status, expected) == []
-    assert unaccounted(status, expected, incomplete={"loop": "Unwinding condition in a loop"}) == [
-        "loop"
-    ]
+    assert unaccounted(status, expected, ()) == []
+    assert unaccounted(status, expected, {"loop"}) == ["loop"]
 
 
 def test_a_genuine_expected_failure_still_satisfies_the_gate():
     """The other direction, which is the whole reason the marking exists: a run can be complete with
     a real violation in it."""
-    status = {"real": False}
+    status: dict[str, StatusCodes] = {"real": "VIOLATED"}
     expected = {"real": "the fee collector aliases the vault"}
-    assert unaccounted(status, expected, incomplete={}) == []
+    assert unaccounted(status, expected, ()) == []
+
+
+def _report_note(report: ProverReport) -> str:
+    """The note ``verify_rules`` writes for ``report`` when nothing is marked expected-to-fail."""
+    status = report.rule_outcomes()
+    incomplete = {path.rule: check for path, check in report.incomplete.items()}
+    return _verdicts_note(
+        status, incomplete, sorted(status), [], symptoms=symptoms(report), stamped=False
+    )
+
+
+def _report(status: dict[str, StatusCodes], **fields) -> ProverReport:
+    return ProverReport(
+        raw_rule_status={RulePath(rule=name): code for name, code in status.items()},
+        result_str="",
+        link="L",
+        certora_run_stdout="",
+        **fields,
+    )
+
+
+def _note(**incomplete: IncompleteCheck) -> str:
+    return _report_note(
+        _report(
+            {name: "VIOLATED" for name in incomplete},
+            incomplete={RulePath(rule=name): check for name, check in incomplete.items()},
+        )
+    )
+
+
+def _errored(**messages: str) -> str:
+    return _report_note(
+        _report(
+            {name: "ERROR" for name in messages},
+            errors={RulePath(rule=name): [prover_message(m)] for name, m in messages.items()},
+        )
+    )
+
+
+def _overflow(assertion: str) -> IncompleteCheck:
+    return IncompleteCheck(GeneratedKind.CANNOT_OVERFLOW, assertion)
 
 
 def test_the_gate_tells_an_overflow_stop_how_to_get_past_it_and_not_a_loop_remedy():
-    note = _incomplete_note({"r": OverflowUnproven("Cannot overflow: inferred pointer")})
+    note = _note(r=_overflow("Cannot overflow: inferred pointer"))
     assert "Cannot overflow: inferred pointer" in note
     assert "cvlr_assume!(x < 1 << 63)" in note
     assert "trip count" not in note
@@ -221,19 +280,117 @@ def test_the_gate_tells_an_overflow_stop_how_to_get_past_it_and_not_a_loop_remed
 def test_the_gate_bounds_an_overflow_stop_once_and_then_moves_on():
     """The bound is not always the lever: the stop follows the code's layout, so a rule that still
     stops with it in place is restated below the handler or skipped, not reworded again."""
-    note = _incomplete_note({"r": OverflowUnproven("Cannot overflow: inferred pointer")})
+    note = " ".join(_note(r=_overflow("Cannot overflow: inferred pointer")).split())
     assert "once" in note
-    assert "again with the bound in place" in note
-    assert "takes no AccountInfo" in note
+    assert "comes back with the bound in place" in note
+    assert "takes no `AccountInfo`" in note
     assert "skip the property" in note
 
 
 def test_the_gate_gives_each_kind_its_remedy_once():
-    note = _incomplete_note({
-        "a": LoopUnwound("Unwinding condition in a loop"),
-        "b": OverflowUnproven("Cannot overflow: computing TAC map index"),
-        "c": OverflowUnproven("Cannot overflow: inferred pointer"),
-    })
-    assert note.count("trip count") == 1
-    assert note.count("1 << 63") == 1
+    note = _note(
+        a=IncompleteCheck(GeneratedKind.LOOP_UNWINDING, "Unwinding condition in a loop"),
+        b=_overflow("Cannot overflow: computing TAC map index"),
+        c=_overflow("Cannot overflow: inferred pointer"),
+    )
+    assert note.count("### K4.") == 1
+    assert note.count("### K5.") == 1
     assert "expect_rule_failure" in note
+
+
+def test_the_gate_pushes_the_pointer_analysis_recipe_on_an_error_code():
+    """An ERROR carries no counterexample, so its code is the only thing a recipe can be keyed on."""
+    note = _errored(
+        r="[3308] illegal dereference of an absolute address",
+        s="In s: [3006] illegal store of a stack pointer",
+    )
+    assert note.count("### K10.") == 1
+    assert "### K11." not in note
+
+
+def test_the_gate_pushes_the_sizing_recipe_on_a_dynamic_memcpy():
+    note = _errored(r="[3005] memcpy with dynamically sized length")
+    assert "### K11." in note and "### K10." not in note
+
+
+def test_an_error_with_no_listed_code_pushes_nothing():
+    assert "### K" not in _errored(r="Rule r timed-out")
+
+
+def test_the_gate_pushes_the_vacuity_recipe_on_a_sanity_failure():
+    assert "### K12." in _report_note(_report({"r": "SANITY_FAILED", "s": "VERIFIED"}))
+
+
+def test_the_gate_pushes_the_timeout_recipe_on_a_rule_that_ran_out_of_its_own_time():
+    assert "### K8." in _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}))
+    assert "### K8." not in _report_note(_report({"r": "VERIFIED"}))
+
+
+def test_a_halted_jobs_cut_off_rules_push_only_the_halted_job_recipe():
+    note = _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}, halted=True))
+    assert "### K9." in note and "### K8." not in note
+
+
+def test_the_gate_pushes_the_stand_in_recipe_on_a_rule_that_never_reached_the_solver():
+    """Even in a halted job, where a TIMEOUT alone says only that the job ran out."""
+    def stopped(phase: VerificationPhase) -> ProverReport:
+        stats = RuleStatistics(phase=phase, path_count=None, branching=(), nonlinear=())
+        return _report({"r": "TIMEOUT"}, statistics={RulePath(rule="r"): stats}, halted=True)
+
+    assert "### K8." in _report_note(stopped(StaticAnalysis()))
+    assert "### K8." not in _report_note(stopped(Solving(4, 50, 2, 10)))
+
+
+def test_the_gate_pushes_the_stand_in_recipe_when_one_function_holds_the_time():
+    def stopped(branching: int | None, nonlinear: int | None) -> ProverReport:
+        stats = RuleStatistics(
+            phase=Solving(4, 50, 2, 10),
+            path_count=None,
+            branching=() if branching is None else (Hotspot("f", branching),),
+            nonlinear=() if nonlinear is None else (Hotspot("g", nonlinear),),
+        )
+        return _report({"r": "TIMEOUT"}, statistics={RulePath(rule="r"): stats}, halted=True)
+
+    assert "### K8." in _report_note(stopped(DOMINANT_SHARE, None))
+    assert "### K8." in _report_note(stopped(10, DOMINANT_SHARE + 30))
+    assert "### K8." not in _report_note(stopped(DOMINANT_SHARE - 1, DOMINANT_SHARE - 1))
+    assert "### K8." not in _report_note(stopped(None, None))
+
+
+def test_the_gate_pushes_the_halted_job_recipe_when_the_job_hit_its_limit():
+    assert "### K9." in _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}, halted=True))
+    assert "### K9." not in _report_note(_report({"r": "TIMEOUT", "s": "VERIFIED"}))
+
+
+def test_the_cvlr_author_reads_the_prover_report_whole() -> None:
+    """An error's ``[NNNN]`` text and its ``source:`` chain reach the author only through the
+    report, and a summarized report rewrites every violation as something to fix."""
+    model = AuthorModel()
+    model.bind(SimpleNamespace())  # type: ignore[arg-type]
+    handler = CexAnalysis(store=_store(), model=model).handler({"messages": []})  # type: ignore[arg-type]
+    assert isinstance(handler, TrivialFanoutCexHandler)
+    assert handler.summarization_threshold is None
+
+
+def _last(streak: int) -> LastVerdicts:
+    return LastVerdicts(status={}, incomplete=[], unverdicted=[], draft="d", timeout_streak=streak)
+
+
+def test_the_timeout_streak_counts_runs_in_a_row_with_a_timed_out_rule():
+    timed_out: dict[str, StatusCodes] = {"a": "VERIFIED", "b": "TIMEOUT"}
+    assert timeout_streak(timed_out, None) == 1
+    assert timeout_streak(timed_out, _last(2)) == 3
+
+
+def test_a_run_with_no_timed_out_rule_ends_the_streak():
+    assert timeout_streak({"a": "VERIFIED", "b": "VIOLATED"}, _last(5)) == 0
+
+
+def test_the_note_tells_the_author_to_stop_restating_only_once_the_streak_is_long():
+    status: dict[str, StatusCodes] = {"b": "TIMEOUT"}
+
+    def note(streak: int) -> str:
+        return _verdicts_note(status, {}, ["b"], [], stamped=False, timeout_streak=streak)
+
+    assert "Do not restate" not in note(TIMEOUT_STREAK_WARNING - 1)
+    assert f"{TIMEOUT_STREAK_WARNING} runs in a row" in note(TIMEOUT_STREAK_WARNING)

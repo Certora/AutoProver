@@ -183,6 +183,16 @@ def compose_env(
     return "\n".join(p.rstrip("\n") for p in parts) + "\n"
 
 
+def extend_composite(package_composite: str, unit_layer: str) -> str:
+    """A unit's composite, from the package composite the scaffold wrote and the unit's layer.
+
+    The same text as :func:`compose_env` with ``unit_layer``, for a caller that has the package
+    composite on disk but not the dialect it was spelled in."""
+    if not unit_layer:
+        return package_composite
+    return package_composite.rstrip("\n") + "\n" + unit_layer.rstrip("\n") + "\n"
+
+
 #: A summary body. A ``#[type(...)]`` annotation is optional. Omitting it means
 #: the return is unconstrained, which is the usual case for a formatting path
 #: nothing asserts over.
@@ -250,9 +260,11 @@ class TuningFiles:
         drop one of the two.
         """
         self.envs_dir.mkdir(parents=True, exist_ok=True)
-        self.composite_path(SUMMARIES).write_text(
-            compose_env(SUMMARIES, unit_layer=render_layer(directives), dialect=self.dialect)
-        )
+        self.composite_path(SUMMARIES).write_text(self.summaries_text(directives))
+
+    def summaries_text(self, directives: tuple[SummaryDirective, ...]) -> str:
+        """What :meth:`write` puts in the summaries file this unit's conf names."""
+        return compose_env(SUMMARIES, unit_layer=render_layer(directives), dialect=self.dialect)
 
     def ensure_composite(self) -> None:
         """Create this unit's summaries composite when the conf's file is absent.
@@ -279,6 +291,16 @@ class TuningFiles:
             for family in ENV_FAMILIES
             if not (self.envs_dir / family.composite).is_file()
         )
+
+
+def layer_patterns(layer: str) -> tuple[str, ...]:
+    """The symbol patterns in a summaries layer written as :func:`render_layer` writes one: every
+    line that is not a ``;`` comment or a ``#[type(...)]`` annotation."""
+    return tuple(
+        line
+        for raw in layer.splitlines()
+        if (line := raw.strip()) and not line.startswith((";", "#["))
+    )
 
 
 def merge_summaries(

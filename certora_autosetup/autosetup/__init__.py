@@ -12,10 +12,11 @@ This package handles the setup phase of the PreAudit pipeline:
 """
 
 from certora_autosetup.autosetup.autosetup import Autosetup
-from certora_autosetup.autosetup.types import AutosetupConfig, AutosetupResult
+from certora_autosetup.autosetup.types import AutosetupConfig, AutosetupResult, ProjectBuildResult
 
 __all__ = [
     "Autosetup",
     "AutosetupConfig",
     "AutosetupResult",
+    "ProjectBuildResult",
 ]

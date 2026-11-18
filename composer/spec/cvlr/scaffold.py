@@ -33,20 +33,26 @@ AutoProver's files are rewritten whenever they differ from what the scaffold wou
 starting configuration reaches the build. Nothing else under ``src/certora/`` is touched.
 
 The project's files are edited, never replaced. Each edit is planned only when what it adds is
-missing, so a second run changes nothing. A source file only gains lines: the harness declaration
-at its end, and on Soroban a token client's twin under the feature
-(:mod:`composer.spec.cvlr.soroban_tokens`). A manifest is edited as a TOML document
+missing, so a second run changes nothing. A source file gains lines: the harness declaration at its
+end, on Soroban its contract types' arbitrary values, and a token client's twin under the feature
+when the run models tokens (:mod:`composer.spec.cvlr.soroban_tokens`). A manifest is edited as a
+TOML document
 (:class:`~composer.cargo.manifest.ManifestEditor`): keys go into the tables that already hold
-them, and everything the scaffold does not add comes back as it was, comments included.
+them, and everything the scaffold does not add comes back as it was, comments included. A
+framework program's sources are the exception: a file that makes the crate ``no_std`` or installs
+an allocator or panic handler is rewritten whole to gate those off under the feature
+(:class:`SourceEdit`), and :func:`apply` writes that rewrite only over the text it was planned
+against.
 
 ``sources`` includes ``Cargo.toml``. ``.certora_sources`` is what the report and the counterexample
 analyzer read, and a source tree with no manifest cannot be rebuilt. CVLR versions come from the
 reference set.
 """
 
+import os
 import re
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from importlib.resources import files
 from pathlib import Path
@@ -74,6 +80,7 @@ from composer.spec.cvlr.reference import (
     ChainReference,
     CrateRelease,
     CrateRequirement,
+    HarnessShim,
     commit_patches,
 )
 
@@ -98,18 +105,16 @@ SHARED_OBJECT_TYPE = "cdylib"
 #: ``first_example`` has ``certora = []``.
 NO_ENTRYPOINT_FEATURE = CargoFeature("no-entrypoint")
 
-#: What keeps the SDK's ``entrypoint!`` from installing its global allocator. The macro's
-#: ``custom_heap_default!`` checks the *calling* crate's ``custom-heap`` feature, in ``solana-program``
-#: 2.x and ``solana-program-entrypoint`` 3.x alike. Enabled by ``certora`` for a package that calls
-#: the macro and has no ``no-entrypoint`` to turn off: stake's program calls ``entrypoint!``
-#: unconditionally. The program's bump allocator writes the heap at a fixed address, and a rule that
-#: also allocates through ``__rust_alloc`` fails with Prover error 3309, "Conflicting allocation/usage
-#: of heap memory".
-CUSTOM_HEAP_FEATURE = CargoFeature("custom-heap")
+#: An invocation of an ``entrypoint!`` or ``entrypoint_no_alloc!`` macro. On a platform whose macro
+#: installs an allocator the calling crate can switch off
+#: (:attr:`~composer.spec.cvlr.reference.PlatformGeneration.heap_opt_out`), ``certora`` turns that
+#: switch on for a package that calls the macro and has no ``no-entrypoint`` to turn off: stake's
+#: program calls ``entrypoint!`` unconditionally. Searched with comments removed (:data:`_COMMENT`).
+_ENTRYPOINT_MACRO = re.compile(r"\bentrypoint(?:_no_alloc)?!\s*[(\[{]")
 
-#: An invocation of the SDK's ``entrypoint!`` or ``entrypoint_no_alloc!``, which both install the
-#: allocator.
-_ENTRYPOINT_MACRO = re.compile(r"\bentrypoint(?:_no_alloc)?![ \t]*[(\[{]")
+#: A Rust line or block comment. Block comments nest in Rust; a nested one leaves its tail behind,
+#: which only matters if that tail spells a macro call.
+_COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.DOTALL)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -138,16 +143,16 @@ class AppendSection:
 
 
 @dataclass(frozen=True)
-class EditSource:
-    """Lines added inside one of the project's source files.
+class SourceEdit:
+    """One of the project's own source files, rewritten.
 
-    :func:`apply` writes ``edited`` only over ``original``. A file changed since planning is
-    :class:`ScaffoldStale`.
+    The whole file is recorded as planned and as it will be, so :func:`apply` writes ``after`` only
+    over the text that was planned against and is :class:`ScaffoldStale` otherwise.
     """
 
     path: Path
-    original: str
-    edited: str
+    before: str
+    after: str
     why: str
 
 
@@ -171,7 +176,7 @@ class EditManifest:
     additions: tuple[Addition, ...]
 
 
-type Change = Write | AppendSection | EditSource | EditManifest
+type Change = Write | AppendSection | SourceEdit | EditManifest
 
 
 @dataclass(frozen=True)
@@ -210,8 +215,8 @@ class ScaffoldPlan:
                     lines.append(f"  write {path} — {why}")
                 case AppendSection(path=path, why=why):
                     lines.append(f"  extend {path} — {why}")
-                case EditSource(path=path, why=why):
-                    lines.append(f"  edit {path} — {why}")
+                case SourceEdit(path=path, why=why):
+                    lines.append(f"  rewrite {path} — {why}")
                 case EditManifest(path=path, additions=additions):
                     lines += [f"  edit {path} {a.edit.describe()} — {a.why}" for a in additions]
         lines += [f"  ok {note}" for note in self.satisfied]
@@ -221,8 +226,8 @@ class ScaffoldPlan:
 
 
 class ScaffoldStale(RuntimeError):
-    """A manifest the plan edits gained, after planning, something the plan adds, or a source file
-    the plan edits changed."""
+    """A file the plan edits changed after planning: a manifest gained something the plan adds,
+    or a source file the plan rewrites is no longer the text it was planned against."""
 
 
 class ScaffoldBlocked(RuntimeError):
@@ -324,6 +329,7 @@ def _soroban_token_model_source(reference: ChainReference) -> str:
 
 def _harness_files(
     dialect: PathDialect,
+    shim: HarnessShim | None = None,
     *,
     tuning_files: bool = True,
     nondet_helpers: str | None = None,
@@ -334,16 +340,26 @@ def _harness_files(
     ``mod.rs`` declares ``specs`` as ``pub``. ``cvlr::mock_fn(with = crate::certora::specs::…)``
     expands in the program's own file, outside ``certora``, so the path has to be visible from
     there. ``certora`` itself stays private. Under the feature gate the module exists only in a
-    verification build, and it adds nothing to the crate's public API.
+    verification build, and it adds nothing to the crate's public API. A ``shim`` is declared the
+    same way, beside ``specs``, for the same reason.
 
     ``specs/mod.rs`` is written empty so the module exists before any rule file does. A module
     created later is one a later step can forget to declare.
     """
     root = _harness_source(Path("mod.rs"))
     helpers: tuple[Write, ...] = ()
+    if shim is not None:
+        root += f"pub mod {shim.module};\n"
+        helpers += (
+            Write(
+                path=HARNESS_DIR / f"{shim.module}.rs",
+                contents=_harness_source(Path(f"{shim.template}.rs")),
+                why=f"the {shim.module} account helpers, which no published CVLR crate provides",
+            ),
+        )
     if nondet_helpers is not None:
         root += f"pub mod {SOROBAN_NONDET};\n"
-        helpers = (
+        helpers += (
             Write(
                 path=HARNESS_DIR / f"{SOROBAN_NONDET}.rs",
                 contents=nondet_helpers,
@@ -380,6 +396,126 @@ def _harness_files(
             for family in (ENV_FAMILIES if tuning_files else ())
         ),
     )
+
+
+_CERTORA_OFF = f'not(feature = "{DEFAULT_FEATURE}")'
+_GATE = f"#[cfg({_CERTORA_OFF})]"
+
+#: The start of a crate-level attribute, which is all ``no_std`` can be. Anchored at a line's start
+#: so a ``//!`` doc line that quotes one is left alone.
+_INNER_ATTRIBUTE = re.compile(r"^(?P<indent>[ \t]*)#!\[", re.MULTILINE)
+
+#: A framework macro that installs a global allocator or a panic handler, called by any path, or
+#: the ``#[panic_handler]`` attribute. ``program_entrypoint!`` installs neither and is not matched.
+_RUNTIME_ITEM = re.compile(
+    r"^(?P<indent>[ \t]*)(?P<item>#\[\s*panic_handler\s*\]"
+    r"|(?:::)?(?:\w+\s*::\s*)*"
+    r"(?:entrypoint|entrypoint_with_r2|lazy_entrypoint|default_allocator|no_allocator"
+    r"|nostd_panic_handler)\s*!)",
+    re.MULTILINE,
+)
+
+
+def _closing(source: str, start: int) -> int | None:
+    """The index of the bracket that closes the one at ``start``, or ``None`` if it is unclosed.
+
+    String literals are skipped, so a ``]`` or ``)`` in a ``feature = "…"`` does not count.
+    """
+    depth = 0
+    quoted = False
+    i = start
+    while i < len(source):
+        c = source[i]
+        if quoted:
+            if c == "\\":
+                i += 1
+            elif c == '"':
+                quoted = False
+        elif c == '"':
+            quoted = True
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    return None
+
+
+def _top_level_args(text: str) -> list[str]:
+    """``text`` split at the commas outside any bracket or string, each part stripped."""
+    parts: list[str] = []
+    depth = 0
+    quoted = False
+    begin = 0
+    for i, c in enumerate(text):
+        if quoted:
+            quoted = c != '"' or text[i - 1] == "\\"
+        elif c == '"':
+            quoted = True
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "," and depth == 0:
+            parts.append(text[begin:i].strip())
+            begin = i + 1
+    parts.append(text[begin:].strip())
+    return [part for part in parts if part]
+
+
+def _std_attribute(body: str, indent: str) -> str | None:
+    """The crate attribute ``#![body]`` with ``no_std`` gated off under the feature, or ``None``
+    when it does not make the crate ``no_std`` or already leaves it ``std`` under the feature.
+
+    In a ``cfg_attr`` that applies several attributes, only ``no_std`` moves to an attribute of its
+    own. The others keep the condition they had.
+    """
+    body = body.strip()
+    if body == "no_std":
+        return f"{indent}#![cfg_attr({_CERTORA_OFF}, no_std)]"
+    opened = re.match(r"cfg_attr\s*\(", body)
+    if opened is None or _closing(body, opened.end() - 1) != len(body) - 1:
+        return None
+    condition, *attributes = _top_level_args(body[opened.end() : -1])
+    if "no_std" not in attributes or _CERTORA_OFF in condition:
+        return None
+    rest = [a for a in attributes if a != "no_std"]
+    kept = f"{indent}#![cfg_attr({condition}, {', '.join(rest)})]\n" if rest else ""
+    return f"{kept}{indent}#![cfg_attr(all({condition}, {_CERTORA_OFF}), no_std)]"
+
+
+def _with_std(source: str) -> str:
+    """``source`` as it has to be to compile with the harness, which links ``std`` through cvlr.
+
+    ``no_std`` is gated off under the feature, so a rule can use what ``std`` has. ``std`` brings
+    its own panic handler, so one the crate defines is a duplicate of it and is gated off. So are
+    the framework's allocators: the bump allocator writes the heap at a fixed address, and a rule
+    that allocates through ``__rust_alloc`` beside it fails with Prover error 3309. ``entrypoint!``
+    installs both, and goes with them, as ``no-entrypoint`` takes it out of an SDK program.
+    """
+    pieces: list[str] = []
+    copied = 0
+    for match in _INNER_ATTRIBUTE.finditer(source):
+        if match.start() < copied:
+            continue
+        close = _closing(source, match.end() - 1)
+        if close is None:
+            break
+        rewritten = _std_attribute(source[match.end() : close], match.group("indent"))
+        if rewritten is not None:
+            pieces += [source[copied : match.start()], rewritten]
+            copied = close + 1
+    source = "".join(pieces) + source[copied:]
+
+    def gate(match: re.Match[str]) -> str:
+        preceding = source[: match.start()].rstrip("\n").rsplit("\n", 1)[-1].strip()
+        if preceding == _GATE:
+            return match.group(0)
+        return f"{match.group('indent')}{_GATE}\n{match.group(0)}"
+
+    return _RUNTIME_ITEM.sub(gate, source)
 
 
 def _lib_declaration() -> str:
@@ -521,7 +657,8 @@ class _OnGeneration:
 
 @dataclass(frozen=True)
 class _OffGeneration:
-    """The package links a copy of ``witness`` from another generation."""
+    """The package links a copy of ``witness`` from another generation. ``witness`` is the crate at
+    the newest line the generation accepts, which is what a refusal tells the author to move to."""
 
     witness: CrateRequirement
     builds: tuple[str, ...]
@@ -530,45 +667,52 @@ class _OffGeneration:
 def _read_platform(
     workspace: Workspace, package: CratePackage, reference: ChainReference
 ) -> _OnGeneration | _OffGeneration | None:
-    """Which generation ``package`` is on, as far as ``reference`` can tell; ``None`` when it links
+    """Which generation ``package`` is on, as far as ``reference`` can tell. ``None`` when it links
     none of the reference's witnesses.
 
-    The first witness the project resolves decides. Later ones are not consulted. The list is
-    most-specific first because a target on a newer generation resolves only the specific crate.
-    Falling through to a broader witness after a specific one has answered would undo that order.
-    Every copy of that witness linked into ``package`` has to be on the generation: one that is not
-    still meets CVLR's types wherever its dependents hand an account to a helper. A copy only
-    another member links, or only a dev-dependency pulls in, is never compiled with the harness.
+    The first witness the package resolves decides, and later witnesses are not consulted. The list
+    is most-specific first, because a newer generation resolves only the specific crate. A crate
+    listed at several lines is one witness, on the generation at any of them. Every copy of that
+    witness linked into ``package`` has to be on the generation. A copy from another generation
+    still meets CVLR's types when a dependent passes an account to a helper. A copy that only
+    another member links, or that only a dev-dependency pulls in, is not compiled with the harness.
     """
     linked = workspace.linked_into(package)
-    for witness in reference.platform.witnesses:
-        copies = [c for c in linked if c.name == witness.name]
+    witnesses = reference.platform.witnesses
+    for name in dict.fromkeys(w.name for w in witnesses):
+        copies = [c for c in linked if c.name == name]
         if not copies:
             continue
-        off = tuple(c.version for c in copies if _generation(c.version) != _generation(witness.line))
+        lines = [w for w in witnesses if w.name == name]
+        on = {_generation(w.line) for w in lines}
+        off = tuple(c.version for c in copies if _generation(c.version) not in on)
         if off:
-            return _OffGeneration(witness, off)
-        return _OnGeneration(witness, tuple(c.version for c in copies))
+            return _OffGeneration(lines[0], off)
+        return _OnGeneration(lines[0], tuple(c.version for c in copies))
     return None
 
 
 def select_generation(
     workspace: Workspace, package: CratePackage, candidates: Sequence[ChainReference]
 ) -> ChainReference | None:
-    """The reference set in ``candidates`` for the platform generation ``package`` is on, or
-    ``None`` when it is on none of them.
+    """The reference set in ``candidates`` for the platform generation ``package`` is on.
 
-    Evidence is required: a package that links none of a reference's witnesses is not on that
-    generation. ``candidates`` come newest first (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`),
-    and the first match wins.
+    ``None`` when the package links none of their witnesses. ``candidates`` are newest first
+    (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`), and the first match wins, with one
+    exception. A framework's generation matches only a package that declares the framework itself.
+    A framework a dependency links is that dependency's business: the program's handlers take the
+    account type of whatever it does declare. Such a package still matches when no other
+    generation does, so that :func:`_check_shim_dependency` can say what it is missing.
     """
+    on = [
+        reference
+        for reference in candidates
+        if isinstance(_read_platform(workspace, package, reference), _OnGeneration)
+    ]
+    manifest = read_manifest(package.root / "Cargo.toml")
     return next(
-        (
-            reference
-            for reference in candidates
-            if isinstance(_read_platform(workspace, package, reference), _OnGeneration)
-        ),
-        None,
+        (r for r in on if r.shim is None or manifest.declares(r.shim.requires)),
+        next(iter(on), None),
     )
 
 
@@ -577,12 +721,11 @@ def _check_platform(
 ) -> None:
     """Refuse to pin a CVLR release the project's platform generation cannot use.
 
-    A target on ``solana-program`` 1.18 given ``cvlr-solana`` 0.5.x does not warn. It fails to
-    compile, because the two generations have different ``AccountInfo`` types and the chain
-    crate's helpers return the other one. The reference set already records which generation a
-    chain crate requires (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This is
-    where a project that is on a different one is caught, and it has to be caught before the pin
-    is written. :func:`_read_platform` is how the generation is read.
+    ``solana-program`` 1.18 and ``cvlr-solana`` 0.5.x have different ``AccountInfo`` types, and the
+    chain crate's helpers return the other generation's type, so that combination does not compile.
+    The reference records the generation a chain crate requires
+    (:class:`~composer.spec.cvlr.reference.PlatformGeneration`). This check runs before the pin is
+    written. :func:`_read_platform` reads the generation.
     """
     match _read_platform(workspace, package, reference):
         case _OffGeneration(witness=witness, builds=builds):
@@ -702,13 +845,12 @@ def _check_pins(
 ) -> None:
     """Refuse a project that is on a CVLR release other than the one this build is pinned to.
 
-    One line is supported per platform generation, and ``reference`` is the one for this project's
-    (:func:`select_generation`). Everything this scaffold writes belongs to it: the pins, the specializations added beside
-    them, and the env files :mod:`composer.spec.cvlr.tuning` composes. A project already on
-    another line cannot be given those without putting two CVLR generations in one graph, which
-    does not compile. This scaffold used to resolve that by deferring to the project's pin and
-    withholding the specializations; a run set up that way is on a configuration nothing else
-    here is built for, so it is refused instead.
+    One line is supported per platform generation, and ``reference`` is the set
+    :func:`select_generation` picked for this project. Everything this scaffold writes belongs to
+    it: the pins, the specializations added beside them, and the env files
+    :mod:`composer.spec.cvlr.tuning` composes. A project already on another line cannot be given
+    those without putting two CVLR generations in one graph, which does not compile, so it is
+    refused.
 
     Two readings, because neither alone covers the project. The resolved graph is exact and
     settles a crate some member already depends on. The manifests settle a crate declared in
@@ -806,24 +948,57 @@ def local_dependencies(workspace: Workspace, package: CratePackage) -> tuple[Cra
     )
 
 
+#: Directories beside a library's root that cargo builds as other targets, or writes to.
+_NOT_LIBRARY = frozenset({"target", "tests", "examples", "benches"})
+
+
+def _library_sources(package: CratePackage) -> Iterator[tuple[Path, str]]:
+    """The ``.rs`` files of ``package``'s library, with their text, ``lib.rs`` included.
+
+    Every file under the library root's directory, which is where its modules are, except the
+    harness, and except what is not the library's when that directory is the package root: build
+    output, the other cargo targets, hidden directories and other packages. A file that is not
+    UTF-8 is skipped. It is not Rust source cargo would compile, and nothing could be written back
+    over it.
+    """
+    if package.lib is None:
+        return
+    top = package.lib.src_path.parent
+    harness = package.root / HARNESS_DIR
+    for directory, subdirectories, names in os.walk(top):
+        here = Path(directory)
+        subdirectories[:] = sorted(
+            d
+            for d in subdirectories
+            if not d.startswith(".")
+            and not (here == package.root and d in _NOT_LIBRARY)
+            and here / d != harness
+            and not (here / d / "Cargo.toml").is_file()
+        )
+        for name in sorted(n for n in names if n.endswith(".rs")):
+            try:
+                yield here / name, (here / name).read_text()
+            except UnicodeDecodeError:
+                continue
+
+
 def _calls_entrypoint(package: CratePackage) -> bool:
-    """Whether ``package``'s own sources invoke the SDK's entrypoint macro."""
-    source = package.root / "src"
+    """Whether ``package``'s library calls ``entrypoint!`` or ``entrypoint_no_alloc!``."""
     return any(
-        _ENTRYPOINT_MACRO.search(path.read_text(errors="replace"))
-        for path in source.rglob("*.rs")
-        if not path.is_relative_to(source / "certora")
+        _ENTRYPOINT_MACRO.search(_COMMENT.sub(" ", text)) for _, text in _library_sources(package)
     )
 
 
-def _entrypoint_switch(package: CratePackage) -> CargoFeature | None:
+def _entrypoint_switch(package: CratePackage, reference: ChainReference) -> CargoFeature | None:
     """The feature that keeps ``package``'s entrypoint, and the allocator it installs, out of a
-    verification build: ``no-entrypoint`` when the package declares it, else ``custom-heap`` when it
-    calls ``entrypoint!``, else nothing."""
+    verification build: ``no-entrypoint`` when the package declares it, else the platform's
+    :attr:`~composer.spec.cvlr.reference.PlatformGeneration.heap_opt_out` when it calls
+    ``entrypoint!``, else nothing."""
     if NO_ENTRYPOINT_FEATURE in package.features:
         return NO_ENTRYPOINT_FEATURE
-    if _calls_entrypoint(package):
-        return CUSTOM_HEAP_FEATURE
+    heap_opt_out = reference.platform.heap_opt_out
+    if heap_opt_out is not None and _calls_entrypoint(package):
+        return heap_opt_out
     return None
 
 
@@ -831,7 +1006,7 @@ def _certora_feature(package: CratePackage, reference: ChainReference) -> list[s
     """What ``package``'s ``certora`` feature turns on within ``package`` itself: the CVLR
     crates, and the entrypoint switch (:func:`_entrypoint_switch`)."""
     enables = [f"dep:{c.name}" for c in reference.scaffold_crates()]
-    if (switch := _entrypoint_switch(package)) is not None:
+    if (switch := _entrypoint_switch(package, reference)) is not None:
         enables.insert(0, switch)
     return enables
 
@@ -977,11 +1152,12 @@ def _plan_package_manifest(
         enables = _certora_feature(package, reference) + [
             f"{dep.name}/{DEFAULT_FEATURE}" for dep in local_dependencies(workspace, package)
         ]
-        # A feature cargo does not know cannot be enabled, so `custom-heap` is declared when the
+        # A feature cargo does not know cannot be enabled, so the heap opt-out is declared when the
         # package has not declared it.
+        heap_opt_out = reference.platform.heap_opt_out
         declared: tuple[tuple[str, TomlValue], ...] = (
-            ((CUSTOM_HEAP_FEATURE, []),)
-            if CUSTOM_HEAP_FEATURE in enables and CUSTOM_HEAP_FEATURE not in features
+            ((heap_opt_out, []),)
+            if heap_opt_out is not None and heap_opt_out in enables and heap_opt_out not in features
             else ()
         )
         plan.add_manifest_edit(
@@ -1033,7 +1209,7 @@ def _plan_token_model(package: CratePackage, relative: Path, plan: _PlanBuilder)
     (:mod:`composer.spec.cvlr.soroban_tokens`). Returns whether the package has one, and so needs
     the model.
 
-    Planned before anything appends to the same files: an :class:`EditSource` applies only over
+    Planned before anything appends to the same files: a :class:`SourceEdit` applies only over
     the text it was planned from.
     """
     edits = soroban_tokens.plan_token_edits(package.root, skip=package.root / HARNESS_DIR)
@@ -1051,10 +1227,10 @@ def _plan_token_model(package: CratePackage, relative: Path, plan: _PlanBuilder)
             f"`{s.name}`" for s in edits.sites if s.path == path and not s.done
         )
         plan.add_change(
-            EditSource(
+            SourceEdit(
                 path=rel(path),
-                original=original,
-                edited=edited,
+                before=original,
+                after=edited,
                 why=f"under the feature, {names} is the in-process token model",
             )
         )
@@ -1073,10 +1249,13 @@ def _plan_harness(
     *,
     token_model: bool = False,
 ) -> None:
+    shim = reference.shim
+    if shim is not None:
+        _check_shim_dependency(package, relative, shim, plan)
     helpers = _soroban_nondet_source(reference) if chain.nondet_helpers else None
     model = _soroban_token_model_source(reference) if token_model else None
     for file in _harness_files(
-        dialect, tuning_files=chain.tuning_files, nondet_helpers=helpers, token_model=model
+        dialect, shim, tuning_files=chain.tuning_files, nondet_helpers=helpers, token_model=model
     ):
         on_disk = package.root / file.path
         if on_disk.is_file() and on_disk.read_text() == file.contents:
@@ -1084,33 +1263,90 @@ def _plan_harness(
         else:
             plan.add_change(replace(file, path=relative / file.path))
 
-    if package.lib is not None:
-        lib_rel = _project_relative(package.lib.src_path, package.root)
-        # cargo metadata reports a `[lib] path` without checking the file exists.
-        if not package.lib.src_path.is_file():
-            plan.add_blocked(
-                Blocked(
-                    path=relative / "Cargo.toml",
-                    problem=(
-                        f"{package.name}'s library source, {relative / lib_rel}, does not exist, "
-                        f"so there is no crate to add the harness to"
-                    ),
-                    resolution=(
-                        "point `[lib] path` at the program's source, or scaffold the package that "
-                        "has it"
-                    ),
-                )
+
+_STD_WHY = (
+    "gate no_std, the panic handler and the allocator off under the feature: cvlr links std, "
+    "whose panic handler would be a second one (E0152), and a rule's allocations would collide "
+    "with the bump allocator's (Prover error 3309)"
+)
+_DECLARATION_WHY = "pull the harness into the crate, gated on the feature"
+
+
+def _plan_sources(
+    package: CratePackage, relative: Path, shim: HarnessShim | None, plan: _PlanBuilder
+) -> None:
+    """The changes to the library's own sources: the harness module's declaration in its root, and
+    for a program on a framework (``shim``), its runtime gated off under the feature
+    (:func:`_with_std`), as hand-written Pinocchio verification projects do.
+
+    An SDK program needs no rewrite. It builds with ``std``, and ``no-entrypoint`` or the
+    platform's heap switch takes its allocator out. A framework program has neither, and may
+    install its allocator or panic handler anywhere in the library, so every file is read. A root
+    that needs both gets one :class:`SourceEdit` that carries the declaration too.
+    """
+    if package.lib is None:
+        return
+    lib = package.lib.src_path
+    lib_rel = relative / _project_relative(lib, package.root)
+    # cargo metadata reports a `[lib] path` without checking the file exists.
+    if not lib.is_file():
+        plan.add_blocked(
+            Blocked(
+                path=relative / "Cargo.toml",
+                problem=(
+                    f"{package.name}'s library source, {lib_rel}, does not exist, so there is no "
+                    f"crate to add the harness to"
+                ),
+                resolution=(
+                    "point `[lib] path` at the program's source, or scaffold the package that has it"
+                ),
             )
-        elif _MOD_CERTORA.search(package.lib.src_path.read_text()):
-            plan.add_satisfied(f"{relative / lib_rel} already declares the harness module")
-        else:
+        )
+        return
+
+    root_text: str | None = None
+    for source, before in _library_sources(package):
+        if source == lib:
+            root_text = before
+            continue
+        after = _with_std(before) if shim is not None else before
+        if after != before:
             plan.add_change(
-                AppendSection(
-                    path=relative / lib_rel,
-                    contents=_lib_declaration(),
-                    why="pull the harness into the crate, gated on the feature",
+                SourceEdit(
+                    path=relative / _project_relative(source, package.root),
+                    before=before,
+                    after=after,
+                    why=_STD_WHY,
                 )
             )
+    if root_text is None:
+        plan.add_blocked(
+            Blocked(
+                path=lib_rel,
+                problem=f"{lib_rel} is not UTF-8 text, so the harness cannot be declared in it",
+                resolution="save it as UTF-8",
+            )
+        )
+        return
+
+    before = root_text
+    after = _with_std(before) if shim is not None else before
+    declared = _MOD_CERTORA.search(before) is not None
+    if declared:
+        plan.add_satisfied(f"{lib_rel} already declares the harness module")
+    if after != before:
+        plan.add_change(
+            SourceEdit(
+                path=lib_rel,
+                before=before,
+                after=after if declared else after + _lib_declaration(),
+                why=_STD_WHY if declared else f"{_STD_WHY}; {_DECLARATION_WHY}",
+            )
+        )
+    elif not declared:
+        plan.add_change(
+            AppendSection(path=lib_rel, contents=_lib_declaration(), why=_DECLARATION_WHY)
+        )
 
 
 def _plan_nondet_impls(
@@ -1150,7 +1386,33 @@ def _plan_nondet_impls(
         )
 
 
-def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
+def _check_shim_dependency(
+    package: CratePackage, relative: Path, shim: HarnessShim, plan: _PlanBuilder
+) -> None:
+    """Refuse a package whose manifest does not name the crate ``shim``'s ``use`` lines name.
+
+    A crate can only name its own dependencies, so a framework the package reaches only through
+    another crate leaves the shim unable to compile. The manifest is read rather than the graph:
+    the graph does not say under which name the package declares the crate. A declaration for some
+    targets only counts: the harness is built for the one the program is.
+    """
+    if plan.read(relative / "Cargo.toml").declares(shim.requires):
+        return
+    plan.add_blocked(
+        Blocked(
+            path=relative / "Cargo.toml",
+            problem=(
+                f"{package.name} does not declare {shim.requires} as a dependency of its own, and "
+                f"{shim.describe()} names it"
+            ),
+            resolution=f"add {shim.requires} to {package.name}'s [dependencies], unrenamed",
+        )
+    )
+
+
+def _plan_forks(
+    workspace: Workspace, package: CratePackage, reference: ChainReference, plan: _PlanBuilder
+) -> None:
     """Add ``[patch.crates-io]`` entries for the chain's verification forks.
 
     The table is workspace-level, so it goes on the workspace manifest with the rest of the plan.
@@ -1165,7 +1427,10 @@ def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuil
     """
     path = Path("Cargo.toml")
     match forks.plan_overrides(
-        workspace, reference.forks, already_redirected=forks.already_patched(plan.read(path))
+        workspace,
+        package,
+        reference.forks,
+        already_redirected=forks.already_patched(plan.read(path)),
     ):
         case forks.ForkRefused(blocked):
             for b in blocked:
@@ -1183,17 +1448,16 @@ def _plan_forks(workspace: Workspace, reference: ChainReference, plan: _PlanBuil
 
 
 def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _PlanBuilder) -> None:
-    """Add ``[patch.crates-io]`` entries reading the reference set's unpublished releases from the
-    commits they were cut from (:class:`~composer.spec.cvlr.reference.GitCommit`).
+    """Add ``[patch.crates-io]`` entries for releases cargo reads from a commit
+    (:class:`~composer.spec.cvlr.reference.GitCommit`).
 
-    Only for the crates the project is given, and the crates each was released with. A patch for a
-    crate nothing depends on is one cargo warns about on every build.
+    The patches are the crates :meth:`~composer.spec.cvlr.reference.ChainReference.scaffold_crates`
+    gives the project. A patch for a crate nothing depends on makes cargo warn on every build.
 
-    A crate the project's patch table already names is checked against the resolved graph rather
-    than redirected again: a second entry for one crate is a manifest cargo refuses. The pinned
-    commit is satisfied. So is a crate the graph does not resolve yet, because the graph can
-    predate the table. Any other source blocks, since replacing the project's entry would replace
-    somebody's decision, and building on it would verify against a release this build does not pin.
+    A crate the project's patch table already names is checked against the resolved graph. Cargo
+    refuses a second entry for one crate. The pinned commit is recorded as satisfied. So is a crate
+    the graph does not resolve yet, because the graph can be older than the table. Any other source
+    blocks: replacing the project's entry would verify a release this build does not pin.
     """
     path = Path("Cargo.toml")
     patched = forks.already_patched(plan.read(path))
@@ -1207,7 +1471,7 @@ def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _Pl
             plan.add_manifest_edit(
                 path,
                 AddTable(("patch", "crates-io", patch.name), (*preamble, *commit.patch_body())),
-                f"read {patch.name} {patch.version} from {commit.repo} at {commit.rev[:12]} "
+                f"read {patch.name} {patch.version} from {commit.repo} at {commit.rev} "
                 f"until it is on crates.io",
             )
             preamble = ()
@@ -1223,7 +1487,7 @@ def _plan_unpublished(workspace: Workspace, reference: ChainReference, plan: _Pl
         ):
             plan.add_satisfied(
                 f"{patch.name} {patch.version} is already read from {commit.repo} at "
-                f"{commit.rev[:12]}"
+                f"{commit.rev}"
             )
         else:
             elsewhere = ", ".join(
@@ -1274,16 +1538,19 @@ def plan_scaffold(
     relative = _project_relative(package.root, workspace.root)
     plan = _PlanBuilder(workspace.root)
     inherit = plan.read(Path("Cargo.toml")).workspace is not None
-    dialect = dialect_for(workspace, reference)
+    dialect = dialect_for(workspace, package, reference)
 
     _plan_workspace_manifest(reference, chain, plan)
+    # Before anything appends to the same files: a SourceEdit applies only over the text it was
+    # planned from.
     token_model = chain.token_model and _plan_token_model(package, relative, plan)
     _plan_harness(package, relative, dialect, reference, chain, plan, token_model=token_model)
+    _plan_sources(package, relative, reference.shim, plan)
     if chain.nondet_helpers:
         _plan_nondet_impls(package, relative, reference, plan)
     _plan_gitignore(workspace, plan)
     _plan_feature_forwarding(workspace, package, reference, chain, plan)
-    _plan_forks(workspace, reference, plan)
+    _plan_forks(workspace, package, reference, plan)
     _plan_unpublished(workspace, reference, plan)
     _plan_package_manifest(workspace, package, relative, reference, chain, plan, inherit=inherit)
     # Unconditional, both of them: the scaffold always writes the reference-set pin now, so the
@@ -1318,16 +1585,31 @@ def declare_unit_features(
     return tuple(wanted)
 
 
+def withdraw_unit_features(manifest: str, features: Sequence[CargoFeature]) -> str:
+    """``manifest`` without the declarations of ``features``: the inverse of
+    :func:`declare_unit_features`, for a tree that carries fewer units than the run declared."""
+    edited = ManifestEditor(manifest)
+    edited.remove(("features",), features)
+    return edited.text()
+
+
 def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
     """Carry out ``plan`` under ``root``, returning the paths it touched, in order.
 
     Refuses a plan that still has a :class:`Blocked` entry. A partial scaffold leaves the next
-    build with two possible causes.
+    build with two possible causes. For the same reason every file's new text is worked out, and
+    every :class:`ScaffoldStale` raised, before the first one is written.
     """
     if plan.blocked:
         raise ScaffoldBlocked(plan.blocked)
 
-    touched: list[Path] = []
+    texts: dict[Path, str] = {}
+
+    def current(target: Path) -> str | None:
+        if target in texts:
+            return texts[target]
+        return target.read_text() if target.is_file() else None
+
     for change in plan.changes:
         target = root / change.path
         # Every path in a plan comes from constants and from cargo metadata. A path outside the
@@ -1336,18 +1618,18 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
             raise ScaffoldOutsideProject(f"{target} escapes {root}")
         match change:
             case Write(contents=contents):
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(contents)
+                texts[target] = contents
             case AppendSection(contents=contents):
-                existing = target.read_text() if target.is_file() else ""
-                target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text(existing + contents)
-            case EditSource(original=original, edited=edited):
-                if not target.is_file() or target.read_text() != original:
+                texts[target] = (current(target) or "") + contents
+            case SourceEdit(before=before, after=after):
+                if current(target) != before:
                     raise ScaffoldStale(f"{change.path} changed after the scaffold was planned")
-                target.write_text(edited)
+                texts[target] = after
             case EditManifest(additions=additions):
-                edited = ManifestEditor.read(target)
+                existing = current(target)
+                if existing is None:
+                    raise ScaffoldStale(f"{change.path} was removed after the scaffold was planned")
+                edited = ManifestEditor(existing, origin=str(change.path))
                 for addition in additions:
                     try:
                         edited.apply(addition.edit, note=_ADDED)
@@ -1355,6 +1637,9 @@ def apply(plan: ScaffoldPlan, root: Path) -> tuple[Path, ...]:
                         raise ScaffoldStale(
                             f"{change.path} changed after the scaffold was planned: {exc}"
                         ) from exc
-                target.write_text(edited.text())
-        touched.append(change.path)
-    return tuple(touched)
+                texts[target] = edited.text()
+
+    for target, text in texts.items():
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+    return tuple(change.path for change in plan.changes)

@@ -100,6 +100,27 @@ def sandbox_cargo_home(workdir: str | Path) -> Path:
     return Path(workdir).resolve() / SANDBOX_CARGO_DIR
 
 
+def prepare_sandbox_cargo_home(workdir: str | Path) -> Path:
+    """:func:`sandbox_cargo_home`, created, with the user's global cargo config copied in.
+
+    Every cargo command that uses the private home calls this first, unconfined ones included:
+    the first is usually an online read or fetch, and without the config it would go without
+    registry mirrors, ``[source]`` replacement, or ``net.git-fetch-with-cli``.
+
+    ``credentials.toml`` is not copied. The private home is under the workdir, which a confined
+    build can read, so a token copied there is a token handed to its ``build.rs``. A registry
+    that needs one cannot be fetched from under confinement.
+    """
+    cargo_home = sandbox_cargo_home(workdir)
+    cargo_home.mkdir(parents=True, exist_ok=True)
+    shared_cargo = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+    for cfg in ("config.toml", "config"):
+        src = shared_cargo / cfg
+        if src.is_file() and not (cargo_home / cfg).exists():
+            shutil.copy(src, cargo_home / cfg)
+    return cargo_home
+
+
 def shared_cargo_ro_paths(cargo_home: str | Path) -> tuple[Path, ...]:
     """RO subtrees of the *shared* cargo home that sandboxed builds may need.
 
@@ -223,19 +244,8 @@ def rust_build_policy(
     for var in ("TMPDIR", "TMP", "TEMP"):
         child_env[var] = str(sandbox_tmp)
 
-    # Point CARGO_HOME at a PRIVATE per-run cargo home under the workdir (see
-    # sandbox_cargo_home for the reasoning). The shared ~/.cargo root is *not*
-    # granted RO; only bin/ is (above). Copy the user's global cargo config into
-    # the private home so registry mirrors / build settings still apply — that
-    # copy is trusted-host code, not a Landlock grant of the secrets file.
-    cargo_home = sandbox_cargo_home(wd)
-    cargo_home.mkdir(parents=True, exist_ok=True)
-    shared_cargo = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
-    for cfg in ("config.toml", "config"):
-        src = shared_cargo / cfg
-        if src.is_file() and not (cargo_home / cfg).exists():
-            shutil.copy(src, cargo_home / cfg)
-    child_env["CARGO_HOME"] = str(cargo_home)
+    # The shared ~/.cargo root is *not* granted RO; only bin/ is (above).
+    child_env["CARGO_HOME"] = str(prepare_sandbox_cargo_home(wd))
 
     return SandboxPolicy(
         rw_paths=rw_paths,

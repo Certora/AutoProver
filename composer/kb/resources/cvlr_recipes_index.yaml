@@ -51,3 +51,128 @@ recipes:
   - Clock::get
   - Rent::get
   - minimum_balance
+- id: K4
+  name: A loop the bound does not finish
+  triggers:
+  - A rule stops on `Unwinding condition in a loop`
+  - You are about to raise `loop_iter` or turn on `optimistic_loop`
+  - A property over a loop whose trip count is set by account data
+  channel: [CONF, RULE]
+  file: recipes/cvlr-k4-loop-the-bound-does-not-finish.md
+  pushed_on:
+  - generated: loopUnwinding
+  search_terms:
+  - loop_iter
+  - optimistic_loop
+- id: K5
+  name: '`Cannot overflow` on an inferred pointer'
+  triggers:
+  - "A rule stops on `Cannot overflow: inferred pointer` or `Cannot overflow: computing TAC map index`"
+  channel: [RULE, SKIP]
+  file: recipes/cvlr-k5-cannot-overflow-inferred-pointer.md
+  pushed_on:
+  - generated: cannotOverflow
+- id: K6
+  name: Taking a CPI out from under a handler
+  triggers:
+  - A handler performs a CPI and the property is about the handler's own bookkeeping
+  - A property about a token balance or a mint's supply across a CPI
+  - A rule stops on `[3003]` with `alloc/src/rc.rs` in the trace
+  - A VIOLATED rule over a value decoded back out of an instruction's bytes
+  channel: EDIT
+  file: recipes/cvlr-k6-taking-a-cpi-out-from-under-a-handler.md
+  search_terms:
+  - swap_import
+  - invoke_signed
+  - spl_token_transfer
+- id: K7
+  name: Descending to the program's state-transition core
+  triggers:
+  - A handler-level rule is blocked by a CPI, by account validation or by error formatting, and the
+    program has an accounting function below the handler
+  channel: RULE
+  file: recipes/cvlr-k7-descend-to-the-state-transition-core.md
+- id: K13
+  name: Acceptance through a `seeds` constraint
+  triggers:
+  - An acceptance property whose validation runs through a `seeds` constraint, including `init` on a
+    PDA
+  - A property that a non-canonical PDA is refused
+  channel: SKIP
+  file: recipes/cvlr-k13-acceptance-through-seeds.md
+  search_terms:
+  - find_program_address
+  - create_program_address
+- id: K14
+  name: Validating an accounts struct with `try_accounts`
+  triggers:
+  - A property enforced by the accounts struct's `#[account(...)]` constraints rather than by the
+    handler body
+  - You need a name `#[derive(Accounts)]` generates (the bumps type, the discriminant) and cannot find
+    it in the source
+  channel: RULE
+  file: recipes/cvlr-k14-validating-with-try-accounts.md
+  search_terms:
+  - try_accounts
+- id: K10
+  name: A rule the pointer analysis refuses
+  triggers:
+  - A rule ends in `[3308]` illegal dereference of an absolute address, or `[3006]` illegal store of
+    a stack pointer
+  - You are about to write a `summarize_for_prover` directive
+  channel: [MOCK, SKIP]
+  file: recipes/cvlr-k10-a-rule-the-pointer-analysis-refuses.md
+  pushed_on:
+  - error: 3308
+  - error: 3006
+- id: K11
+  name: State the analysis cannot size, variable-length collections and `swap_derive`
+  triggers:
+  - A rule ends in `[3005]` memcpy with dynamically sized length
+  - An internal error out of `ScalarDomain`
+  - A submission that fails with no per-rule verdicts at all
+  - You are about to ask the editor for a `swap_derive`
+  channel: [EDIT, SKIP]
+  file: recipes/cvlr-k11-state-the-analysis-cannot-size.md
+  pushed_on:
+  - error: 3005
+- id: K8
+  name: 'A rule that times out: its shape first, then a bounded stand-in'
+  triggers:
+  - A rule comes back TIMEOUT in a job that returned verdicts, or a probe rule that drives a function
+    alone times out
+  - A rule ranges over several account-list lengths or pre-state variants, multiplies two unbounded
+    `u64`s, or walks a distance nothing bounds
+  - A timed-out rule's statistics line says `static analysis`
+  - One function holds most of a timed-out rule's branching or nonlinear share, including a function
+    in a stand-in already in place
+  channel: [RULE, MOCK, EDIT]
+  file: recipes/cvlr-k8-a-bounded-stand-in.md
+  pushed_on:
+  - status: TIMEOUT
+  - timeout: static analysis
+  - timeout: dominant function
+  search_terms:
+  - mock_fn
+- id: K9
+  name: A halted job, and which rule halted it
+  triggers:
+  - A job that reaches its time limit, with no verdicts or with rules cut off as TIMEOUT
+  - A rule that still halts the job when submitted alone
+  - A handler that runs a `HashSet` insert, serializes a fixed-size array, or reads a buffer an
+    external allocator filled
+  channel: [RULE, EDIT, SKIP]
+  file: recipes/cvlr-k9-a-halted-job.md
+  pushed_on:
+  - job: halted
+- id: K12
+  name: Diagnosing a vacuous rule
+  triggers:
+  - A rule reported `SANITY_FAILED`
+  - You are about to write a `cvlr_satisfy!` rule to find out why another rule is vacuous
+  channel: RULE
+  file: recipes/cvlr-k12-diagnosing-a-vacuous-rule.md
+  pushed_on:
+  - status: SANITY_FAILED
+  search_terms:
+  - explain_vacuity

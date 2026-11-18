@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from composer.authoring.state import make_validation_stamper, spec_digest
+from composer.authoring.state import checked_digest, make_validation_stamper
 from composer.spec.cvlr.conf import TunableConf
 from composer.spec.cvlr.env_paths import PathDialect
 from composer.spec.cvlr.state import PROVER_VALIDATION_KEY, tuning_history
@@ -114,6 +114,7 @@ def test_a_summary_invalidates_a_stamp_earned_before_it():
     state = {
         "curr_spec": draft,
         "skipped": [],
+        "expected_failures": {},
         "summaries": [],
         "vfs": {},
         "version_history": [],
@@ -124,7 +125,7 @@ def test_a_summary_invalidates_a_stamp_earned_before_it():
     stamp = make_validation_stamper(PROVER_VALIDATION_KEY)(state, tuning_history(state))  # type: ignore[arg-type]
 
     after = {**state, "summaries": [SummaryDirective(pattern=_DISPLAY, why=_WHY)]}
-    assert stamp[PROVER_VALIDATION_KEY] != spec_digest(draft, [], tuning_history(after))  # type: ignore[arg-type]
+    assert stamp[PROVER_VALIDATION_KEY] != checked_digest(after, tuning_history(after))  # type: ignore[arg-type]
 
 
 def test_rewording_a_justification_does_not_cost_a_submission():

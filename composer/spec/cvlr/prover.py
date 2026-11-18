@@ -35,9 +35,12 @@ from composer.cargo.session import CargoSession
 from composer.prover.core import (
     CexHandler,
     ProverCallbacks,
+    ProverFailure,
     ProverOptions,
     ProverReport,
+    SubmittedJob,
     run_prover,
+    submit_prover_job,
 )
 from composer.prover.conf import InheritRules, RuleSelection, dump_conf
 from composer.spec.cvlr.conf import (
@@ -66,15 +69,10 @@ class BuildRejected:
 
 @dataclass(frozen=True)
 class SubmissionFailed:
-    """The build succeeded but the prover run did not produce results.
-
-    ``reason`` is the message from :func:`~composer.prover.core.run_prover`: a
-    certoraRun exception, a cloud job that did not succeed, or an unparseable
-    treeView. The runner reports all of those as one string.
-    """
+    """The build succeeded but the prover run did not produce results."""
 
     build: ChainRun
-    reason: str
+    failure: ProverFailure
 
 
 @dataclass(frozen=True)
@@ -228,7 +226,7 @@ async def run_submission(
         callbacks if callbacks is not None else ProverCallbacks(),
         cex,
     )
-    if isinstance(result, str):
+    if not isinstance(result, ProverReport):
         return SubmissionFailed(prepared.build, result)
     return Checked(prepared.build, result)
 
@@ -257,3 +255,23 @@ async def submit(
         cex=cex,
         tool_call_id=tool_call_id,
     )
+
+
+async def start_submission(
+    prepared: Prepared,
+    *,
+    prover_opts: ProverOptions,
+    callbacks: ProverCallbacks | None = None,
+) -> SubmittedJob | SubmissionFailed:
+    """Hand the conf to the prover and return once the job is accepted, without waiting for it.
+
+    The crate is free again when this returns (:func:`prepare_submission`)."""
+    job = await submit_prover_job(
+        prepared.session.workdir,
+        [str(prepared.conf_path)],
+        prover_opts,
+        callbacks if callbacks is not None else ProverCallbacks(),
+    )
+    if not isinstance(job, SubmittedJob):
+        return SubmissionFailed(prepared.build, job)
+    return job

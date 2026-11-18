@@ -14,7 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from composer.prover import core
 from composer.prover.core import TrivialFanoutCexHandler, mark_history_end
-from composer.prover.ptypes import Counterexample, RulePath, RuleResult
+from composer.prover.ptypes import Counterexample, RulePath, RuleResult, UserAssertion
 
 _CC = {"type": "ephemeral", "ttl": "5m"}
 
@@ -27,7 +27,7 @@ def _marker(block):
 def _violated(rule: str) -> RuleResult:
     return RuleResult(
         path=RulePath(rule=rule),
-        counterexample=Counterexample(trace=f"<cex {rule}/>"),
+        counterexample=Counterexample(trace=f"<cex {rule}/>", origin=UserAssertion()),
         status="VIOLATED",
     )
 

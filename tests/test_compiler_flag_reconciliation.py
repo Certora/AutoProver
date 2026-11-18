@@ -13,8 +13,10 @@ from pathlib import Path
 import pytest
 
 from certora_autosetup.autosetup.autosetup import Autosetup
+from certora_autosetup.build_systems.hardhat import HardhatConfig
 from certora_autosetup.cache.cache_fs import init_cache_fs
 from certora_autosetup.parsers.build_system_detector import BuildSystem
+from certora_autosetup.parsers.foundry import ArtifactContract
 from certora_autosetup.setup.setup_prover import SetupProver
 from certora_autosetup.utils.enhanced_config_manager import ConfigManager
 from certora_autosetup.utils.scope import Scope
@@ -116,7 +118,7 @@ def test_precompute_drops_scalar_solc_when_map_is_built(
     )
     monkeypatch.setattr(
         "certora_autosetup.setup.setup_prover.FoundryContractExtractor",
-        lambda root: _StubExtractor({"src/Widget.sol": [("Widget", "0.8.35")]}),
+        lambda root: _StubExtractor({"src/Widget.sol": [ArtifactContract("Widget", "0.8.35", None)]}),
     )
 
     contracts = [
@@ -141,7 +143,7 @@ def test_precompute_drops_scalar_solc_when_map_is_built(
 def test_precompute_keeps_scalar_when_artifacts_agree(setup_prover, monkeypatch) -> None:
     monkeypatch.setattr(
         "certora_autosetup.setup.setup_prover.FoundryContractExtractor",
-        lambda root: _StubExtractor({"src/Widget.sol": [("Widget", "0.8.30")]}),
+        lambda root: _StubExtractor({"src/Widget.sol": [ArtifactContract("Widget", "0.8.30", None)]}),
     )
     contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
     config = setup_prover._precompute_compiler_settings(
@@ -149,6 +151,57 @@ def test_precompute_keeps_scalar_when_artifacts_agree(setup_prover, monkeypatch)
     )
     assert config["solc"] == "solc8.30"
     assert "compiler_map" not in config
+
+
+def test_precompute_takes_evm_versions_from_artifacts(setup_prover, monkeypatch) -> None:
+    # forge compiles solc 0.8.24 for its own default, cancun, while solc 0.8.24
+    # defaults to shanghai. The mock has no artifact and gets its compiler's default.
+    monkeypatch.setattr(
+        "certora_autosetup.setup.setup_prover.FoundryContractExtractor",
+        lambda root: _StubExtractor({"src/Widget.sol": [ArtifactContract("Widget", "0.8.24", "cancun")]}),
+    )
+    monkeypatch.setattr(
+        "certora_autosetup.utils.solc_version_resolver.solc_default_evm_version",
+        {"solc8.24": "shanghai"}.get,
+    )
+    contracts = [
+        ContractHandle(contract_name="Widget", source_file="src/Widget.sol"),
+        ContractHandle(contract_name="DummyERC20Impl", source_file="certora/mocks/DummyERC20Impl.sol"),
+    ]
+    config = setup_prover._precompute_compiler_settings(
+        contracts, {"solc": "solc8.24", "files": ["src/Widget.sol"]}
+    )
+    assert config["solc_evm_version_map"] == {"Widget": "cancun", "DummyERC20Impl": "shanghai"}
+    assert "solc_evm_version" not in config
+
+
+def test_precompute_writes_one_artifact_evm_version_as_the_scalar(setup_prover, monkeypatch) -> None:
+    # The artifact value wins over the profile's declared one: it is what forge compiled for.
+    monkeypatch.setattr(
+        "certora_autosetup.setup.setup_prover.FoundryContractExtractor",
+        lambda root: _StubExtractor({"src/Widget.sol": [ArtifactContract("Widget", "0.8.24", "cancun")]}),
+    )
+    contracts = [ContractHandle(contract_name="Widget", source_file="src/Widget.sol")]
+    config = setup_prover._precompute_compiler_settings(
+        contracts, {"solc": "solc8.24", "solc_evm_version": "paris", "files": ["src/Widget.sol"]}
+    )
+    assert config["solc_evm_version"] == "cancun"
+    assert "solc_evm_version_map" not in config
+
+
+def test_precompute_applies_hardhat_overrides(setup_prover, monkeypatch) -> None:
+    setup_prover.build_system = BuildSystem.HARDHAT
+    setup_prover.build_system_config = HardhatConfig(
+        evm_version="paris", evm_version_overrides={"contracts/Vault.sol": "cancun"}
+    )
+    contracts = [
+        ContractHandle(contract_name="Vault", source_file="contracts/Vault.sol"),
+        ContractHandle(contract_name="Token", source_file="contracts/Token.sol"),
+    ]
+    config = setup_prover._precompute_compiler_settings(
+        contracts, {"solc": "solc8.24", "solc_evm_version": "paris"}
+    )
+    assert config["solc_evm_version_map"] == {"Vault": "cancun", "Token": "paris"}
 
 
 # =============================================================================

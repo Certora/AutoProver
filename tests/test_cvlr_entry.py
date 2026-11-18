@@ -20,10 +20,16 @@ from composer.pipeline.ecosystem import RUST_FORBIDDEN_READ, SOLANA
 from composer.spec.cvlr import entry, preflight
 from composer.spec.cvlr.chains import SOLANA_CVLR
 from composer.spec.cvlr.pipeline import CvlrPhase
+from composer.pipeline.run_mode import RUN_MODE_ENV, RunMode
+from composer.spec.gen_types import CVLR_REPORT_DIR
+from composer.spec.source.report.schema import AutoProverReport, Refused
 
 
 def _package(root: Path, name: str, *, lib: bool = True) -> CratePackage:
+    """A member declaring only itself. Selecting a generation reads its manifest."""
     package_root = root / "programs" / name
+    package_root.mkdir(parents=True, exist_ok=True)
+    (package_root / "Cargo.toml").write_text(f'[package]\nname = "{name}"\nversion = "0.1.0"\n')
     return CratePackage(
         name=name,
         version="0.1.0",
@@ -531,8 +537,49 @@ async def test_a_bad_package_fails_before_any_service_starts(project, monkeypatc
         [str(project), "programs/vault/src/lib.rs:vault", "--package", "typo"]
     )
 
-    with pytest.raises(preflight.PreflightFailed):
+    with pytest.raises(preflight.PreflightFailed) as refused:
         async with entry.cvlr_executor(args, SimpleNamespace(), SOLANA_CVLR):  # type: ignore[arg-type]
             pass
 
+    assert wiring.kwargs == {}
+    # And it still leaves a report, saying why: the run's only output a consumer reads.
+    report = AutoProverReport.model_validate_json(
+        (project / CVLR_REPORT_DIR / "report.json").read_text()
+    )
+    assert report.run_failure == Refused(message=str(refused.value))
+    assert report.contract_name == "vault"
+
+
+@pytest.mark.asyncio
+async def test_the_run_is_comprehensive_unless_asked(project, monkeypatch, wiring):
+    monkeypatch.delenv(RUN_MODE_ENV, raising=False)
+    recorded = await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
+    assert recorded.kwargs["run_mode"] is RunMode.COMPREHENSIVE
+
+
+@pytest.mark.asyncio
+async def test_the_run_mode_flag_reaches_the_pipeline(project, monkeypatch, wiring):
+    monkeypatch.delenv(RUN_MODE_ENV, raising=False)
+    recorded = await _run(
+        [str(project), "programs/vault/src/lib.rs:vault", "--run-mode", "prioritized"], monkeypatch, wiring
+    )
+    assert recorded.kwargs["run_mode"] is RunMode.PRIORITIZED
+
+
+@pytest.mark.asyncio
+async def test_the_cloud_sets_the_run_mode_from_the_environment(project, monkeypatch, wiring):
+    # The AIAutoProver wrapper calls this entry point in-process, so the Batch job's env var is
+    # the route by which the dashboard's choice arrives.
+    monkeypatch.setenv(RUN_MODE_ENV, "prioritized")
+    recorded = await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
+    assert recorded.kwargs["run_mode"] is RunMode.PRIORITIZED
+
+
+@pytest.mark.asyncio
+async def test_a_mode_cvlr_does_not_implement_fails_before_anything_is_staged(
+    project, monkeypatch, wiring,
+):
+    monkeypatch.setenv(RUN_MODE_ENV, "evaluate")
+    with pytest.raises(ValueError, match="Expected one of: comprehensive, prioritized\\."):
+        await _run([str(project), "programs/vault/src/lib.rs:vault"], monkeypatch, wiring)
     assert wiring.kwargs == {}

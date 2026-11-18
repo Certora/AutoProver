@@ -42,7 +42,8 @@ from composer.spec.context import (
 )
 from composer.spec.util import string_hash
 from composer.spec.prop_inference import (
-    CERTORA_BACKEND_GUIDANCE, CacheablePropertyGenerationInput, run_property_inference
+    CERTORA_BACKEND_GUIDANCE, DEFAULT_MAX_BUG_ROUNDS, CacheablePropertyGenerationInput,
+    run_property_inference,
 )
 from composer.spec.types import PropertyFormulation
 from composer.spec.natspec.interface_gen import generate_interface, DESCRIPTION as INTERFACE_GEN_DESC
@@ -184,7 +185,7 @@ class PipelineServices:
     # interactive sessions via a conversation lock, the way
     # console_autoprove already does.
     interactive: bool = False
-    max_bug_rounds: int = 3
+    max_bug_rounds: int = DEFAULT_MAX_BUG_ROUNDS
 
 async def analyze_single_contract(
     system_doc: SystemDoc,
@@ -419,7 +420,7 @@ async def run_natspec_pipeline[A: NatspecApplication, I: InterfaceDeclModel, S: 
     ecosystem: EvmEcosystem,
     max_concurrent: int = 4,
     interactive: bool = False,
-    max_bug_rounds: int = 3,
+    max_bug_rounds: int = DEFAULT_MAX_BUG_ROUNDS,
 ) -> PipelineResult:
     """Run the full natspec multi-agent pipeline.
 

@@ -10,6 +10,12 @@ properties of the program `{{ program }}`:
 {% for prop in properties %}
 <{{ prop.sort }}>
   Property {{ loop.index }} (`{{ prop.title }}`): {{ prop.description }}
+  {% if prop.checked_at is defined %}
+  Scope: this run checks the property at {{ prop.checked_at | join(", ") }} only. It formalizes this
+  component and no other, so {{ prop.excluded | join(", ") }} are out of its scope: write no rule for
+  them and record no skip for them. The report states the narrowing. Covering every one of
+  {{ prop.checked_at | join(", ") }} is required.
+  {% endif %}
   {% if prop.sort == "attack_vector" %}
   Goal: demonstrate that this attack cannot occur. If it *can*, the rule that shows it must fail —
   see the expected-failure instructions below.
@@ -42,15 +48,18 @@ Write the complete module and put it on the buffer with `put_harness`. For each 
 * Choose the rule form. One `#[rule]` per property when the property is about one handler; a
   `cvlr_rules!` invocation when the same specification applies across several handlers — that is
   cheaper to write and gives you a separate verdict per handler.
-* A few shapes halt a submission before any assertion runs, and they are visible in the code. One
-  rule per account-list length, and per pre-state variant: a single rule ranging over several of
-  either timed out, and one rule per case verified. Bound both factors of a `u64` multiplied into a
-  `u128` on the first submission; below `2^32` is the domain that verified, and the comment on the
-  rule says that bound is the domain of the proof, not a fact about the program. A handler that
-  begins in a `HashSet` insert, a bincode walk of a `[u8; 32]`, or a `Vec` filled by an allocator
-  the prover leaves external will not finish when `loop_iter` goes up — the iteration count moves
-  with the bound. Ask the editor for a loop-free replacement or a value stand-in, or call the
-  program's own function below that handler, before the first `verify_rules` of such a rule.
+* Some shapes time out whatever the prover settings, and they are visible in the code before any
+  submission:
+  - a rule ranging over several cases, such as account-list lengths or pre-state variants: write
+    one rule per case;
+  - a product of two unbounded wide integers: bound both factors, and say in a comment that the
+    bound is the domain of the proof, not a fact about the program;
+  - a loop whose trip count comes from data rather than from `loop_iter`, such as hashing,
+    (de)serializing a fixed-size array, or a buffer an external allocator filled: raising the
+    bound never finishes it. Call the program's own function below it, or ask the editor for a
+    loop-free replacement or a value stand-in.
+
+  Recipes K8 and K9 have the cases these were measured on.
 * Create the inputs with `nondet()` and constrain them with `cvlr_assume!` — as little as you can.
 * `clog!` every value the assertion depends on, *before* asserting. A counterexample shows you only
   what you logged.
@@ -85,8 +94,9 @@ Read the outcome:
     real and how the program reaches the counterexample's starting state. A pre-state that no
     operation produces is not a defect: assume the invariant that excludes it instead (see "When a
     rule should fail" in your instructions). Marked rules are excluded from the gate, so a run can
-    be complete with a genuine violation in it, and marking the last unaccounted failure of an
-    unchanged draft stamps it without another run.
+    be complete with a genuine violation in it. A marking invalidates the prover stamp. Call
+    `verify_rules` again: when the draft is unchanged and the last run is accounted for under the
+    new markings, it stamps without submitting.
     **Do not invert the rule so that it passes.**
 * **A rule reported vacuous / sanity-failing** → no execution reaches the end of the rule, so it
   proves nothing. The vacuity check assumes every assertion on the way holds, and that includes
@@ -95,99 +105,29 @@ Read the outcome:
   assumptions contradicting each other or the program, or an assertion that fails on every path.
   Find out which before weakening anything.
 
-  **First check the rule ends with `core::mem::forget(accounts);`.** The vacuity check's `satisfy`
-  sits at the very end of the rule function, after its locals are dropped, and dropping the
-  16-account array is a loop `loop_iter: 2` cannot finish — so a rule that lets the array drop can be
-  vacuous with nothing wrong in it. It is the most common cause measured on this backend.
+  **First check the rule ends with `core::mem::forget(accounts);`** (see "Reaching a handler"): the
+  dropped account array is the most common cause measured on this backend.
 
-  **Start with `explain_vacuity(rule)`.** It reruns that one rule with the vacuity check off, about
-  as fast as an ordinary run, and reads the unsat core of the proof. Its first line settles the
-  question above: if the rule's own assertion is not in the core, the core's constraints contradict
-  each other and the analysis names them; if it is, your assumptions are not the cause and weakening
-  them will not help. What a core cannot show is anything after the assertion: it is the core of the
-  rule's proof, and the vacuity check's `satisfy` comes later, after the drops.
-
-  If you need to go further, **diagnose with `cvlr_assert!(false)`, not `cvlr_satisfy!`.** A
-  satisfy rule also turns every assertion into an assumption, so it assumes away exactly the one
-  causing the vacuity and reports the path reachable while the real rule stays vacuous. Measured:
-  three submissions of satisfy diagnostics, every one VERIFIED, on a rule whose every path hit the unwinding assertion inside a
-  CPI's instruction encoder; the first diagnostic ending in `cvlr_assert!(false)` came back
-  VIOLATED with the loop in its trace. Copy the real rule, replace its final assertion with
-  `cvlr_assert!(false)`, and `clog!` the values the assertion reads:
-  - VIOLATED on `false` → the path is live, and the trace shows a concrete execution. If a
-    generated assertion fired first, that is the cause; if the logged values satisfy your
-    postcondition, the vacuity comes from code after the assertion, not from the program.
-  - Still vacuous → add the rule's assumptions back into the copy one at a time; the one that makes
-    it vacuous is the contradiction.
-* **A timeout.** The job ran out of time. A halted job returns no per-rule verdicts, so one rule
-  hides every other rule in the submission. The next submission is the same draft without the rule
-  you added last, or that rule alone. Leave `loop_iter` where it is, and add no summary, until that
-  submission says which rule it was. Measured: four submissions of handler-level rules, at
-  `loop_iter` 2, 3 and 4 and after two rounds of summaries, each halted with no verdicts; the same
-  draft with those rules removed verified the rest in minutes. One extra rule in a draft that
-  otherwise verified did the same. Resubmitting the halted set unchanged will halt again.
-
-  When the rule by itself still halts, look at what the handler does first.
-  - A `HashSet` insert goes through SipHash or `hashbrown`'s rehash. The iteration count tracks
-    `loop_iter`, and `hash_one` is external, so `contains` can disagree with `insert`. Ask the
-    editor to replace that set with a loop-free signer set.
-  - A bincode walk of a `[u8; 32]`, a `Pubkey` field of the account struct the handler serializes,
-    did the same: iteration 2 at bound 2, iteration 4 at bound 4. Ask the editor to mock the state
-    accessor with a value stand-in.
-  - A `Vec` whose bytes come from an allocator the prover treats as external, such as a vote
-    account's credit history, is the same kind of loop.
-
-  Drive the program's own function below that handler, the accounting it wraps, and name that
-  function as the rule's subject. A copy of the handler written in the harness is a verdict about
-  your code. If the property is about the handler's own checks and there is no function below
-  them, `record_skip` and name the halted job. A summary of a function the compiler has inlined
-  into the handler matches no symbol, and the halt stays.
-
-  A rule that came back with a verdict, and stopped short of its own assertion, is a different
-  case. The other rules in the job already have results.
-  - A product of two `u64`s into a `u128` timed out twice with the factors unbounded, and verified
-    below `2^32`. Bound both factors, and say in the commentary that the bound is the domain of
-    the proof. A property about behaviour at the top of the `u64` range cannot take that bound.
-  - One rule ranging over several account-list lengths, or both pre-state variants, timed out.
-    One rule per length or variant verified. Split it that way.
-  - `collect_signers` walking the account list the rule passed stops on the unwinding assertion
-    until `loop_iter` equals that length. Raise the bound to the length the rule passed.
-  - A walk of one iteration per epoch, with nothing in the program bounding how far activation is
-    from now, does not finish at a higher bound. Assume a small distance and record it as the
-    domain.
-
-  Re-running an unchanged timing-out rule will time out again.
+  `verify_rules` attaches recipe K12 to a vacuous result: `explain_vacuity(rule)` first, then a copy
+  of the rule ending in `cvlr_assert!(false)`, never `cvlr_satisfy!`.
+* **A timeout.** Either the job ran out of time or one rule did.
+  - A **halted job** returns no verdicts, or cuts its unfinished rules off as TIMEOUT, so one rule
+    can hide every other rule in the submission. Find that rule before changing anything else.
+    `verify_rules` attaches recipe K9.
+  - A **rule that timed out** in a job that returned verdicts is that rule's own. `verify_rules`
+    attaches recipe K8: the rule's shape first, then a stand-in for what holds the time.
 * **A rule the prover could not analyze** → an *error* rather than a verdict, so it comes back as
   neither VERIFIED nor VIOLATED. On this backend it is usually the pointer analysis refusing
   something on a path your rule reaches: `[3308]` illegal dereference of an absolute address (a
   program's own `#[error_code]` enum formatting its `#[msg]` string), `[3006]` illegal store of a
   stack pointer. In order:
-  - **`summarize_for_prover(symbol_pattern, why)`**, which tells the prover to replace that symbol
-    with an unconstrained stand-in instead of analyzing it. A directive matches *demangled symbols
-    the build defines*, so it invalidates the prover stamp and `verify_rules` reports which of your
-    directives matched **no symbol at all** — read that, it is the common failure. Do not summarize
-    your program's own small functions: the compiler inlines them into their callers, so no spelling
-    of them exists to match. Aim at the library function one level out, which survives with a real
-    symbol; the report names candidates.
-
-    **Give up on this remedy after about three directives down one path.** Measured: one unit spent
-    nine submissions on eleven directives walking a formatting chain frame by frame — seven of them
-    matched real symbols — and the error never moved, because the code the prover objects to had
-    been inlined *into the handler itself* where no summary can reach it. If three have not cleared
-    it, it is not summarizable at this level; weaken or skip;
-  - **weaken the rule to a sub-property the prover can reach** — assume away the failing path if the
-    program genuinely excludes it, or assert something strictly weaker, and say so;
+  - **`summarize_for_prover(symbol_pattern, why)`** on the code in the way, for code the property
+    does not depend on, never the handler;
+  - **weaken the rule to a sub-property the prover can reach**, and say so;
   - **skip the property** with the error code and what you tried.
 
-  A summary is the sharp tool here. The prover stops reasoning about what you summarize: the call
-  returns an unconstrained value and **writes nothing** beyond the locations its `returns` names —
-  every other store the real function makes, to its arguments, to account data, to anything
-  reachable, is dropped. So summarizing the code a
-  property is *about* can give you a rule that passes having checked nothing, with no trace in the
-  harness: state the function should have changed keeps its old value, and an assertion that it is
-  unchanged, or still within bounds, holds trivially. Summarize the formatting path, never the
-  handler, never a function that writes state you assert over, and never one whose result you assert
-  over.
+  `verify_rules` attaches recipe K10 to the result, with how to aim a summary, when to stop adding
+  directives, and what a summary drops. A `[3005]` gets recipe K11 instead.
 
   **Do not respond by moving the rule onto code the prover finds easier.** Calling a private helper
   instead of the handler, or writing your own copy of the handler's body, makes the run green and
@@ -236,7 +176,40 @@ remove it — an unattributed rule costs prover time nobody chose to spend.
 For a `cvlr_rules!` invocation, name the *generated* rules, not the invocation: `name: "solvency"`
 over `bases: [base_deposit, base_withdraw]` declares `solvency_deposit` and `solvency_withdraw`.
 
-<skipping>
+<skipping>{% if focused %}
+This run is being spent on the properties above and nothing else. They were chosen out of everything
+inferred for this program because they are the ones worth verifying, so there is no other work to fall
+back on: whatever you establish here is the entire result.
+
+You therefore may not retire them. `record_skip` will refuse them, and the `give_up` tool rejects a
+`sort='exhausted'` stop until you have actually run `verify_rules` several times and can enumerate what
+you tried. Where the steps above say to skip, here they mean the remedies below. When you are stuck, the
+move is to make the problem smaller, not to put it down:
+
+  - State the missing fact. If the counterexamples keep starting from account states the program cannot
+    reach, what is missing is a fact about the state, not a smaller property. State that fact as an
+    invariant, prove it here as its own rule, and assume it in the rule that needs it (see "When a rule
+    should fail" in your instructions).
+  - Decompose it. Prove a smaller statement that the property is built out of as its own rule — the
+    accounting function below the handler, one account-list length, one pre-state variant — and work up
+    from there.
+  - Weaken it honestly. If the full property will not go through, formalize the strongest version of it
+    that does — a bounded domain, a sub-property the prover can reach — and say plainly in your
+    commentary what you proved and what you did not.
+
+Weakening is not licence to reach a passing rule by any means. A rule that passes because it assumes
+away the states where the property is interesting proves nothing, and neither does one weakened until
+it no longer says anything, nor one moved onto a copy of the handler you wrote. Each is a worse outcome
+than an honest account of what would not go through — the point of this run is a real result about the
+property, not a green check.
+
+**A program that appears to violate a property is a finding, not a failure.** Write the rule, let it
+fail, and mark it with `expect_rule_failure`.
+
+If an environment problem blocks all progress — the crate will not build for reasons unrelated to
+your module, the prover is unreachable — call `give_up` with `sort='environment'` and specifics so it
+can be fixed and the task re-run. That stop is not gated: do it as soon as the problem is identified,
+and do not keep retrying.{% else %}
 If you genuinely cannot express a property as a rule after serious effort, use
 `record_skip(property_title, reason)`.
 
@@ -257,7 +230,7 @@ rule, let it fail, and mark it.
 
 If an environment problem blocks all progress — the crate will not build for reasons unrelated to
 your module, the prover is unreachable — call `give_up(reason)` with specifics so it can be fixed and
-the task re-run.
+the task re-run.{% endif %}
 </skipping>
 </task>
 

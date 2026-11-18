@@ -23,7 +23,7 @@ authors = [
 ]
 
 dependencies = [
-    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@9f4e9fca49e370dace2c9cdfdb58aa87d59f1a30",
+    "graphcore @ git+ssh://git@github.com/Certora/graphcore.git@c03be3aa9c1cbad4f89dddd0bf2f784bbe77f4bc",
     # >=3.14.4: GHSA-2g87-pp6c-29x5, GHSA-5wr8-gcqf-gqf3, GHSA-9xw5-w5jj-pvcg,
     # GHSA-cq5v-8q36-5273 and the other aiohttp advisories fixed in 3.14.0-3.14.4.
     "aiohttp>=3.14.4",
@@ -205,7 +205,8 @@ markers = [
     "expensive: hits the real prover / network — deselect with -m 'not expensive'",
     "measurement: produces a one-off number rather than guarding an invariant; also `expensive`, and excluded from sweeping selections so it is paid for only when someone asks for it by name",
     "fuzz: fuzz tests",
-    "wire: Rust/Python wire-protocol round trips — build a cargo binary at test time"
+    "wire: Rust/Python wire-protocol round trips — build a cargo binary at test time",
+    "skill_interface: the commands, flags and files the certora-autoprover-solana skill names (composer/spec/cvlr/skill_interface.py)"
 ]
 # optional but recommended once you're registering marks:
 addopts = "--strict-markers"   # a typo'd mark becomes an error, not a silent no-match
@@ -222,6 +223,8 @@ console-solana = "composer.cli.console_solana:main"
 tui-solana = "composer.cli.tui_solana:main"
 console-soroban = "composer.cli.console_soroban:main"
 tui-soroban = "composer.cli.tui_soroban:main"
+# The Solana skill's commands (composer/spec/cvlr/skill_interface.py)
+certora-cvlr = "composer.cli.certora_cvlr:main"
 # console-crucible / tui-crucible land in PR3, together with the `composer.crucible_launch`
 # module they name — an entry point pointing at a module that doesn't exist installs happily
 # and only fails, as an ImportError, when someone runs it.

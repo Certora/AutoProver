@@ -36,11 +36,11 @@ from psycopg.sql import SQL, Identifier, Literal
 from psycopg_pool.pool_async import AsyncConnectionPool as PGAsyncPool
 
 import composer.diagnostics.timing as timing_mod
-from composer.prover.core import ProverOptions, ProverReport
+from composer.prover.core import ProverFailure, ProverOptions, ProverReport, RunFailed
 from composer.sandbox.config import SandboxConfig
 from composer.sandbox.policy import ensure_available
 from composer.spec.cvlr.entry import announce_confinement, build_confinement
-from composer.spec.cvlr.reference import ChainReference, GitCommit
+from composer.spec.cvlr.reference import ChainReference, CrateRelease, GitCommit
 from composer.spec.source.prover import get_prover_tool, in_situ_project, LLM
 
 if TYPE_CHECKING:
@@ -439,7 +439,12 @@ def certora_prover(
 
     async def mock_prover(
         folder: Path, args: list[str], *rest, **kwargs
-    ) -> ProverToolResponse:
+    ) -> ProverReport | ProverFailure:
+        resp = _scripted(folder, args)
+        # A script names a failure by its text; ``run_prover`` returns it typed.
+        return RunFailed(resp) if isinstance(resp, str) else resp
+
+    def _scripted(folder: Path, args: list[str]) -> ProverToolResponse:
         conf = conf_of_prover_call(folder, args)
         calls.append(ProverCall(folder=folder, args=list(args), conf=conf))
         if buffer_responses:
@@ -594,11 +599,12 @@ def read_from_commit(reference: ChainReference, commit: GitCommit) -> ChainRefer
     For the tests of the git-commit path, which should not depend on whether any release the
     shipping reference sets pin is unpublished at the moment.
     """
+    assert isinstance(reference.binding, CrateRelease)
     return dataclasses.replace(
         reference,
-        chain_crate=dataclasses.replace(reference.chain_crate, unpublished=commit),
+        binding=dataclasses.replace(reference.binding, commit=commit),
         models=tuple(
-            dataclasses.replace(m, release=dataclasses.replace(m.release, unpublished=commit))
+            dataclasses.replace(m, release=dataclasses.replace(m.release, commit=commit))
             for m in reference.models
         ),
     )

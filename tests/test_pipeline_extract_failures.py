@@ -68,7 +68,7 @@ def test_every_component_failing_is_reported_not_hidden():
 
 @pytest.mark.parametrize(
     "signal",
-    [asyncio.CancelledError(), BudgetExceeded("out of budget"), BudgetPressureAbort()],
+    [asyncio.CancelledError(), BudgetExceeded("token"), BudgetPressureAbort()],
     ids=["cancelled", "budget-exceeded", "budget-pressure"],
 )
 def test_run_wide_stops_still_propagate(signal: BaseException):
@@ -83,7 +83,7 @@ def test_a_run_wide_stop_wins_over_a_component_failure():
     with pytest.raises(BudgetExceeded):
         _settle_extraction(
             [first, second],
-            [RuntimeError("component"), BudgetExceeded("out of budget")],  # type: ignore[list-item]
+            [RuntimeError("component"), BudgetExceeded("token")],  # type: ignore[list-item]
         )
 
 

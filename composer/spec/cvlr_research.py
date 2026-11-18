@@ -88,7 +88,7 @@ def corpus_tools(
     """The search tools over both CVLR corpora, querying with ``model``.
 
     ``pinned`` maps each CVLR crate the run builds to its version. The API corpus holds every
-    platform generation's releases and shows only these
+    platform generation's releases and shows only these, or an earlier patch release of one
     (:class:`composer.tools.cvlr_api_rag.ApiCorpus`).
 
     A corpus that cannot be opened contributes no tools rather than failing the run: search is an
@@ -116,7 +116,7 @@ def research_cache_ns(crates: Iterable[CrateRelease]) -> tuple[str, ...]:
     of a release's identity while it is unpublished: the release it stands in for has not been cut.
     """
     pins = sorted(
-        f"{c.name}={c.version}" + (f"@{c.unpublished.rev}" if c.unpublished else "")
+        f"{c.name}={c.version}" + (f"@{c.commit.rev}" if c.commit else "")
         for c in crates
     )
     return (*DEFAULT_CVLR_AGENT_INDEX_NS, hashlib.sha256("|".join(pins).encode()).hexdigest())
