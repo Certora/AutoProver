@@ -39,7 +39,7 @@ from composer.spec.source.report.grouping import (
 )
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
-    AutoProverReport, ConfCoverage, ConfRunRecord, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
+    AutoProverReport, ConfCoverage, ConfRunRecord, ConfStatusCounts, CoverageReport, EvaluationSummary, PropertyCounts, RuleOutcomeCounts, SpecStatusCounts, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
     PropertyCoverage, PropertyGroup, RuleFeedback, RuleVerdict, SeverityTier, SkippedClaim,
     SpecCoverageScore, DeprioritizedProperty, Prioritization, PursuedProperty,
@@ -1337,20 +1337,27 @@ def _evaluate_report() -> AutoProverReport:
             rules_unchecked_before_completion=["users_own_rule"],
             methods_excluded={"revert_char": ["withdraw(uint256)"]},
             completion_conf="certora/confs/c-evaluate-completion.conf", complete=True,
+            status="orphaned",
             runs=[ConfRunRecord(
-                conf="certora/confs/c.conf",
+                conf="certora/confs/c.conf", status="ran",
                 prover_links=["https://prover.certora.com/output/1/a", "https://prover.certora.com/output/1/b"],
             )],
         )],
         "coverage_scores": [SpecCoverageScore(
             name="static_coverage", score=0.625, views={"scene": 0.5, "main_contract": 0.75},
         )],
+        "evaluation_summary": EvaluationSummary(
+            specs=SpecStatusCounts(orphaned=1),
+            confs=ConfStatusCounts(in_scope=1, ran=1),
+            rules=RuleOutcomeCounts(good=1),
+            properties=PropertyCounts(total=2, attempted=1, faithfulness_exact=1),
+        ),
     })
 
 
-def test_schema_3_5_round_trips():
+def test_evaluate_statuses_and_summary_round_trip():
     report = _evaluate_report()
-    assert report.schema_version == "3.5"
+    assert report.schema_version == "3.6"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
@@ -1359,11 +1366,24 @@ def test_schema_3_5_round_trips():
     assert reloaded.properties[1].coverage is not None
     assert reloaded.properties[1].coverage.added_by_evaluator
     assert len(reloaded.conf_coverage[0].runs[0].prover_links) == 2
+    assert reloaded.conf_coverage[0].status == "orphaned"
+    assert reloaded.conf_coverage[0].runs[0].status == "ran"
+    assert reloaded.evaluation_summary is not None
+    assert reloaded.evaluation_summary.confs == ConfStatusCounts(in_scope=1, ran=1)
+
+
+def test_conf_coverage_states_its_statuses() -> None:
+    with pytest.raises(PydanticValidationError):
+        ConfCoverage.model_validate({"spec": "s.spec", "confs": ["c.conf"], "complete": False})
+    with pytest.raises(PydanticValidationError):
+        ConfRunRecord.model_validate({"conf": "c.conf"})
 
 
 def test_conf_coverage_without_runs_loads() -> None:
     # Reports written before schema 3.5 have no `runs`.
-    cov = ConfCoverage.model_validate({"spec": "s.spec", "confs": ["c.conf"], "complete": False})
+    cov = ConfCoverage.model_validate(
+        {"spec": "s.spec", "status": "complete", "confs": ["c.conf"], "complete": False}
+    )
     assert cov.runs == []
 
 
