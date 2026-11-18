@@ -9,7 +9,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -123,10 +123,12 @@ class HardhatManager(BuildSystemManager):
 
     def parse_config(self, config_file: Path, profile: str | None = None) -> HardhatConfig:
         """
-        Parse hardhat.config.{js,ts} file using a Node.js extraction script.
+        Parse hardhat.config.{js,ts} file.
 
-        Creates a temporary script that loads the Hardhat config and outputs
-        the relevant settings as JSON.
+        The config is resolved by a Node.js extraction script that loads it
+        through Hardhat. Without Node, the compiler settings are read from the
+        `build-info/` files the project's own `hardhat compile` left under the
+        artifacts dir.
 
         Args:
             config_file: Path to hardhat.config.js or hardhat.config.ts
@@ -139,12 +141,17 @@ class HardhatManager(BuildSystemManager):
         try:
             self.log(f"Parsing Hardhat config from {config_file}")
 
-            # Try to extract config using a Node.js script
             config_data = self._extract_config_via_node(config_file)
             if config_data:
                 return self._extract_config_from_json(config_data, config_type)
 
-            # If extraction fails, use defaults
+            config_data = self._extract_config_from_build_info(
+                config_file.parent / self.get_default_artifact_dir() / "build-info"
+            )
+            if config_data:
+                return self._extract_config_from_json(config_data, config_type)
+
+            self.log("Hardhat config not resolved and no build-info found", "WARNING")
             return self._get_default_config(config_type)
 
         except Exception as e:
@@ -211,6 +218,61 @@ class HardhatManager(BuildSystemManager):
         except Exception as e:
             self.log(f"Error extracting config via Node.js: {e}", "WARNING")
             return None
+
+    def _extract_config_from_build_info(self, build_info_dir: Path) -> Optional[Dict[str, Any]]:
+        """
+        Compiler settings recorded in Hardhat's build-info files, shaped like the
+        output of hardhat_config_extractor.js.
+
+        Each build-info file is the solc standard-json input of one compilation
+        job of `hardhat compile`, with the exact solc version and settings it
+        ran with. Every distinct (version, settings) pair becomes one entry of
+        `solidity.compilers`, the job compiling the most sources first. Files
+        without a `solcVersion` and an `input` are skipped.
+
+        Limitations: per-file `overrides` are not recovered — an override job is
+        just another entry, so the first entry's settings (e.g. evmVersion)
+        apply to every file. A build-info left from an earlier compile with
+        different settings is read as current.
+
+        Args:
+            build_info_dir: The `build-info/` directory under the artifacts dir
+
+        Returns:
+            Dict in the extractor's format, or None if no build-info is usable
+        """
+        if not build_info_dir.is_dir():
+            return None
+        jobs: List[Tuple[int, str, Dict[str, Any]]] = []
+        for path in sorted(build_info_dir.glob("*.json")):
+            try:
+                build_info = json.loads(path.read_text())
+            except (OSError, json.JSONDecodeError) as e:
+                self.log(f"Skipping unreadable build-info {path.name}: {e}", "WARNING")
+                continue
+            solc_input = build_info.get("input") if isinstance(build_info, dict) else None
+            solc_version = build_info.get("solcVersion") if isinstance(build_info, dict) else None
+            if not isinstance(solc_version, str) or not isinstance(solc_input, dict):
+                continue
+            settings = solc_input.get("settings")
+            settings = settings if isinstance(settings, dict) else {}
+            n_sources = len(solc_input.get("sources") or {})
+            jobs.append((n_sources, solc_version, {
+                key: settings[key] for key in ("optimizer", "viaIR", "evmVersion") if key in settings
+            }))
+        if not jobs:
+            return None
+
+        compilers: List[Dict[str, Any]] = []
+        for _, solc_version, settings in sorted(jobs, key=lambda job: -job[0]):
+            compiler = {"version": solc_version, "settings": settings}
+            if compiler not in compilers:
+                compilers.append(compiler)
+        self.log(
+            f"Read Hardhat compiler settings from {len(jobs)} build-info file(s) in {build_info_dir}",
+            "INFO",
+        )
+        return {"solidity": {"compilers": compilers}, "paths": {}}
 
     def _process_path(self, path_value: str, default: str, path_type: str) -> str:
         """
@@ -414,7 +476,10 @@ class HardhatManager(BuildSystemManager):
         Returns:
             HardhatConfig with default settings
         """
-        self.log("Using default Hardhat configuration", "INFO")
+        self.log(
+            "Using the default Hardhat configuration — solc will be resolved from source pragmas",
+            "WARNING",
+        )
         return HardhatConfig(
             solc_version=None,  # Let Certora auto-detect
             optimizer=False,
