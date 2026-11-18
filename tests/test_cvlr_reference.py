@@ -56,6 +56,24 @@ def test_the_dependency_block_carries_the_platform_too():
     assert 'solana-program = "2.2"' in block
 
 
+def test_a_target_on_fixed_is_given_the_narrow_fixed_point_type_and_another_is_not():
+    # cvlr-fixed's `fixed` feature compiles the `fixed` crate, so a target that never uses it would
+    # be made to build one only to be offered a type it has no use for.
+    on_fixed = ref.SOLANA_V2.for_target(lambda name: name == "fixed")
+    narrow = ref.CrateRelease("cvlr-fixed", ref.SOLANA_V2.core.version, features=("fixed",))
+    assert narrow in on_fixed.scaffold_crates()
+    assert on_fixed.for_target(lambda name: name == "fixed") == on_fixed
+    assert ref.SOLANA_V2.for_target(lambda _: False) is ref.SOLANA_V2
+    assert narrow not in ref.SOLANA_V2.crates()
+
+
+def test_a_crate_with_features_is_declared_with_them():
+    narrow = ref.CrateRelease("cvlr-fixed", "0.6.3", features=("fixed",))
+    assert narrow.dependency_line() == 'cvlr-fixed = { version = "=0.6.3", features = ["fixed"] }'
+    # The API corpus documents what a target on `fixed` is offered, so its probe declares it.
+    assert narrow.dependency_line() in ref.SOLANA_V2.cargo_dependencies()
+
+
 def test_the_solana_choice_records_the_platform_it_implies():
     # cvlr-solana 0.5.x requires solana-program 2.2, and each Solana generation has its own
     # AccountInfo. Changing the chain crate without changing this label pairs the wrong types.

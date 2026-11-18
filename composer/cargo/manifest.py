@@ -16,7 +16,7 @@ import tomlkit
 from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
 from tomlkit.container import OutOfOrderTableProxy
 from tomlkit.exceptions import TOMLKitError
-from tomlkit.items import InlineTable, Item, Table
+from tomlkit.items import Array, InlineTable, Item, Table
 
 from composer.cargo.features import CargoFeature
 
@@ -128,7 +128,7 @@ type TablePath = tuple[str, ...]
 _Table = Table | InlineTable | OutOfOrderTableProxy
 
 #: A value :class:`ManifestEditor` writes. A mapping is written as an inline table.
-type TomlValue = str | bool | Sequence[str] | Mapping[str, str | bool]
+type TomlValue = str | bool | Sequence[str] | Mapping[str, str | bool | Sequence[str]]
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,19 @@ class AddTable:
         return f"[{'.'.join(self.table)}]"
 
 
-type ManifestAddition = AddEntries | AddTable
+@dataclass(frozen=True)
+class ExtendArray:
+    """Strings appended to the array at ``key`` in ``table``, each one the array lacks."""
+
+    table: TablePath
+    key: str
+    values: tuple[str, ...]
+
+    def describe(self) -> str:
+        return f"[{'.'.join(self.table)}] {self.key} += {', '.join(self.values)}"
+
+
+type ManifestAddition = AddEntries | AddTable | ExtendArray
 
 
 class ManifestConflict(ValueError):
@@ -207,6 +219,8 @@ class ManifestEditor:
                         _insert(existing, table, key, value, note=note)
             case AddTable(table=table, body=body):
                 self._add_table(table, body, note=note)
+            case ExtendArray(table=table, key=key, values=values):
+                self._extend(table, key, values, note=note)
 
     def remove(self, table: TablePath, keys: Iterable[str]) -> None:
         """Delete each of ``keys`` that ``table`` has. A missing table or key is no error."""
@@ -222,6 +236,17 @@ class ManifestEditor:
         edited = tomlkit.dumps(self._document)
         ending = len(self._original) - len(self._original.rstrip("\n"))
         return edited.rstrip("\n") + "\n" * ending
+
+    def _extend(self, table: TablePath, key: str, values: Sequence[str], *, note: str) -> None:
+        existing = self._find(table)
+        array = None if existing is None else existing.get(key)
+        if not isinstance(array, Array):
+            raise ManifestConflict(f"[{'.'.join(table)}] has no array {key}")
+        added = [v for v in values if v not in array]
+        for value in added:
+            array.append(value)
+        if added:
+            array.comment(note)
 
     def _add_table(self, table: TablePath, body: Sequence[TableItem], *, note: str) -> None:
         if self._find(table) is not None:

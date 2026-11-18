@@ -1007,7 +1007,7 @@ def _examples_crate(
     that context for every crate at once. It is wider than a scaffolded project's, which declares
     only the reference set and reaches the rest through the facade.
     """
-    pinned = {c.name for c in reference.crates()}
+    pinned = {c.name for c in reference.documented().crates()}
     extra = "".join(f'{name} = "={version}"\n' for name, version in family if name not in pinned)
     _write_manifest(
         root, EXAMPLES_PACKAGE, reference.cargo_dependencies() + "\n" + extra, reference, sources
@@ -1175,7 +1175,7 @@ def sources_for(
     generation it belongs to. A crate the reference set does not pin, such as ``cvlr-asserts``
     under the core, is taken by every generation.
     """
-    pinned = {c.name: c.version for c in reference.crates()}
+    pinned = {c.name: c.version for c in reference.documented().crates()}
     return {
         name: source
         for name, source in sources.items()
@@ -1383,7 +1383,7 @@ def manifest_source(reference: ChainReference, sources: Mapping[str, LocalChecko
     all that someone looking at an ingested corpus and asking why it disagrees with crates.io has
     to go on.
     """
-    pinned = ", ".join(f"{c.name} {c.version}" for c in reference.crates())
+    pinned = ", ".join(f"{c.name} {c.version}" for c in reference.documented().crates())
     base = f"rustdoc over the CVLR family pinned at {pinned}"
     if commits := _commits(reference, sources):
         by_commit: dict[str, list[str]] = {}

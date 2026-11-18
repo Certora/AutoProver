@@ -20,7 +20,14 @@ from types import SimpleNamespace
 import pytest
 from langgraph.store.memory import InMemoryStore
 
-from composer.cargo.manifest import Dependency, MalformedManifest, parse_manifest
+from composer.cargo.manifest import (
+    Dependency,
+    ExtendArray,
+    MalformedManifest,
+    ManifestConflict,
+    ManifestEditor,
+    parse_manifest,
+)
 from composer.cargo import metadata
 from composer.cargo.metadata import (
     CargoFailed,
@@ -1179,3 +1186,19 @@ def test_a_missing_toolchain_fails_the_read_before_cargo_runs(tmp_path, monkeypa
     ((args, env),) = probes
     assert args[1:] == ["which", "--toolchain", "9.9.9", "cargo"]
     assert env["RUSTUP_AUTO_INSTALL"] == "0"
+
+
+def test_extending_an_array_appends_only_what_it_lacks():
+    editor = ManifestEditor('[features]\ncertora = ["dep:cvlr"]\n')
+    editor.apply(
+        ExtendArray(("features",), "certora", ("dep:cvlr", "dep:cvlr-fixed")), note="added"
+    )
+    assert editor.manifest.features["certora"] == ["dep:cvlr"]  # parsed before the edit
+    assert 'certora = ["dep:cvlr", "dep:cvlr-fixed"]' in editor.text()
+
+
+def test_extending_an_array_that_is_not_there_is_a_conflict():
+    with pytest.raises(ManifestConflict):
+        ManifestEditor("[features]\n").apply(
+            ExtendArray(("features",), "certora", ("dep:cvlr",)), note="added"
+        )

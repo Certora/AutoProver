@@ -36,7 +36,7 @@ symbol carries is ``solana_account_info::AccountInfo``. :class:`PathAlias` is th
 the tuning files.
 """
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 
@@ -79,12 +79,19 @@ class CrateRelease:
     #: ``None`` when the release is on crates.io. Otherwise the commit cargo fetches.
     commit: GitCommit | None = None
 
+    #: Cargo features the project turns on for this crate. Empty for every crate the core and
+    #: chain lines declare; a :class:`ConditionalCrate` is what sets them.
+    features: tuple[str, ...] = ()
+
     def dependency_line(self) -> str:
         """A ``Cargo.toml`` dependency line. Exact (``=version``), not a caret range.
 
         The reference set says what was compiled, not which later releases are compatible.
         """
-        return f'{self.name} = "={self.version}"'
+        if not self.features:
+            return f'{self.name} = "={self.version}"'
+        features = ", ".join(f'"{f}"' for f in self.features)
+        return f'{self.name} = {{ version = "={self.version}", features = [{features}] }}'
 
 
 @dataclass(frozen=True)
@@ -245,6 +252,20 @@ class HarnessShim:
         return f"the scaffold's {self.module} harness module"
 
 
+@dataclass(frozen=True)
+class ConditionalCrate:
+    """A CVLR crate declared only for a target that resolves :attr:`trigger`.
+
+    It is a companion of the reference set for such a target (:meth:`ChainReference.for_target`)
+    and absent for any other, because what it offers is about a crate the target already uses,
+    and its features would otherwise pull that crate into projects that do not.
+    """
+
+    #: The crate in the target's resolved graph that calls for :attr:`release`.
+    trigger: str
+    release: CrateRelease
+
+
 #: What binds the CVLR core to a platform's account type: a published chain crate, or a module the
 #: scaffold writes.
 type ChainBinding = CrateRelease | HarnessShim
@@ -289,6 +310,9 @@ class ChainReference:
     #: other: the same tuple carries the SPL token model, which a run verifying the stake program
     #: still wants.
     withheld: frozenset[str] = frozenset()
+    #: Crates declared only for a target that resolves their trigger. :meth:`for_target` adds the
+    #: ones a target calls for to :attr:`companions`; until then they are not in :meth:`crates`.
+    conditional: tuple[ConditionalCrate, ...] = ()
 
 
     def line(self) -> str:
@@ -359,12 +383,28 @@ class ChainReference:
             )
         return replace(self, withheld=self.withheld | frozenset(names))
 
+    def for_target(self, resolves: Callable[[str], bool]) -> "ChainReference":
+        """This reference set for a target, with each :attr:`conditional` crate whose trigger the
+        target resolves declared as a companion."""
+        called_for = tuple(
+            c.release
+            for c in self.conditional
+            if resolves(c.trigger) and c.release not in self.companions
+        )
+        return replace(self, companions=self.companions + called_for) if called_for else self
+
+    def documented(self) -> "ChainReference":
+        """This reference set as the API corpus documents it: for a target that calls for every
+        :attr:`conditional` crate."""
+        return self.for_target(lambda _: True)
+
     def cargo_dependencies(self) -> str:
         """A ``[dependencies]`` body pinning this reference set, for a probe crate.
 
         The platform crates are included because the chain crate's public types come from them.
-        Without them a probe cannot name what the helpers return."""
-        lines = [c.dependency_line() for c in self.crates()]
+        Without them a probe cannot name what the helpers return. The conditional crates are
+        included as :meth:`documented` declares them, so a probe documents what they offer."""
+        lines = [c.dependency_line() for c in self.documented().crates()]
         lines += [c.dependency_line() for c in self.platform.sdk_crates]
         return "\n".join(lines)
 
@@ -376,6 +416,14 @@ class ChainReference:
 #: ``cvlr_lemma!``) is a dependency of ``cvlr``, so a target names one crate and gets the
 #: parametric-rule layer with it.
 _CORE = CrateRelease("cvlr", "0.6.3")
+
+#: ``cvlr-fixed`` with its ``fixed`` feature, for a program on the ``fixed`` crate:
+#: ``cvlr_fixed::narrow::NarrowFixedU128``, a 64-bit stand-in for a 128-bit fixed-point type, which
+#: the editor's ``narrow_fixed`` kind swaps in under a unit's feature. Released with the core, so
+#: at its version.
+NARROW_FIXED = ConditionalCrate(
+    trigger="fixed", release=CrateRelease("cvlr-fixed", _CORE.version, features=("fixed",))
+)
 
 #: ``cvlr-solana`` 0.5.2, which reads account flags without branching (each nondet account used to
 #: add 2^3 paths to a rule). The three crates of that repository are released together, at one
@@ -394,6 +442,7 @@ SOLANA_V2 = ChainReference(
         ),
     ),
     forks=(ANCHOR_FORK, FIXED_FORK),
+    conditional=(NARROW_FIXED,),
     platform=PlatformGeneration(
         # The last line published as one ``solana-program`` crate. v3 is only the split crates.
         label="solana-program 2.x",
@@ -513,6 +562,7 @@ SOLANA_V1_18 = ChainReference(
     # which the core summaries make opaque.
     models=(),
     forks=(ANCHOR_FORK, FIXED_FORK),
+    conditional=(NARROW_FIXED,),
     caveats=(
         "This build is on `cvlr-solana` 0.4, the line for `solana-program` 1.18. The CVLR manual "
         "is written for 0.5 and later. Where it names `cvlr_spl_token` or `cvlr_solana_stake`, "
@@ -551,6 +601,7 @@ SOLANA_JIMINY = ChainReference(
     ),
     models=(),
     forks=(FIXED_FORK,),
+    conditional=(NARROW_FIXED,),
     caveats=(
         "This program is written on jiminy, not on the Solana SDK, so this build gives it the "
         "`cvlr` core and no chain crate. Nothing in `cvlr_solana`, `cvlr_spl_token` or "
@@ -615,6 +666,7 @@ SOLANA_PINOCCHIO_0_11 = ChainReference(
     ),
     models=(),
     forks=(FIXED_FORK,),
+    conditional=(NARROW_FIXED,),
     caveats=_pinocchio_caveats("AccountView"),
     platform=PlatformGeneration(
         label="pinocchio 0.11-0.12",
@@ -637,6 +689,7 @@ SOLANA_PINOCCHIO_0_10 = ChainReference(
     ),
     models=(),
     forks=(FIXED_FORK,),
+    conditional=(NARROW_FIXED,),
     caveats=_pinocchio_caveats("AccountView"),
     platform=PlatformGeneration(
         label="pinocchio 0.10",
@@ -660,6 +713,7 @@ SOLANA_PINOCCHIO_0_9 = ChainReference(
     ),
     models=(),
     forks=(FIXED_FORK,),
+    conditional=(NARROW_FIXED,),
     caveats=_pinocchio_caveats("AccountInfo"),
     platform=PlatformGeneration(
         label="pinocchio 0.9",
@@ -682,6 +736,7 @@ SOLANA_PINOCCHIO_0_8 = ChainReference(
     ),
     models=(),
     forks=(FIXED_FORK,),
+    conditional=(NARROW_FIXED,),
     caveats=_pinocchio_caveats("AccountInfo"),
     platform=PlatformGeneration(
         label="pinocchio 0.8",

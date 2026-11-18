@@ -372,6 +372,40 @@ def test_a_workspace_gets_the_pins_and_its_member_inherits_them(tmp_path):
     assert member["dependencies"]["cvlr"] == {"workspace": True, "optional": True}
 
 
+def test_a_project_on_fixed_declares_the_narrow_type_behind_the_certora_feature(tmp_path):
+    workspace, package = _project(tmp_path, manifest=STANDALONE, workspace_manifest=STANDALONE)
+    reference = SOLANA_V2.for_target(lambda name: name == "fixed")
+    apply(plan_scaffold(workspace, package, reference), workspace.root)
+
+    parsed = tomllib.loads((tmp_path / "Cargo.toml").read_text())
+    assert parsed["dependencies"]["cvlr-fixed"] == {
+        "version": "=0.6.3",
+        "features": ["fixed"],
+        "optional": True,
+    }
+    assert "dep:cvlr-fixed" in parsed["features"]["certora"]
+
+
+def test_a_crate_added_since_set_up_is_declared_and_turned_on(tmp_path):
+    # The reference set grew after this project was set up. Declaring the crate without naming it
+    # in `certora` would leave an optional dependency nothing ever enables.
+    manifest = STANDALONE.replace(
+        "[dependencies]\nsolana-program",
+        '[features]\ncertora = ["dep:cvlr", "dep:cvlr-solana", "dep:cvlr-solana-stake", '
+        '"dep:cvlr-spl-token"]\n\n[dependencies]\ncvlr = "=0.6.3"\ncvlr-solana = "=0.5.2"\n'
+        'cvlr-solana-stake = "=0.5.2"\ncvlr-spl-token = "=0.5.2"\nsolana-program',
+    )
+    workspace, package = _project(tmp_path, manifest=manifest, workspace_manifest=manifest)
+    reference = SOLANA_V2.for_target(lambda name: name == "fixed")
+    plan = plan_scaffold(workspace, package, reference)
+    assert not plan.blocked
+    apply(plan, workspace.root)
+
+    parsed = tomllib.loads((tmp_path / "Cargo.toml").read_text())
+    assert parsed["features"]["certora"][-1] == "dep:cvlr-fixed"
+    assert parsed["dependencies"]["cvlr-fixed"]["features"] == ["fixed"]
+
+
 def test_a_package_that_builds_no_loadable_object_is_refused_rather_than_patched(tmp_path):
     # Adding cdylib to somebody's library changes how it builds everywhere, so it is a decision for
     # a human. The refusal has to stop the whole plan, not just that one change.
