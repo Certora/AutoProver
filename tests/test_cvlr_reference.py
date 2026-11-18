@@ -51,7 +51,7 @@ def test_the_dependency_block_carries_the_platform_too():
     # Without it a probe cannot name AccountInfo, so an entry that mentions one would fail the
     # gate for a missing import rather than for anything about CVLR.
     block = ref.SOLANA_V2.cargo_dependencies()
-    assert 'cvlr = "=0.6.2"' in block
+    assert 'cvlr = "=0.6.3"' in block
     assert 'cvlr-solana = "=0.5.2"' in block
     assert 'solana-program = "2.2"' in block
 
@@ -216,7 +216,7 @@ def test_the_sdk_generations_switch_off_the_sdk_allocator():
 
 
 def test_the_1_18_line_shares_the_core_and_has_no_program_models():
-    """`cvlr-solana` 0.4.x requires `cvlr-*` `>=0.4, <1`, so it resolves onto the one 0.6.2 core.
+    """`cvlr-solana` 0.4.x requires `cvlr-*` `>=0.4, <1`, so it resolves onto the one 0.6.3 core.
     The 0.4 line has no stake model and no separate token crate, so there is nothing to withhold."""
     v1 = ref.SOLANA_V1_18
     assert v1.core == ref.SOLANA_V2.core

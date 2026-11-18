@@ -375,7 +375,7 @@ class ChainReference:
 #: The core line, shared by every chain. ``cvlr-spec`` (``cvlr_spec!``, ``cvlr_rules!``,
 #: ``cvlr_lemma!``) is a dependency of ``cvlr``, so a target names one crate and gets the
 #: parametric-rule layer with it.
-_CORE = CrateRelease("cvlr", "0.6.2")
+_CORE = CrateRelease("cvlr", "0.6.3")
 
 #: ``cvlr-solana`` 0.5.2, which reads account flags without branching (each nondet account used to
 #: add 2^3 paths to a rule). The three crates of that repository are released together, at one
@@ -503,7 +503,7 @@ SOLANA_V3 = replace(
 )
 
 #: ``cvlr-solana`` 0.4.7, for ``solana-program`` 1.18, with the same account-flag fix. It requires
-#: ``cvlr-*`` ``>=0.4, <1``, so cargo resolves it onto the shared 0.6.2 core, one copy of each core
+#: ``cvlr-*`` ``>=0.4, <1``, so cargo resolves it onto the shared 0.6.3 core, one copy of each core
 #: crate.
 SOLANA_V1_18 = ChainReference(
     core=_CORE,
