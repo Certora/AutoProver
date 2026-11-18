@@ -176,3 +176,15 @@ recipes:
   - status: SANITY_FAILED
   search_terms:
   - explain_vacuity
+- id: K15
+  name: 'A 128-bit fixed-point type the property is decided by: `narrow_fixed`'
+  triggers:
+  - The program keeps fractions in the `fixed` crate's 128-bit type (`FixedU128`, an alias such as
+    `Fraction`), and a property is decided by its multiplications and divisions
+  - A timed-out rule's statistics name a 256-bit division, or `fixed`'s `mul` or `div`, as the
+    dominant function
+  channel: EDIT
+  file: recipes/cvlr-k15-a-narrower-fixed-point-type.md
+  search_terms:
+  - NarrowFixedU128
+  - narrow_lit

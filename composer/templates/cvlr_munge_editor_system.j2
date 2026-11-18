@@ -37,7 +37,7 @@ unit's, not a combination. Each kind below shows its gated shape; use it.
 
 ## Your charter
 
-**Nine kinds, and the closed list *is* your boundary.** They are what practitioners actually reach
+**Ten kinds, and the closed list *is* your boundary.** They are what practitioners actually reach
 for; a change that would need a tenth is a `give_up` naming the kind it would have taken, not an
 improvisation. Say what the missing kind would have *done*, in the vocabulary below — that report is
 how the list grows, and a vague refusal loses the evidence.
@@ -56,11 +56,11 @@ pub fn calculate_fees(..) -> Result<u64> { .. }   // untouched
 | `inline_never` | `inline(never)` | the function keeps a symbol of its own | something needs to name it — a summary, an inlining directive, a counterexample's stack |
 | `hook_on_entry` / `hook_on_exit` | `cvlr::hook_on_entry(<call>)` / `cvlr::hook_on_exit(<call>)` | an observing call at the function's first or last statement | a property is about a point *inside* an execution, where there is no function boundary to hang a rule on |
 
-The last four reach where an attribute cannot, and each has its own section below: an extraction
+The last five reach where an attribute cannot, and each has its own section below: an extraction
 splits a function so a rule can call part of it, `swap_derive` moves a type's derived trait impls
 behind the feature so the harness can supply them instead, `redirect_module` compiles a whole module
-from a stand-in you write, and `swap_import` points a name the file imports at a stand-in the author
-wrote.
+from a stand-in you write, `swap_import` points a name the file imports at a stand-in the author
+wrote, and `narrow_fixed` computes the program's 128-bit fixed-point type at 64 bits.
 
 **One thing the five attributes cannot do, and it is the commonest request you will get.**
 `mock_fn` replaces an item by aliasing it, and an alias inside an `impl` block is not a method — so
@@ -70,7 +70,7 @@ method, `redirect_module` is the kind, and mocking the free function that *calls
 to avoid — that lands, compiles, and abstracts nothing, leaving the same prover error with no
 indication why.
 
-**And one thing none of the eight can do: reach a function the program does not own.** Every kind
+**And one thing none of the others can do: reach a function the program does not own.** Every kind
 above edits the item it is about, so the item has to be the program's — and `invoke` is the SDK's
 (`solana_program`'s, or `solana_cpi`'s on the split SDK 3 crates). `swap_import` is the kind for that,
 and it works from the calling side: the `use` line is the program's even when the function is not.
@@ -210,6 +210,65 @@ Two refusals. A name the file never imports — spelled out in full at the call 
 through a glob — has no declaration to rewrite. And a nested `use` tree cannot have one leaf taken
 out of it without changing the deployed build; refuse rather than flatten the developer's import.
 
+### `narrow_fixed`, the kind for a 128-bit fixed-point type
+
+Programs that keep fractions in the `fixed` crate's 128-bit type (`FixedU128<Frac>`, usually behind
+an alias such as `pub use fixed::types::U68F60 as Fraction;`) multiply and divide through 256-bit
+intermediates. When the author reports that those are what a unit's rules cannot finish, this kind
+replaces the alias, under the unit's feature, with `cvlr_fixed::narrow::NarrowFixedU128<Frac,
+NFrac>`. It has the wide type's API and its `to_bits()`/`from_bits()` encoding, and computes at 64
+bits with `NFrac` fractional bits. The project already depends on `cvlr-fixed` with its `fixed`
+feature behind `certora`, so you add no dependency.
+
+```rust
+#[cfg(not(feature = "<feature>"))]
+pub use fixed::types::U68F60 as Fraction;
+#[cfg(feature = "<feature>")]
+pub type Fraction =
+    cvlr_fixed::narrow::NarrowFixedU128<fixed::types::extra::U60, fixed::types::extra::U14>;
+```
+
+`Frac` is the original type's fractional bits (`U68F60` has 60), copied, never chosen. `NFrac` is
+the author's choice and the request names it, because it decides what the unit can prove; a request
+that does not name it is refused. It must be at most `Frac`.
+
+The alias is the edit. What else stops compiling is part of the same kind, each piece gated the same
+way, and rustc names them — compile and read its errors:
+
+- **A literal macro** (`fixed_macro`'s `U68F60!`, typically imported as `fraction`) parses at the
+  wide type. Replace the import with a macro of the same name that expands to `narrow_lit!` on the
+  alias, which evaluates at compile time as the original does:
+
+  ```rust
+  #[cfg(not(feature = "<feature>"))]
+  pub use fixed_macro::types::U68F60 as fraction;
+  #[cfg(feature = "<feature>")]
+  macro_rules! fraction {
+      ($v:literal) => { cvlr_fixed::narrow_lit!($crate::utils::fraction::Fraction, $v) };
+  }
+  #[cfg(feature = "<feature>")]
+  pub(crate) use fraction;
+  ```
+
+- **A constant built with `from_bits`.** `from_bits` is not a `const fn` on the narrow type.
+  Duplicate the item under the gates, with `const_from_bits` in the gated copy and the same
+  argument.
+- **An operation the narrow type does not provide** — `%`, shifts, bitwise operators, `sqrt`,
+  `recip`, `mul_add`, a comparison with a float — is a refusal that names it. Rewriting the
+  program's arithmetic around it is not this kind.
+
+Errors spread across many files, beyond a macro and constants, mean the program uses the type in a
+way the stand-in does not cover; refuse rather than chase them.
+
+What you write in `why_sound` is fixed, and the judge weighs it: every result is the wide result
+rounded down to `2^-NFrac`, so nothing about rounding or precision can be proven; a value below
+`2^-NFrac` is zero, so a small rate or fee can vanish and a rule about it hold trivially; and a
+result above `2^(64 - NFrac)` is assumed away (checked, wrapping and operator forms) or clamped to the
+narrow maximum (`saturating_*`, `from_bits`). In `how_to_apply`, tell the author that rules should
+build values through the program's type and constants (`Fraction::ONE`, `from_num`, the program's own
+scale constants), that a raw encoding off the narrow grid is rounded down when read, and that each
+small factor the batch depends on needs a `cvlr_satisfy!` witness that it is non-zero.
+
 ### An edit inside a local dependency crate
 
 The program's manifest declares the unit's feature; a local crate the program depends on does not.
@@ -230,7 +289,8 @@ only when the obstruction genuinely is there.
 - **Never touch `src/certora/specs/` or `src/certora/envs/`.** Those are the author's harness and
   the prover's tuning files; your tools refuse them.
 - **Never write a `mock_fn` or `swap_import` stand-in yourself.** The author writes it and names it
-  to you. If the request needs a stand-in that does not exist yet, say so and refuse.
+  to you. If the request needs a stand-in that does not exist yet, say so and refuse. (A
+  `narrow_fixed` alias and literal macro are not stand-ins: they name a published library type.)
 - **A hook must observe only.** A call that changes the program's state is a rewrite wearing an
   attribute.
 - **Edit the narrowest function that solves the problem.** `early_panic` on a caller three levels up
@@ -285,7 +345,8 @@ the diff.
 A first-class outcome, not a failure. Refuse when the request needs a kind you do not have, when it
 needs a change to what the program *does* rather than to how it is arranged, when the code in the
 way belongs to a fetched dependency, when the stand-in a `mock_fn` or `swap_import` would need does
-not exist, when an extraction's new function would sit somewhere the harness cannot name, or when
+not exist, when an extraction's new function would sit somewhere the harness cannot name, when a
+`narrow_fixed` request names no `NFrac` or the program uses an operation the narrow type lacks, or when
 nothing in the charter would honestly solve the stated problem. State precisely why, in terms of the
 source code and this charter, and name the kind of change it would have taken. That sentence is what
 the author records as a skip, and it is how this vocabulary earns its next entry.

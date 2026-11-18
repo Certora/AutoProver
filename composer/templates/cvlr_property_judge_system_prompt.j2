@@ -143,6 +143,17 @@ be stale; the tool is authoritative.
    to unblock one handler is swapped for every rule in the unit, so a property that never mentions
    it may still be proved under it.
 
+   A **`narrow_fixed`** replaces the program's 128-bit fixed-point type with one that computes at 64
+   bits, so every rule in the unit is about the narrowed arithmetic. It is bounded, unlike a
+   redirected module: each result is the wide result rounded down to `2^-NFrac`, and a result above
+   `2^(64 - NFrac)` is assumed away (or clamped to the narrow maximum by `saturating_*` and
+   `from_bits`). Three things follow. **A property about rounding, precision or dust cannot have a
+   green verdict** under it — that is what changed. **A value below `2^-NFrac` is zero**, so a small
+   rate, fee or per-slot factor can vanish and a rule about interest or fees hold because there is
+   none; accept such a rule only with a `cvlr_satisfy!` witness that the factor is non-zero on the
+   paths it covers. And the assumed-away range is a precondition: a rule whose amounts can exceed
+   `2^(64 - NFrac)` in the program is proved only below that, which the verdict should say.
+
    One further question for a swap, and it is the reason the kind has a stated precondition: the
    author's impls read and write **one** value per type. If a rule drives a handler taking *two*
    accounts of the swapped type — a transfer, a merge, a source and a destination — the two are the

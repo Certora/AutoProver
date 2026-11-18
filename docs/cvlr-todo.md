@@ -682,7 +682,23 @@ not advice: the remedies are already in the prompt (U43, the loop ladder, boundi
 generic: the statistics come from the Prover for any program, and nothing in them is specific to
 one benchmark.
 
-**U45. A narrower fixed-point type has to be chosen when a unit starts.** The eligibility decision
+**U45. A narrower fixed-point type has to be chosen when a unit starts.** — **built (2026-11-18),
+not yet run end to end.** The type is `cvlr_fixed::narrow::NarrowFixedU128<Frac, NFrac>`, published
+in `cvlr` 0.6.3 ([cvlr#54](https://github.com/Certora/cvlr/pull/54)): the wide type's API and
+`to_bits()` encoding at 64 bits, with its native-integer paths checked by 108 Prover rules over
+three widths, with and without `-solanaTACSoundSignedMath`. AutoProver pins the core at 0.6.3, and
+setup declares `cvlr-fixed` with its `fixed` feature behind `certora` for a program that resolves
+`fixed` (`NARROW_FIXED`, `ChainReference.for_target`), so the swap needs no new dependency from
+the offline builds. The editor has a tenth kind, `narrow_fixed`: the alias, the literal macro and
+`from_bits` constants, gated on the unit, with `NFrac` named by the author. The reviewer, the judge
+(rounding unprovable, small factors vanish, large amounts assumed away) and the author's prompt
+know it, and recipe K15 holds the choice of `NFrac` and the witness obligation. What remains is a
+run that exercises it: the borrowing unit with `loop_iter` at least 10 (the curve search takes up
+to 10 iterations) and `cvlr_satisfy!` witnesses that the borrow rate and accrued interest are
+non-zero. The hand-edited experiment's numbers are in cvlr#54's description. The original entry
+follows.
+
+The eligibility decision
 in the lending benchmark's liquidation unit compares ratios that the program computes with 25
 fixed-point divisions, each a 256-bit long division (U44). A stand-in (U43) cannot replace those
 divisions without changing the decision the property is about, and U40 found that characterizing

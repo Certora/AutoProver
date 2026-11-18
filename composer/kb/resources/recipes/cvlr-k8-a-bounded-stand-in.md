@@ -106,3 +106,7 @@ to remove, so add it only for a property that needs it. A property about the exa
 exact operation: skip it, citing the timeout under the stand-in. Measured on one program: two of
 three rewrites of such a stand-in left its timeouts in place, and three units that never revised
 theirs spent about 21 submissions on the same timeouts before skipping.
+
+**When the program's own fixed-point type is the function.** If the time is in the `fixed` crate's
+128-bit type and the property is decided by those computations, no stand-in serves it: fetch K15
+for the editor's `narrow_fixed` kind.
