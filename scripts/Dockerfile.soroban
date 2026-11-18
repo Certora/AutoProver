@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.7
+#
+# The Soroban AutoProver container — `console-soroban` / `tui-soroban` — layered on the lean base
+# image (scripts/Dockerfile), as scripts/Dockerfile.solana is. This adds two Rust toolchains: the
+# host one a run reads the project's cargo metadata with, and the one a Soroban contract is checked
+# and built with, with its `wasm32v1-none` standard library. None of Solana's platform tools.
+#
+# It bundles no `run-confined` launcher, for the reason scripts/Dockerfile.solana gives: run it with
+# both overlays — see scripts/docker-compose.soroban.yml.
+#
+# Nothing here is private: rustup and crates.io are public.
+
+ARG BASE_IMAGE=autoprover-local:latest
+FROM --platform=linux/amd64 ${BASE_IMAGE} AS soroban
+
+# No versions here. composer.scripts.soroban_toolchain installs the ones the installed composer
+# builds with, which is also how AIAutoProver's cloud image installs them; `... soroban_toolchain
+# versions` prints them.
+
+# Inherited from the base service's build args through the compose template. Declared so the build
+# does not warn about it.
+ARG CERTORA_CLI_PACKAGE
+
+# The base image purges its C toolchain once the wheels are built; this one needs it permanently.
+# `cargo check` compiles and links the project's build scripts and proc-macros for the host.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential curl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Root-owned and outside $HOME, for the reason scripts/Dockerfile.solana gives: a read-only Landlock
+# grant over a tree the confined build can also write grants nothing.
+ENV RUSTUP_HOME=/opt/autoprove/rustup \
+    CARGO_HOME=/opt/autoprove/cargo \
+    PATH=/opt/autoprove/cargo/bin:${PATH}
+
+# Both toolchains, then an empty ~/.gitconfig. The module docstring has the reasons for each.
+RUN python -m composer.scripts.soroban_toolchain toolchain
+RUN python -m composer.scripts.soroban_toolchain gitconfig
+
+# No permissions pass over the toolchain trees, as in scripts/Dockerfile.solana: rustup writes
+# under umask 022, and a recursive mode change would store a second copy of them.
+
+WORKDIR /work

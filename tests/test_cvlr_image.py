@@ -188,3 +188,62 @@ def test_the_toolchain_steps_install_the_demangler_the_prover_uses():
     steps = toolchain_steps({"CARGO_HOME": "/c", "CERTORA_PLATFORM_TOOLS_ROOT": "/t"})
     install = Run(("cargo", "install", "--locked", "rustfilt", "--version", RUSTFILT_VERSION))
     assert steps.index(install) < steps.index(RemoveTree(Path("/c/registry")))
+
+
+# ---------------------------------------------------------------------------------------------
+# The Soroban image (scripts/Dockerfile.soroban), which composer.scripts.soroban_toolchain fills
+
+_SOROBAN_DOCKERFILE = _SCRIPTS / "Dockerfile.soroban"
+
+
+@pytest.mark.parametrize("step", ["toolchain", "gitconfig"])
+def test_the_soroban_image_runs_every_toolchain_step(step):
+    assert f"python -m composer.scripts.soroban_toolchain {step}" in _SOROBAN_DOCKERFILE.read_text()
+
+
+def test_the_soroban_image_sets_what_its_toolchain_steps_and_the_sandbox_read():
+    from composer.scripts.soroban_toolchain import REQUIRED_ENV as SOROBAN_REQUIRED_ENV
+
+    env = re.search(r"^ENV (.*?)(?:\n\n|\Z)", _SOROBAN_DOCKERFILE.read_text(), re.MULTILINE | re.DOTALL)
+    assert env is not None
+    for name in SOROBAN_REQUIRED_ENV:
+        assert f"{name}=" in env[1]
+
+
+def test_the_soroban_toolchain_steps_install_both_toolchains_and_the_wasm_target():
+    """The host toolchain reads the project's cargo metadata; the Soroban one, with its wasm
+    target, checks and builds the contract. A confined build can fetch neither."""
+    from composer.cargo.wasm import WASM_TARGET
+    from composer.scripts.soroban_toolchain import toolchain_steps as soroban_steps
+    from composer.spec.cvlr.conf import SOROBAN_RUST_TOOLCHAIN
+
+    steps = soroban_steps({"CARGO_HOME": "/c", "RUSTUP_HOME": "/r"})
+    commands = [" ".join(s.argv) for s in steps if isinstance(s, Run)]
+    assert any(f"--default-toolchain {HOST_RUST_TOOLCHAIN}" in c for c in commands)
+    assert (
+        f"rustup toolchain install {SOROBAN_RUST_TOOLCHAIN} --profile minimal --target {WASM_TARGET}"
+        in commands
+    )
+    assert RemoveTree(Path("/c") / "registry") in steps
+
+
+def test_the_soroban_image_states_no_version_of_its_own():
+    from composer.spec.cvlr.conf import SOROBAN_RUST_TOOLCHAIN
+
+    text = _SOROBAN_DOCKERFILE.read_text()
+    assert "ARG RUST_VERSION" not in text
+    assert SOROBAN_RUST_TOOLCHAIN not in text
+    assert HOST_RUST_TOOLCHAIN not in text
+
+
+def test_the_soroban_image_restores_the_host_c_toolchain_and_does_not_chmod_it():
+    text = _SOROBAN_DOCKERFILE.read_text()
+    assert "build-essential" in text
+    assert "chmod -R" not in text
+
+
+@pytest.mark.parametrize("command", ["console-soroban", "tui-soroban"])
+def test_the_entrypoint_guards_both_soroban_front_ends(command):
+    case = re.search(r"^  (\S*console-soroban\S*)\)$", _ENTRYPOINT.read_text(), re.MULTILINE)
+    assert case is not None, f"{_ENTRYPOINT} has no console-soroban case"
+    assert command in case[1].split("|")

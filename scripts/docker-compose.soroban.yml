@@ -1,0 +1,46 @@
+# docker-compose.soroban.yml — OVERLAY adding the Soroban AutoProver container, `autoprove-soroban`,
+# beside the EVM one. Its image (scripts/Dockerfile.soroban) layers the Rust toolchains onto the
+# base image, which must therefore be built first.
+#
+# All three files, always, for the reason scripts/docker-compose.solana.yml gives: the CVLR backend
+# confines every cargo build and its sandbox provider is fail-closed.
+#
+#   # one-time: the base image this one layers onto
+#   docker compose -f scripts/docker-compose.yml --profile autoprove build
+#   # the launcher and the Soroban toolchain image
+#   docker compose -f scripts/docker-compose.yml \
+#                  -f scripts/docker-compose.sandbox.yml \
+#                  -f scripts/docker-compose.soroban.yml \
+#       --profile soroban --profile sandbox build
+#   export HOST_UID=$(id -u) HOST_GID=$(id -g) HOST_WORK_DIR=/path/to/projects
+#   docker compose -f scripts/docker-compose.yml \
+#                  -f scripts/docker-compose.sandbox.yml \
+#                  -f scripts/docker-compose.soroban.yml \
+#       --profile soroban --profile sandbox run --rm autoprove-soroban \
+#       console-soroban /work/<proj> contracts/<pkg>/src/lib.rs:<ContractType>
+#
+# Then scripts/verify-soroban-image.sh.
+
+services:
+  autoprove-soroban:
+    extends:
+      file: docker-compose.common.yml
+      service: autoprove-common
+    profiles: ["soroban"]
+    image: autoprover-soroban:latest
+    build:
+      context: ..
+      dockerfile: scripts/Dockerfile.soroban
+      args:
+        BASE_IMAGE: autoprover-local:latest
+    depends_on:
+      # The sandbox overlay's one-shot launcher publisher. Compose merges this with the postgres
+      # entry the template carries.
+      run-confined-build:
+        condition: service_completed_successfully
+    environment:
+      # Absolute path to the mounted launcher; the provider prefers this over PATH.
+      RUN_CONFINED_BIN: /sandbox/run-confined
+    volumes:
+      # Read-only: only run-confined-build (rw) writes the binary.
+      - run_confined:/sandbox:ro
