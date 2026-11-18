@@ -3,7 +3,10 @@
 Everything runs offline: requests go to an ``httpx.MockTransport`` and are signed with fake
 AWS credentials. See composer/llm/bedrock.py and composer/llm/bedrock_chat.py."""
 
+import base64
 import json
+import struct
+import zlib
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -22,7 +25,8 @@ from composer.llm.anthropic import (
     uploader_for_backend,
 )
 from composer.llm.bedrock import (
-    BACKEND_ENV_VAR, is_bedrock_model_id, llm_backend, to_bedrock_model_id,
+    BACKEND_ENV_VAR, INFERENCE_PROFILE_ENV_VAR, is_bedrock_model_id, llm_backend,
+    to_bedrock_model_id,
 )
 from composer.llm.bedrock_chat import ChatAnthropicBedrock
 from composer.llm.registry import get_provider_for
@@ -51,8 +55,8 @@ def bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY")
     for var in (
-        "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_AWS_API_KEY",
-        "ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "ANTHROPIC_API_KEY",
+        "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK",
+        "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_API_KEY", INFERENCE_PROFILE_ENV_VAR,
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -91,10 +95,8 @@ def test_bedrock_region_falls_back_to_default_region(bedrock_env, monkeypatch) -
     monkeypatch.setenv("AWS_DEFAULT_REGION", "eu-central-1")
     llm = _build()
     assert isinstance(llm, ChatAnthropicBedrock)
-    assert llm.aws_region == "eu-central-1"
-    assert str(llm._async_client.base_url) == (
-        "https://bedrock-mantle.eu-central-1.api.aws/anthropic/"
-    )
+    assert llm.region_name == "eu-central-1"
+    assert str(llm._async_client.base_url) == "https://bedrock-runtime.eu-central-1.amazonaws.com"
 
 
 # --- the Anthropic path is unchanged -------------------------------------------------
@@ -132,48 +134,26 @@ def test_anthropic_path_keeps_files_beta_without_other_betas(monkeypatch) -> Non
 # --- the Bedrock chat model ----------------------------------------------------------
 
 
-def test_bedrock_builder_wires_mantle_clients(bedrock_env) -> None:
+def test_bedrock_builder_wires_invoke_model_clients(bedrock_env) -> None:
     llm = _build()
     assert isinstance(llm, ChatAnthropicBedrock)
     # Logical outside the client.
     assert llm.model == _MODEL
+    assert llm.inference_profile == "global"
     # No Files API on Bedrock, and no other beta asked for: the plain messages endpoint.
     assert llm.betas is None
     for client, cls in (
-        (llm._client, anthropic.AnthropicBedrockMantle),
-        (llm._async_client, anthropic.AsyncAnthropicBedrockMantle),
+        (llm._client, anthropic.AnthropicBedrock),
+        (llm._async_client, anthropic.AsyncAnthropicBedrock),
     ):
         assert isinstance(client, cls)
         assert client.timeout == 300.0
         assert client.max_retries == 8
-        assert str(client.base_url) == f"https://bedrock-mantle.{_REGION}.api.aws/anthropic/"
+        assert str(client.base_url) == f"https://bedrock-runtime.{_REGION}.amazonaws.com"
         assert client.aws_region == _REGION
         assert client.api_key is None
-        assert client._custom_headers["User-Agent"].startswith("langchain-anthropic")
-
-
-def test_bedrock_models_share_one_connection_pool(bedrock_env) -> None:
-    first, second = _build(), _build()
-    assert first._async_client._client is second._async_client._client
-    assert first._client._client is second._client._client
-
-
-def test_bedrock_client_honours_anthropic_proxy(bedrock_env, monkeypatch) -> None:
-    seen: list[dict[str, Any]] = []
-    real = bedrock_chat._get_default_async_httpx_client
-
-    def recording(**kwargs: Any) -> Any:
-        seen.append(kwargs)
-        return real(**kwargs)
-
-    monkeypatch.setattr(bedrock_chat, "_get_default_async_httpx_client", recording)
-    monkeypatch.setenv("ANTHROPIC_PROXY", "http://proxy.invalid:3128")
-    _build()._async_client
-    assert seen == [{
-        "base_url": f"https://bedrock-mantle.{_REGION}.api.aws",
-        "timeout": 300.0,
-        "anthropic_proxy": "http://proxy.invalid:3128",
-    }]
+        assert len(client._middleware) == 1
+        assert isinstance(client._middleware[0], bedrock_chat.CredentialErrorMiddleware)
 
 
 def test_bedrock_builder_never_sends_files_beta(bedrock_env) -> None:
@@ -184,22 +164,70 @@ def test_bedrock_builder_never_sends_files_beta(bedrock_env) -> None:
 def test_bedrock_payload_carries_bedrock_id(bedrock_env) -> None:
     llm = _build()
     payload = llm._get_request_payload("hi")
-    assert payload["model"] == "anthropic.claude-opus-5-5"
+    assert payload["model"] == "global.anthropic.claude-opus-5-5"
     assert "betas" not in payload
     assert llm.model == _MODEL
 
 
-# --- end to end against a mocked Mantle endpoint -----------------------------------
+def test_bedrock_inference_profile_setting(bedrock_env, monkeypatch) -> None:
+    monkeypatch.setenv(INFERENCE_PROFILE_ENV_VAR, " EU ")
+    llm = _build()
+    assert llm.inference_profile == "eu"
+    assert llm._get_request_payload("hi")["model"] == "eu.anthropic.claude-opus-5-5"
 
 
-def _sse(events: list[dict[str, Any]]) -> bytes:
-    return "".join(
-        f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events
-    ).encode()
+def test_bedrock_bad_inference_profile_fails_when_the_model_is_built(
+    bedrock_env, monkeypatch
+) -> None:
+    monkeypatch.setenv(INFERENCE_PROFILE_ENV_VAR, "eu.anthropic")
+    with pytest.raises(ValueError, match=f"{INFERENCE_PROFILE_ENV_VAR}='eu.anthropic'"):
+        _build()
 
 
-def _stream_body(model: str) -> bytes:
-    return _sse([
+# --- end to end against a mocked InvokeModel endpoint --------------------------------
+
+
+def _frame(headers: dict[str, str], payload: bytes) -> bytes:
+    """One message of the AWS event stream encoding: a prelude with the total and header
+    lengths and its CRC32, string headers, the payload, and a CRC32 of all of it."""
+    encoded = b"".join(
+        struct.pack(">B", len(name)) + name.encode() + struct.pack(">BH", 7, len(value))
+        + value.encode()
+        for name, value in headers.items()
+    )
+    prelude = struct.pack(">II", 12 + len(encoded) + len(payload) + 4, len(encoded))
+    message = prelude + struct.pack(">I", zlib.crc32(prelude)) + encoded + payload
+    return message + struct.pack(">I", zlib.crc32(message))
+
+
+def _event_stream(events: list[dict[str, Any]]) -> bytes:
+    """``events`` as InvokeModel streams them: each Messages API event, JSON-encoded, is the
+    base64 ``bytes`` of a ``chunk`` frame."""
+    return b"".join(
+        _frame(
+            {":event-type": "chunk", ":content-type": "application/json",
+             ":message-type": "event"},
+            json.dumps({"bytes": base64.b64encode(json.dumps(e).encode()).decode()}).encode(),
+        )
+        for e in events
+    )
+
+
+def _exception_frame(name: str, message: str) -> bytes:
+    """A frame with which Bedrock ends an open stream on an exception."""
+    return _frame(
+        {":exception-type": name, ":content-type": "application/json",
+         ":message-type": "exception"},
+        json.dumps({"message": message}).encode(),
+    )
+
+
+_EVENT_STREAM = {"content-type": "application/vnd.amazon.eventstream"}
+
+
+def _stream_events(model: str) -> list[dict[str, Any]]:
+    # Bedrock reports the input tokens on message_start only.
+    return [
         {"type": "message_start", "message": {
             "id": "msg_1", "type": "message", "role": "assistant", "model": model,
             "content": [], "stop_reason": None, "stop_sequence": None,
@@ -209,9 +237,13 @@ def _stream_body(model: str) -> bytes:
         {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}},
         {"type": "content_block_stop", "index": 0},
         {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-         "usage": {"input_tokens": 11, "output_tokens": 7}},
+         "usage": {"output_tokens": 7}},
         {"type": "message_stop"},
-    ])
+    ]
+
+
+def _stream_body(model: str) -> bytes:
+    return _event_stream(_stream_events(model))
 
 
 def _json_body(model: str) -> bytes:
@@ -229,51 +261,59 @@ class _Recorder:
     client_kwargs: list[dict[str, Any]]
 
 
-def _mock_mantle(
+def _mock_bedrock(
     monkeypatch: pytest.MonkeyPatch, respond: Callable[[httpx.Request], httpx.Response]
 ) -> _Recorder:
-    """Route the async Mantle client through a MockTransport, recording each request and
+    """Route the async Bedrock client through a MockTransport, recording each request and
     the constructor arguments the chat model passed."""
     rec = _Recorder([], [])
-    real = bedrock_chat._AsyncMantleClient
+    real = bedrock_chat._AsyncInvokeModelClient
 
     def handler(request: httpx.Request) -> httpx.Response:
         rec.requests.append(request)
         return respond(request)
 
-    def factory(**kwargs: Any) -> anthropic.AsyncAnthropicBedrockMantle:
+    def factory(**kwargs: Any) -> anthropic.AsyncAnthropicBedrock:
         rec.client_kwargs.append(kwargs)
         mocked = {**kwargs, "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler))}
         return real(**mocked)
 
-    monkeypatch.setattr(bedrock_chat, "_AsyncMantleClient", factory)
+    monkeypatch.setattr(bedrock_chat, "_AsyncInvokeModelClient", factory)
     return rec
 
 
-def _check_signed_bedrock_request(request: httpx.Request) -> dict[str, Any]:
-    assert request.url.host == f"bedrock-mantle.{_REGION}.api.aws"
-    assert request.url.path == "/anthropic/v1/messages"
+def _check_signed_bedrock_request(
+    request: httpx.Request, model_id: str, stream: bool
+) -> dict[str, Any]:
+    """Check that ``request`` is a SigV4-signed InvokeModel call for ``model_id``; return its
+    body. InvokeModel takes the model and the streaming choice in the path, not the body."""
+    assert request.url.host == f"bedrock-runtime.{_REGION}.amazonaws.com"
+    action = "invoke-with-response-stream" if stream else "invoke"
+    assert request.url.path == f"/model/{model_id}/{action}"
     auth = request.headers["authorization"]
     assert auth.startswith("AWS4-HMAC-SHA256 ")
-    assert f"/{_REGION}/bedrock-mantle/aws4_request" in auth
+    assert f"/{_REGION}/bedrock/aws4_request" in auth
     assert "x-api-key" not in request.headers
     assert "anthropic-beta" not in request.headers
-    return json.loads(request.content)
+    body = json.loads(request.content)
+    assert body["anthropic_version"] == "bedrock-2023-05-31"
+    assert "model" not in body
+    assert "stream" not in body
+    return body
 
 
 @pytest.mark.asyncio
 async def test_bedrock_streaming_round_trip(bedrock_env, monkeypatch) -> None:
-    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(
-        200, headers={"content-type": "text/event-stream"},
-        content=_stream_body("anthropic.claude-opus-5-5"),
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
+        200, headers=_EVENT_STREAM, content=_stream_body("anthropic.claude-opus-5-5"),
     ))
     llm = _build()
     msg = await llm.ainvoke("hi")
 
     assert len(rec.requests) == 1
-    body = _check_signed_bedrock_request(rec.requests[0])
-    assert body["model"] == "anthropic.claude-opus-5-5"
-    assert body["stream"] is True
+    body = _check_signed_bedrock_request(
+        rec.requests[0], "global.anthropic.claude-opus-5-5", stream=True
+    )
     assert body["thinking"] == {"type": "adaptive", "display": "summarized"}
 
     (kwargs,) = rec.client_kwargs
@@ -292,16 +332,15 @@ async def test_bedrock_streaming_round_trip(bedrock_env, monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_bedrock_non_streaming_round_trip(bedrock_env, monkeypatch) -> None:
-    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
         200, json=json.loads(_json_body("us.anthropic.claude-sonnet-5-5")),
     ))
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name="claude-sonnet-5-5", max_tokens_to_sample=1024,
-        streaming=False,
+        region_name=_REGION, inference_profile="eu", model_name="claude-sonnet-5-5",
+        max_tokens_to_sample=1024, streaming=False,
     )
     msg = await llm.ainvoke("hi")
-    body = _check_signed_bedrock_request(rec.requests[0])
-    assert body["model"] == "anthropic.claude-sonnet-5-5"
+    _check_signed_bedrock_request(rec.requests[0], "eu.anthropic.claude-sonnet-5-5", stream=False)
     assert isinstance(msg, AIMessage)
     assert msg.content == "hello"
     assert msg.response_metadata["model_name"] == "claude-sonnet-5-5"
@@ -309,17 +348,15 @@ async def test_bedrock_non_streaming_round_trip(bedrock_env, monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_bedrock_beta_request_goes_to_beta_endpoint(bedrock_env, monkeypatch) -> None:
-    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(
-        200, headers={"content-type": "text/event-stream"},
-        content=_stream_body("anthropic.claude-opus-5-5"),
+async def test_bedrock_beta_request_carries_betas_in_the_body(bedrock_env, monkeypatch) -> None:
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
+        200, headers=_EVENT_STREAM, content=_stream_body("anthropic.claude-opus-5-5"),
     ))
     llm = _build(memory_tool=True)
     await llm.ainvoke("hi")
     request = rec.requests[0]
-    assert request.url.params.get("beta") == "true"
-    assert request.headers["anthropic-beta"] == "context-management-2025-06-27"
-    assert json.loads(request.content)["model"] == "anthropic.claude-opus-5-5"
+    assert request.url.path == "/model/global.anthropic.claude-opus-5-5/invoke-with-response-stream"
+    assert json.loads(request.content)["anthropic_beta"] == ["context-management-2025-06-27"]
 
 
 # --- uploader --------------------------------------------------------------------
@@ -371,12 +408,18 @@ async def test_bedrock_uploader_inlines_binary(bedrock_env, tmp_path) -> None:
 # --- model ids -------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("logical", [
-    "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5", "claude-fable-5-1",
+@pytest.mark.parametrize(("logical", "profile", "expected"), [
+    ("claude-opus-5-5", "global", "global.anthropic.claude-opus-5-5"),
+    ("claude-opus-5-5", "eu", "eu.anthropic.claude-opus-5-5"),
+    ("claude-sonnet-5-5", "global", "global.anthropic.claude-sonnet-5-5"),
+    ("claude-fable-5-1", "us", "us.anthropic.claude-fable-5-1"),
+    ("claude-haiku-5-5", "eu", "eu.anthropic.claude-haiku-5-5"),
+    ("claude-haiku-4-5", "global", "global.anthropic.claude-haiku-4-5-20251001-v1:0"),
+    ("claude-opus-4-6", "eu", "eu.anthropic.claude-opus-4-6-v1"),
 ])
-def test_model_id_mapping(logical: str) -> None:
-    bedrock_id = to_bedrock_model_id(logical)
-    assert bedrock_id == f"anthropic.{logical}"
+def test_model_id_mapping(logical: str, profile: str, expected: str) -> None:
+    bedrock_id = to_bedrock_model_id(logical, profile)
+    assert bedrock_id == expected
     assert is_bedrock_model_id(bedrock_id)
     assert not is_bedrock_model_id(logical)
 
@@ -400,8 +443,8 @@ _REPORTED_NAMES = [
 async def test_reported_model_name_is_the_logical_id_when_streaming(
     bedrock_env, monkeypatch, reported: str
 ) -> None:
-    _mock_mantle(monkeypatch, lambda _: httpx.Response(
-        200, headers={"content-type": "text/event-stream"}, content=_stream_body(reported),
+    _mock_bedrock(monkeypatch, lambda _: httpx.Response(
+        200, headers=_EVENT_STREAM, content=_stream_body(reported),
     ))
     msg = await _build().ainvoke("hi")
     assert msg.response_metadata["model_name"] == _MODEL
@@ -413,9 +456,10 @@ async def test_reported_model_name_is_the_logical_id_when_streaming(
 async def test_reported_model_name_is_the_logical_id(
     bedrock_env, monkeypatch, reported: str
 ) -> None:
-    _mock_mantle(monkeypatch, lambda _: httpx.Response(200, json=json.loads(_json_body(reported))))
+    _mock_bedrock(monkeypatch, lambda _: httpx.Response(200, json=json.loads(_json_body(reported))))
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024, streaming=False,
+        region_name=_REGION, inference_profile="global", model_name=_MODEL,
+        max_tokens_to_sample=1024, streaming=False,
     )
     msg = await llm.ainvoke("hi")
     assert msg.response_metadata["model_name"] == _MODEL
@@ -433,7 +477,7 @@ def test_non_bedrock_ids(model: str) -> None:
 
 def test_to_bedrock_rejects_bedrock_id() -> None:
     with pytest.raises(ValueError, match="already a Bedrock model id"):
-        to_bedrock_model_id("anthropic.claude-opus-5-5")
+        to_bedrock_model_id("anthropic.claude-opus-5-5", "global")
 
 
 # --- registry --------------------------------------------------------------------

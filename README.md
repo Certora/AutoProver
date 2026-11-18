@@ -182,7 +182,7 @@ tui-autoprove \
 ## Claude on Amazon Bedrock
 
 By default the pipeline calls Claude through the Anthropic API. With `AUTOPROVER_LLM_BACKEND=bedrock` it calls Claude on
-Amazon Bedrock instead, through Bedrock's Anthropic Messages API endpoint (`https://bedrock-mantle.<region>.api.aws`).
+Amazon Bedrock instead, through Bedrock's InvokeModel API (`https://bedrock-runtime.<region>.amazonaws.com`).
 Every agent that builds its model through composer follows this setting. AutoSetup's own LLM calls still go to the
 Anthropic API, so `ANTHROPIC_API_KEY` is required with either backend.
 
@@ -190,22 +190,35 @@ Anthropic API, so `ANTHROPIC_API_KEY` is required with either backend.
 |---|---|---|
 | `AUTOPROVER_LLM_BACKEND` | `anthropic` | `anthropic` or `bedrock`. Case and surrounding spaces are ignored; any other value stops the run when a model is built. |
 | `AWS_REGION` (or `AWS_DEFAULT_REGION`) | none | The Bedrock region. Required for `bedrock`: without it the run stops when a model is built. |
+| `AUTOPROVER_BEDROCK_INFERENCE_PROFILE` | `global` | Where Bedrock may process a request. `global` lets it use any commercial AWS region. A geography such as `eu` or `us` keeps requests in that geography and costs about 10% more. |
 | `AUTOPROVER_BEDROCK_MAX_TOKENS` | `128000` | Upper limit on `max_tokens` in a Bedrock request. A lower value is used unchanged. |
+
+**Inference profiles.** Bedrock serves current Claude models only through a cross-Region inference profile. The
+profile id is the model id with the routing prefix in front, for example `global.anthropic.claude-opus-5-5`. Not every
+model has a profile for every geography: Claude Fable 5 and 5.1 have no `eu` profile, so a run on Fable needs `global`
+or `us`. A geographic profile also needs the region in `AWS_REGION` to be in that geography.
 
 **Credentials.** Requests are signed with AWS SigV4, using the default AWS credential chain: environment variables, the
 shared config and credentials files (profiles, SSO), the task role of an ECS or AWS Batch container, or an EC2
-instance profile. No Anthropic API key is used for these requests. The Anthropic SDK switches to a Bedrock API key
-instead of SigV4 when `AWS_BEARER_TOKEN_BEDROCK` or `ANTHROPIC_AWS_API_KEY` is set, and sends requests to
-`ANTHROPIC_BEDROCK_MANTLE_BASE_URL` instead of the regional endpoint when that variable is set.
+instance profile. No Anthropic API key is used for these requests. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` must
+be set together: if only one of them is set, the run stops when a model is built. The Anthropic SDK sends a Bedrock API
+key instead of signing when `AWS_BEARER_TOKEN_BEDROCK` is set. Do not set it together with the AWS key variables: the
+SDK refuses both at once. When `ANTHROPIC_BEDROCK_BASE_URL` is set, requests go there instead of the regional endpoint.
 
-**Permissions.** The role needs the IAM action `bedrock-mantle:CreateInference`. Its resource type is a Bedrock
-project (`arn:aws:bedrock-mantle:<region>:<account>:project/<id>`), not a model; to limit the models a role may call,
-use the `bedrock-mantle:Model` condition key. The account must also have access to the Claude models the run uses.
+**Permissions.** The role needs the IAM actions `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`.
+For a `global` profile, AWS evaluates three resources for each model: the profile
+(`arn:aws:bedrock:<region>:<account>:inference-profile/global.anthropic.<model>`), the model in the requesting region
+(`arn:aws:bedrock:<region>::foundation-model/anthropic.<model>`), and the model without a region
+(`arn:aws:bedrock:::foundation-model/anthropic.<model>`). For a geographic profile, the role needs the profile and the
+model in every region the profile routes to. A service control policy that blocks regions must allow these requests;
+see "Global cross-Region inference" in the Amazon Bedrock User Guide. The account must also have access to the Claude
+models the run uses.
 
 **Model ids stay logical.** `--model`, budgets, logs, pricing and the usage records in `job_info.json` all use
-the Anthropic model ids (`claude-opus-5-5`). Only the request sent to Bedrock carries the Bedrock id
-(`anthropic.claude-opus-5-5`), and the model name in a Bedrock response is replaced by the logical id. Do not pass a
-Bedrock id to `--model`.
+the Anthropic model ids (`claude-opus-5-5`). Only the request sent to Bedrock carries the inference profile id
+(`global.anthropic.claude-opus-5-5`), and the model name in a Bedrock response is replaced by the logical id. Do not
+pass a Bedrock id to `--model`. Bedrock names a few older models differently, for example
+`anthropic.claude-haiku-4-5-20251001-v1:0` for `claude-haiku-4-5`; composer keeps a table of those.
 
 **max_tokens.** Bedrock reserves a request's `max_tokens` against the account's tokens-per-minute quota before the
 model answers, so an oversized `max_tokens` throttles a run before its real usage reaches the quota. Bedrock
@@ -229,7 +242,7 @@ Bedrock request fails with an error naming the file.
 
 **Docker.** `scripts/autoprove` and `scripts/docker-compose.yml` pass `AUTOPROVER_LLM_BACKEND`, the region variables,
 the Bedrock limits above, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`,
-`AWS_BEARER_TOKEN_BEDROCK` / `ANTHROPIC_AWS_API_KEY` and `ANTHROPIC_BEDROCK_MANTLE_BASE_URL` from your shell into the
+`AWS_BEARER_TOKEN_BEDROCK` and `ANTHROPIC_BEDROCK_BASE_URL` from your shell into the
 container. `scripts/autoprove` stops before it builds anything unless a region is set and either the AWS keys or a
 Bedrock API key are exported. `~/.aws` is not mounted, so for a profile or SSO session export its credentials first:
 

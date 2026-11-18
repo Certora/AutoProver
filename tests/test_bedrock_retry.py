@@ -19,23 +19,24 @@ import httpx
 import pytest
 from langchain_anthropic import ChatAnthropic
 
-from anthropic.lib.aws import _auth
-from anthropic.lib.bedrock import _mantle
+from anthropic.lib.bedrock import _auth
 from composer.llm import bedrock_chat
 from composer.llm.anthropic import AnthropicModelProvider, AnthropicService
 from composer.llm.bedrock import (
     BACKEND_ENV_VAR, DEFAULT_MAX_TOKENS, MAX_TOKENS_ENV_VAR, BedrockCredentialRefreshError,
-    BedrockCredentialsError,
+    BedrockCredentialsError, BedrockStreamError,
 )
 from composer.llm.bedrock_chat import ChatAnthropicBedrock
 
 from tests.test_bedrock_backend import (
-    _MODEL, _REGION, _Options, _build, _mock_mantle, _sse, _stream_body, bedrock_env,
+    _EVENT_STREAM, _MODEL, _REGION, _Options, _build, _event_stream, _exception_frame,
+    _mock_bedrock, _stream_body, _stream_events, bedrock_env,
 )
 
 __all__ = ["bedrock_env"]  # the fixture, imported for the tests below
 
 _MAX_RETRIES = 2
+_INVOKE_URL = f"https://bedrock-runtime.{_REGION}.amazonaws.com/model/global.anthropic.{_MODEL}/invoke"
 
 
 def _svc() -> AnthropicService:
@@ -46,7 +47,7 @@ def _svc() -> AnthropicService:
 def no_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the SDK's retry loop, without its backoff delays."""
     monkeypatch.setattr(
-        bedrock_chat._AsyncMantleClient, "_calculate_retry_timeout",
+        bedrock_chat._AsyncInvokeModelClient, "_calculate_retry_timeout",
         lambda self, *args, **kwargs: 0.0,
     )
 
@@ -120,19 +121,22 @@ def test_bedrock_interleaved_thinking_budget_may_exceed_the_cap(bedrock_env, mon
 
 
 def _error(status: int, error_type: str, message: str = "...") -> httpx.Response:
+    """An InvokeModel error response: the exception named in the ``x-amzn-errortype``
+    header, and a body with a ``message``."""
     return httpx.Response(
-        status, json={"type": "error", "error": {"type": error_type, "message": message}}
+        status, headers={"x-amzn-errortype": error_type}, json={"message": message}
     )
 
 
 async def _invoke_failing(
     monkeypatch: pytest.MonkeyPatch, response: httpx.Response
 ) -> tuple[Exception, int]:
-    """Send one request to a Mantle endpoint that always answers ``response``; return the
+    """Send one request to a Bedrock endpoint that always answers ``response``; return the
     exception the chat model raised and how many attempts the SDK made."""
-    rec = _mock_mantle(monkeypatch, lambda _: response)
+    rec = _mock_bedrock(monkeypatch, lambda _: response)
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        region_name=_REGION, inference_profile="global", model_name=_MODEL,
+        max_tokens_to_sample=1024,
         max_retries=_MAX_RETRIES, streaming=True,
     )
     with pytest.raises(Exception) as info:
@@ -140,7 +144,7 @@ async def _invoke_failing(
     return info.value, len(rec.requests)
 
 
-# Bedrock's own error names alongside the Anthropic ones, as Mantle may report either.
+# Bedrock's own error names, and the Anthropic ones the same statuses carry elsewhere.
 @pytest.mark.parametrize("status, error_type", [
     (429, "ThrottlingException"),
     (429, "ModelNotReadyException"),
@@ -194,31 +198,45 @@ async def test_expired_token_is_retried_by_the_run(bedrock_env, monkeypatch, no_
 # --- errors inside a stream -----------------------------------------------------------
 
 
-def _stream_failing_with(error_type: str) -> httpx.Response:
-    body = _sse([
-        {"type": "message_start", "message": {
-            "id": "msg_1", "type": "message", "role": "assistant",
-            "model": "anthropic.claude-opus-5-5", "content": [], "stop_reason": None,
-            "stop_sequence": None, "usage": {"input_tokens": 11, "output_tokens": 1},
-        }},
-        {"type": "error", "error": {"type": error_type, "message": "..."}},
-    ])
-    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+def _stream_ending_with_exception(name: str) -> httpx.Response:
+    """A stream that Bedrock ends with an exception frame after the first event."""
+    body = _event_stream(_stream_events("anthropic.claude-opus-5-5")[:1])
+    return httpx.Response(200, headers=_EVENT_STREAM, content=body + _exception_frame(name, "..."))
 
 
-@pytest.mark.parametrize("error_type, transient", [
+@pytest.mark.parametrize("name, transient", [
     ("ThrottlingException", True),
     ("ModelStreamErrorException", True),
     ("InternalServerException", True),
-    ("overloaded_error", True),
+    ("ServiceUnavailableException", True),
     ("ValidationException", False),
+    ("ModelErrorException", False),
+])
+@pytest.mark.asyncio
+async def test_exception_inside_a_stream(
+    bedrock_env, monkeypatch, name: str, transient: bool
+) -> None:
+    rec = _mock_bedrock(monkeypatch, lambda _: _stream_ending_with_exception(name))
+    with pytest.raises(BedrockStreamError) as info:
+        await _build().ainvoke("hi")
+    assert info.value.error_type == name
+    assert len(rec.requests) == 1
+    assert _svc().should_retry(info.value) is transient
+
+
+@pytest.mark.parametrize("error_type, transient", [
+    ("overloaded_error", True),
     ("invalid_request_error", False),
 ])
 @pytest.mark.asyncio
-async def test_error_inside_a_stream(
+async def test_error_event_inside_a_stream(
     bedrock_env, monkeypatch, error_type: str, transient: bool
 ) -> None:
-    rec = _mock_mantle(monkeypatch, lambda _: _stream_failing_with(error_type))
+    body = _event_stream([
+        *_stream_events("anthropic.claude-opus-5-5")[:1],
+        {"type": "error", "error": {"type": error_type, "message": "..."}},
+    ])
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(200, headers=_EVENT_STREAM, content=body))
     with pytest.raises(anthropic.APIStatusError) as info:
         await _build().ainvoke("hi")
     assert info.value.status_code == 200
@@ -232,7 +250,7 @@ async def test_error_inside_a_stream(
     "ExpiredTokenException",
 }))
 def test_bedrock_transient_names_on_any_status(error_type: str) -> None:
-    request = httpx.Request("POST", f"https://bedrock-mantle.{_REGION}.api.aws/anthropic/v1/messages")
+    request = httpx.Request("POST", _INVOKE_URL)
     exc = anthropic.APIStatusError(
         "Error code: 200",
         response=httpx.Response(200, request=request),
@@ -271,7 +289,7 @@ async def test_expired_token_named_in_header_is_retried_by_the_run(
     ("", False),
 ])
 def test_header_error_type_on_a_body_without_one(header: str, transient: bool) -> None:
-    request = httpx.Request("POST", f"https://bedrock-mantle.{_REGION}.api.aws/anthropic/v1/messages")
+    request = httpx.Request("POST", _INVOKE_URL)
     exc = anthropic.APIStatusError(
         "Error code: 400",
         response=httpx.Response(400, request=request, headers={"x-amzn-errortype": header}),
@@ -282,7 +300,7 @@ def test_header_error_type_on_a_body_without_one(header: str, transient: bool) -
 
 def test_transient_header_counts_next_to_a_payload_error_type() -> None:
     # A front end can pair a generic payload type with the specific exception in the header.
-    request = httpx.Request("POST", f"https://bedrock-mantle.{_REGION}.api.aws/anthropic/v1/messages")
+    request = httpx.Request("POST", _INVOKE_URL)
     exc = anthropic.APIStatusError(
         "Error code: 403",
         response=httpx.Response(
@@ -308,7 +326,7 @@ async def test_expired_token_in_header_with_anthropic_body_is_retried_by_the_run
 
 
 def test_deterministic_payload_and_header_are_not_retried() -> None:
-    request = httpx.Request("POST", f"https://bedrock-mantle.{_REGION}.api.aws/anthropic/v1/messages")
+    request = httpx.Request("POST", _INVOKE_URL)
     exc = anthropic.APIStatusError(
         "Error code: 403",
         response=httpx.Response(
@@ -325,7 +343,7 @@ def test_deterministic_payload_and_header_are_not_retried() -> None:
 def _signing_fails(monkeypatch: pytest.MonkeyPatch, *errors: Exception) -> list[int]:
     """Make SigV4 signing raise ``errors`` in turn, then sign normally. Returns a list that
     counts the signing attempts."""
-    real = _mantle.get_auth_headers
+    real = _auth.get_auth_headers
     pending = list(errors)
     calls: list[int] = []
 
@@ -335,7 +353,7 @@ def _signing_fails(monkeypatch: pytest.MonkeyPatch, *errors: Exception) -> list[
             raise pending.pop(0)
         return real(**kwargs)
 
-    monkeypatch.setattr(_mantle, "get_auth_headers", signer)
+    monkeypatch.setattr(_auth, "get_auth_headers", signer)
     return calls
 
 
@@ -349,8 +367,8 @@ def _retrieval_error() -> Exception:
 async def test_credential_refresh_blip_is_retried_by_the_sdk(
     bedrock_env, monkeypatch, no_retry_sleep
 ) -> None:
-    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(
-        200, headers={"content-type": "text/event-stream"},
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
+        200, headers=_EVENT_STREAM,
         content=_stream_body("anthropic.claude-opus-5-5"),
     ))
     calls = _signing_fails(
@@ -367,10 +385,11 @@ async def test_credential_refresh_blip_is_retried_by_the_sdk(
 async def test_persistent_credential_refresh_failure_is_retried_by_the_run(
     bedrock_env, monkeypatch, no_retry_sleep
 ) -> None:
-    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(500))
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
     calls = _signing_fails(monkeypatch, *(_retrieval_error() for _ in range(_MAX_RETRIES + 1)))
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        region_name=_REGION, inference_profile="global", model_name=_MODEL,
+        max_tokens_to_sample=1024,
         max_retries=_MAX_RETRIES, streaming=True,
     )
     with pytest.raises(BedrockCredentialRefreshError, match="timed out") as info:
@@ -403,14 +422,14 @@ def empty_credential_chain(bedrock_env, monkeypatch, tmp_path) -> Any:
 
 def _count_signing(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     """Count the calls to the SDK's real signer."""
-    real = _mantle.get_auth_headers
+    real = _auth.get_auth_headers
     calls: list[int] = []
 
     def signer(**kwargs: Any) -> dict[str, str]:
         calls.append(1)
         return real(**kwargs)
 
-    monkeypatch.setattr(_mantle, "get_auth_headers", signer)
+    monkeypatch.setattr(_auth, "get_auth_headers", signer)
     return calls
 
 
@@ -418,7 +437,7 @@ def _count_signing(monkeypatch: pytest.MonkeyPatch) -> list[int]:
 async def test_no_credentials_are_not_retried(
     empty_credential_chain, monkeypatch, no_retry_sleep
 ) -> None:
-    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(500))
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
     calls = _count_signing(monkeypatch)
     with pytest.raises(BedrockCredentialsError, match="has no credentials") as info:
         await _build().ainvoke("hi")
@@ -433,13 +452,13 @@ def test_no_credentials_are_not_retried_by_the_sync_client(
     empty_credential_chain, monkeypatch
 ) -> None:
     requests: list[httpx.Request] = []
-    real = bedrock_chat._MantleClient
+    real = bedrock_chat._InvokeModelClient
 
-    def factory(**kwargs: Any) -> anthropic.AnthropicBedrockMantle:
+    def factory(**kwargs: Any) -> anthropic.AnthropicBedrock:
         transport = httpx.MockTransport(lambda r: requests.append(r) or httpx.Response(500))
         return real(**{**kwargs, "http_client": httpx.Client(transport=transport)})
 
-    monkeypatch.setattr(bedrock_chat, "_MantleClient", factory)
+    monkeypatch.setattr(bedrock_chat, "_InvokeModelClient", factory)
     calls = _count_signing(monkeypatch)
     with pytest.raises(BedrockCredentialsError, match="has no credentials"):
         _build().invoke("hi")
@@ -448,7 +467,6 @@ def test_no_credentials_are_not_retried_by_the_sync_client(
 
 
 @pytest.mark.parametrize("env, cause", [
-    ({"AWS_ACCESS_KEY_ID": "AKIDEXAMPLE"}, botocore.exceptions.PartialCredentialsError),
     ({"AWS_PROFILE": "missing"}, botocore.exceptions.ProfileNotFound),
 ])
 @pytest.mark.asyncio
@@ -457,7 +475,7 @@ async def test_unusable_credentials_are_not_retried(
 ) -> None:
     for var, value in env.items():
         monkeypatch.setenv(var, value)
-    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(500))
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
     calls = _count_signing(monkeypatch)
     with pytest.raises(BedrockCredentialsError, match="default credential chain") as info:
         await _build().ainvoke("hi")
@@ -467,12 +485,21 @@ async def test_unusable_credentials_are_not_retried(
     assert _svc().should_retry(info.value) is False
 
 
+@pytest.mark.parametrize("var", ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"])
+def test_half_a_static_key_pair_fails_when_the_model_is_built(
+    empty_credential_chain, monkeypatch, var: str
+) -> None:
+    monkeypatch.setenv(var, "EXAMPLE")
+    with pytest.raises(ValueError, match="must be set together"):
+        _build()
+
+
 @pytest.mark.asyncio
 async def test_unrelated_runtime_error_passes_through(
     bedrock_env, monkeypatch, no_retry_sleep
 ) -> None:
     # With credentials in the chain, a RuntimeError from the attempt is not about them.
-    _mock_mantle(monkeypatch, lambda _: httpx.Response(500))
+    _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
     error = RuntimeError("something else")
     _signing_fails(monkeypatch, error)
     with pytest.raises(RuntimeError) as info:
@@ -484,7 +511,7 @@ def test_credential_refresh_blip_is_retried_by_the_sync_client(
     bedrock_env, monkeypatch
 ) -> None:
     monkeypatch.setattr(
-        bedrock_chat._MantleClient, "_calculate_retry_timeout",
+        bedrock_chat._InvokeModelClient, "_calculate_retry_timeout",
         lambda self, *args, **kwargs: 0.0,
     )
     requests: list[httpx.Request] = []
@@ -492,22 +519,22 @@ def test_credential_refresh_blip_is_retried_by_the_sync_client(
     def respond(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(
-            200, headers={"content-type": "text/event-stream"},
+            200, headers=_EVENT_STREAM,
             content=_stream_body("anthropic.claude-opus-5-5"),
         )
 
-    real = bedrock_chat._MantleClient
+    real = bedrock_chat._InvokeModelClient
 
-    def factory(**kwargs: Any) -> anthropic.AnthropicBedrockMantle:
+    def factory(**kwargs: Any) -> anthropic.AnthropicBedrock:
         return real(**{**kwargs, "http_client": httpx.Client(transport=httpx.MockTransport(respond))})
 
-    monkeypatch.setattr(bedrock_chat, "_MantleClient", factory)
+    monkeypatch.setattr(bedrock_chat, "_InvokeModelClient", factory)
     calls = _signing_fails(monkeypatch, _retrieval_error())
     msg = _build().invoke("hi")
     assert msg.content == "hello"
     assert len(calls) == 2
     assert len(requests) == 1
-    assert json.loads(requests[0].content)["model"] == "anthropic.claude-opus-5-5"
+    assert requests[0].url.path == f"/model/global.anthropic.{_MODEL}/invoke-with-response-stream"
 
 
 # --- SDK backoff ------------------------------------------------------------------------
@@ -591,8 +618,8 @@ def _sts_error(code: str, status: int) -> botocore.exceptions.ClientError:
 async def test_transient_sts_error_while_signing_is_retried_by_the_sdk(
     bedrock_env, monkeypatch, no_retry_sleep, code: str, status: int
 ) -> None:
-    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(
-        200, headers={"content-type": "text/event-stream"},
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
+        200, headers=_EVENT_STREAM,
         content=_stream_body("anthropic.claude-opus-5-5"),
     ))
     calls = _signing_fails(monkeypatch, _sts_error(code, status))
@@ -606,7 +633,7 @@ async def test_transient_sts_error_while_signing_is_retried_by_the_sdk(
 async def test_deterministic_sts_error_while_signing_is_not_retried(
     bedrock_env, monkeypatch, no_retry_sleep
 ) -> None:
-    rec = _mock_mantle(monkeypatch, lambda _: httpx.Response(500))
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
     calls = _signing_fails(monkeypatch, _sts_error("AccessDenied", 403))
     with pytest.raises(BedrockCredentialsError) as info:
         await _build().ainvoke("hi")

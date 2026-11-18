@@ -23,8 +23,8 @@ from composer.llm.provider import (
 )
 from composer.llm.pricing import PriceProvider, price_provider_for
 from composer.llm.bedrock import (
-    MAX_DOCUMENT_BYTES, MAX_TOKENS_ENV_VAR, llm_backend, bedrock_region, max_output_tokens,
-    aws_error_type, is_transient_error_type,
+    MAX_DOCUMENT_BYTES, MAX_TOKENS_ENV_VAR, BedrockStreamError, llm_backend, bedrock_region,
+    inference_profile, max_output_tokens, aws_error_type, is_transient_error_type,
 )
 from composer.llm.bedrock_inline import INLINE_MEDIA_TYPES, base64_size, omitted_document_block
 from .types import CacheLevel
@@ -381,9 +381,13 @@ class AnthropicService(ProviderServiceBase):
         errors count as well (``composer.llm.bedrock.TRANSIENT_ERROR_TYPES``, read from the
         payload or, failing that, the ``x-amzn-errortype`` header), and so
         does any ``RetryableError``, which is how a passing failure to fetch the AWS
-        credentials that sign a request reaches here once the SDK's retries are spent."""
+        credentials that sign a request reaches here once the SDK's retries are spent. A
+        Bedrock stream that ends with an exception frame (:class:`BedrockStreamError`) is
+        transient when its exception name is."""
         if isinstance(exc, (anthropic.APIConnectionError, anthropic.RetryableError)):
             return True
+        if isinstance(exc, BedrockStreamError):
+            return is_transient_error_type(exc.error_type)
         # The SDK does not wrap streamed-body failures as APIConnectionError: a dropped stream
         # raises httpx.RemoteProtocolError, a stalled one httpx.ReadTimeout. Both are transient.
         if isinstance(exc, httpx.TransportError):
@@ -436,11 +440,12 @@ class AnthropicModelProvider:
     ) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
 
-        # Read first so a bad AUTOPROVER_LLM_BACKEND (or, for Bedrock, a missing region or a
-        # malformed max_tokens cap) fails when the model is built.
+        # Read first so a bad AUTOPROVER_LLM_BACKEND (or, for Bedrock, a missing region, a
+        # malformed inference profile or max_tokens cap) fails when the model is built.
         backend = llm_backend()
         bedrock_settings = (
-            (bedrock_region(), max_output_tokens()) if backend == "bedrock" else None
+            (bedrock_region(), inference_profile(), max_output_tokens())
+            if backend == "bedrock" else None
         )
 
         opts = self.options
@@ -497,7 +502,7 @@ class AnthropicModelProvider:
         )
         if bedrock_settings is not None:
             from composer.llm.bedrock_chat import ChatAnthropicBedrock
-            aws_region, token_cap = bedrock_settings
+            region, profile, token_cap = bedrock_settings
             # Bedrock counts max_tokens against the token quota when it admits a request, so
             # it is capped here; see composer.llm.bedrock.DEFAULT_MAX_TOKENS.
             max_tokens = min(opts.tokens, token_cap)
@@ -513,7 +518,8 @@ class AnthropicModelProvider:
                     "the other two"
                 )
             return ChatAnthropicBedrock(
-                aws_region=aws_region, max_tokens_to_sample=max_tokens, **common
+                region_name=region, inference_profile=profile, max_tokens_to_sample=max_tokens,
+                **common,
             )
 
         return ChatAnthropic(max_tokens_to_sample=opts.tokens, **common)

@@ -42,14 +42,16 @@ Required environment:
 Claude on Amazon Bedrock (optional):
   AUTOPROVER_LLM_BACKEND=bedrock   Send the pipeline's Claude traffic to Bedrock.
   AWS_REGION                       Bedrock region (or AWS_DEFAULT_REGION).
+  AUTOPROVER_BEDROCK_INFERENCE_PROFILE
+                                   Where Bedrock may process requests: global
+                                   (default), or a geography such as eu.
   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY[, AWS_SESSION_TOKEN]
                                    Credentials; ~/.aws is not mounted, so export
                                    them (e.g. aws configure export-credentials
                                    --format env).
-  AWS_BEARER_TOKEN_BEDROCK (or ANTHROPIC_AWS_API_KEY)
-                                   A Bedrock API key, instead of the AWS
-                                   credentials above.
-  ANTHROPIC_BEDROCK_MANTLE_BASE_URL
+  AWS_BEARER_TOKEN_BEDROCK         A Bedrock API key, instead of the AWS
+                                   credentials above (not both).
+  ANTHROPIC_BEDROCK_BASE_URL
                                    Endpoint to use instead of the regional one.
 
 Cloud credentials:
@@ -109,9 +111,9 @@ LLM_BACKEND="$(printf '%s' "${AUTOPROVER_LLM_BACKEND:-}" | tr '[:upper:]' '[:low
 if [[ "$LLM_BACKEND" == bedrock ]]; then
   [[ -n "${AWS_REGION:-}${AWS_DEFAULT_REGION:-}" ]] || { echo "[autoprove] error: AUTOPROVER_LLM_BACKEND=bedrock needs AWS_REGION (or AWS_DEFAULT_REGION). Export it and rerun." >&2; exit 1; }
   # A Bedrock API key replaces the AWS credentials: the Anthropic SDK sends it instead of
-  # signing with SigV4 when either variable is set.
-  if [[ -z "${AWS_BEARER_TOKEN_BEDROCK:-}${ANTHROPIC_AWS_API_KEY:-}" ]]; then
-    [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]] || { echo "[autoprove] error: AUTOPROVER_LLM_BACKEND=bedrock needs AWS credentials exported in your shell (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN), or a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK or ANTHROPIC_AWS_API_KEY). For a profile or SSO session: eval \"\$(aws configure export-credentials --format env)\"" >&2; exit 1; }
+  # signing with SigV4 when it is set.
+  if [[ -z "${AWS_BEARER_TOKEN_BEDROCK:-}" ]]; then
+    [[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]] || { echo "[autoprove] error: AUTOPROVER_LLM_BACKEND=bedrock needs AWS credentials exported in your shell (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and, for temporary credentials, AWS_SESSION_TOKEN), or a Bedrock API key (AWS_BEARER_TOKEN_BEDROCK). For a profile or SSO session: eval \"\$(aws configure export-credentials --format env)\"" >&2; exit 1; }
   fi
 fi
 [[ -n "${CERTORAKEY:-}" ]]       || { echo "[autoprove] error: CERTORAKEY is not set in your shell. Export it and rerun (cloud prover is required)." >&2; exit 1; }

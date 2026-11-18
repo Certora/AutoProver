@@ -25,6 +25,7 @@ from composer.llm.bedrock_inline import (
     FilesApiReferenceError, base64_size, fit_request_to_budget,
 )
 from composer.llm.types import CacheLevel
+from tests.test_bedrock_backend import _EVENT_STREAM, _stream_body
 from composer.spec.source.design_doc_finder import read_document_tool
 
 _REGION = "us-west-2"
@@ -46,8 +47,8 @@ def bedrock_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY")
     for var in (
-        "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_AWS_API_KEY",
-        "ANTHROPIC_BEDROCK_MANTLE_BASE_URL", "ANTHROPIC_API_KEY",
+        "AWS_SESSION_TOKEN", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK",
+        "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_API_KEY", "AUTOPROVER_BEDROCK_INFERENCE_PROFILE",
     ):
         monkeypatch.delenv(var, raising=False)
 
@@ -304,42 +305,27 @@ def test_files_api_reference_fails_with_a_clear_error(where: str) -> None:
         fit_request_to_budget(payload, 10**9)
 
 
-# --- end to end against a mocked Mantle endpoint -----------------------------------
+# --- end to end against a mocked InvokeModel endpoint --------------------------------
 
 
-def _sse_body() -> bytes:
-    events = [
-        {"type": "message_start", "message": {
-            "id": "msg_1", "type": "message", "role": "assistant", "model": "anthropic." + _MODEL,
-            "content": [], "stop_reason": None, "stop_sequence": None,
-            "usage": {"input_tokens": 11, "output_tokens": 1},
-        }},
-        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "ok"}},
-        {"type": "content_block_stop", "index": 0},
-        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-         "usage": {"input_tokens": 11, "output_tokens": 2}},
-        {"type": "message_stop"},
-    ]
-    return "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in events).encode()
+def _stream_response() -> httpx.Response:
+    return httpx.Response(200, headers=_EVENT_STREAM, content=_stream_body("anthropic." + _MODEL))
 
 
-def _mock_mantle(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
+def _mock_bedrock(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
     requests: list[httpx.Request] = []
-    real = bedrock_chat._AsyncMantleClient
+    real = bedrock_chat._AsyncInvokeModelClient
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, content=_sse_body()
-        )
+        return _stream_response()
 
-    def factory(**kwargs: Any) -> anthropic.AsyncAnthropicBedrockMantle:
+    def factory(**kwargs: Any) -> anthropic.AsyncAnthropicBedrock:
         return real(**{
             **kwargs, "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         })
 
-    monkeypatch.setattr(bedrock_chat, "_AsyncMantleClient", factory)
+    monkeypatch.setattr(bedrock_chat, "_AsyncInvokeModelClient", factory)
     return requests
 
 
@@ -370,7 +356,7 @@ def _conversation(system_doc: dict[str, Any], tool_msg: ToolMessage) -> list[Any
 async def test_documents_reach_bedrock_inline_including_inside_tool_results(
     bedrock_env, monkeypatch, tmp_path
 ) -> None:
-    requests = _mock_mantle(monkeypatch)
+    requests = _mock_bedrock(monkeypatch)
     (tmp_path / "design.pdf").write_bytes(_pdf(200))
     (tmp_path / "spec.pdf").write_bytes(_pdf(300))
     uploader = BedrockFileUploader()
@@ -378,8 +364,9 @@ async def test_documents_reach_bedrock_inline_including_inside_tool_results(
     assert design is not None
     tool_msg = await _read_document_message(tmp_path, "spec.pdf")
 
-    llm = ChatAnthropicBedrock(aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
-                               streaming=True)
+    llm = ChatAnthropicBedrock(
+        region_name=_REGION, inference_profile="global",
+        model_name=_MODEL, max_tokens_to_sample=1024, streaming=True)
     await llm.ainvoke(_conversation(design.to_dict(CacheLevel.LONG), tool_msg))
 
     body = json.loads(requests[0].content)
@@ -403,7 +390,7 @@ async def test_documents_reach_bedrock_inline_including_inside_tool_results(
 async def test_request_over_budget_reaches_bedrock_with_document_omitted(
     bedrock_env, monkeypatch, tmp_path
 ) -> None:
-    requests = _mock_mantle(monkeypatch)
+    requests = _mock_bedrock(monkeypatch)
     (tmp_path / "design.pdf").write_bytes(_pdf(2000))
     (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
     design = await BedrockFileUploader().get_document(tmp_path / "design.pdf")
@@ -411,7 +398,8 @@ async def test_request_over_budget_reaches_bedrock_with_document_omitted(
     tool_msg = await _read_document_message(tmp_path, "spec.pdf")
 
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        region_name=_REGION, inference_profile="global",
+        model_name=_MODEL, max_tokens_to_sample=1024,
         max_request_bytes=20_000, streaming=True,
     )
     await llm.ainvoke(_conversation(design.to_dict(CacheLevel.LONG), tool_msg))
@@ -429,13 +417,14 @@ async def test_request_over_budget_reaches_bedrock_with_document_omitted(
 async def test_chat_model_warns_once_about_a_document_every_request_omits(
     bedrock_env, monkeypatch, tmp_path, caplog
 ) -> None:
-    _mock_mantle(monkeypatch)
+    _mock_bedrock(monkeypatch)
     (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
     tool_msg = await _read_document_message(tmp_path, "spec.pdf")
     system = {"type": "text", "text": "You are a verifier."}
 
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        region_name=_REGION, inference_profile="global",
+        model_name=_MODEL, max_tokens_to_sample=1024,
         max_request_bytes=20_000, streaming=True,
     )
     with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
@@ -462,13 +451,14 @@ async def test_chat_model_warns_once_per_conversation(
 ) -> None:
     """Each conversation a model serves warns about a document it leaves out, even when
     another conversation already left out the same document."""
-    _mock_mantle(monkeypatch)
+    _mock_bedrock(monkeypatch)
     (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
     tool_msg = await _read_document_message(tmp_path, "spec.pdf")
     system = {"type": "text", "text": "You are a verifier."}
 
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        region_name=_REGION, inference_profile="global",
+        model_name=_MODEL, max_tokens_to_sample=1024,
         max_request_bytes=20_000, streaming=True,
     )
     with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
@@ -483,9 +473,10 @@ async def test_chat_model_warns_once_per_conversation(
 async def test_resumed_checkpoint_with_file_id_fails_before_sending(
     bedrock_env, monkeypatch
 ) -> None:
-    requests = _mock_mantle(monkeypatch)
-    llm = ChatAnthropicBedrock(aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
-                               streaming=True)
+    requests = _mock_bedrock(monkeypatch)
+    llm = ChatAnthropicBedrock(
+        region_name=_REGION, inference_profile="global",
+        model_name=_MODEL, max_tokens_to_sample=1024, streaming=True)
     with pytest.raises(FilesApiReferenceError, match="file_011abc"):
         await llm.ainvoke([HumanMessage(content=[
             {"type": "text", "text": "Design document:"}, _FILE_BLOCK,
@@ -493,28 +484,27 @@ async def test_resumed_checkpoint_with_file_id_fails_before_sending(
     assert requests == []
 
 
-def _mock_mantle_with_cap(monkeypatch: pytest.MonkeyPatch, cap: int) -> list[httpx.Request]:
-    """Like :func:`_mock_mantle`, but answers 413 to a request whose body exceeds ``cap``."""
+def _mock_bedrock_with_cap(monkeypatch: pytest.MonkeyPatch, cap: int) -> list[httpx.Request]:
+    """Like :func:`_mock_bedrock`, but answers 413 to a request whose body exceeds ``cap``,
+    with the body and header of an AWS error response."""
     requests: list[httpx.Request] = []
-    real = bedrock_chat._AsyncMantleClient
+    real = bedrock_chat._AsyncInvokeModelClient
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if len(request.content) > cap:
-            return httpx.Response(413, json={
-                "type": "error",
-                "error": {"type": "request_too_large", "message": "Request exceeds the maximum size"},
-            })
-        return httpx.Response(
-            200, headers={"content-type": "text/event-stream"}, content=_sse_body()
-        )
+            return httpx.Response(
+                413, headers={"x-amzn-errortype": "ServiceQuotaExceededException"},
+                json={"message": "Request exceeds the maximum size"},
+            )
+        return _stream_response()
 
-    def factory(**kwargs: Any) -> anthropic.AsyncAnthropicBedrockMantle:
+    def factory(**kwargs: Any) -> anthropic.AsyncAnthropicBedrock:
         return real(**{
             **kwargs, "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler)),
         })
 
-    monkeypatch.setattr(bedrock_chat, "_AsyncMantleClient", factory)
+    monkeypatch.setattr(bedrock_chat, "_AsyncInvokeModelClient", factory)
     return requests
 
 
@@ -523,21 +513,22 @@ async def test_request_rejected_as_too_large_is_sent_again_with_fewer_documents(
     bedrock_env, monkeypatch, tmp_path, caplog
 ) -> None:
     # The size estimate says the request fits, but Bedrock's real limit is lower.
-    requests = _mock_mantle_with_cap(monkeypatch, cap=20_000)
+    requests = _mock_bedrock_with_cap(monkeypatch, cap=20_000)
     (tmp_path / "design.pdf").write_bytes(_pdf(2000))
     (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
     design = await BedrockFileUploader().get_document(tmp_path / "design.pdf")
     assert design is not None
     tool_msg = await _read_document_message(tmp_path, "spec.pdf")
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        region_name=_REGION, inference_profile="global",
+        model_name=_MODEL, max_tokens_to_sample=1024,
         max_request_bytes=1_000_000, streaming=True,
     )
     conversation = _conversation(design.to_dict(CacheLevel.LONG), tool_msg)
 
     with caplog.at_level(logging.WARNING):
         msg = await llm.ainvoke(conversation)
-    assert msg.content == "ok"
+    assert msg.content == "hello"
     assert [len(r.content) > 20_000 for r in requests] == [True, False]
     body = json.loads(requests[1].content)
     assert body["system"][1]["type"] == "document"
@@ -558,7 +549,9 @@ async def test_conversation_state_forgets_the_least_recently_used(
     """A model keeps state for a bounded number of conversations, and forgets the one it
     used least recently first."""
     monkeypatch.setattr(bedrock_chat, "_MAX_CONVERSATIONS", 2)
-    llm = ChatAnthropicBedrock(aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024)
+    llm = ChatAnthropicBedrock(
+        region_name=_REGION, inference_profile="global",
+        model_name=_MODEL, max_tokens_to_sample=1024)
 
     async def state(thread_id: str) -> Any:
         async def call(_: Any) -> Any:
@@ -581,14 +574,15 @@ async def test_lowered_request_budget_is_kept_per_conversation(
     bedrock_env, monkeypatch, tmp_path
 ) -> None:
     """A request rejected as too large lowers the budget of its own conversation only."""
-    requests = _mock_mantle_with_cap(monkeypatch, cap=20_000)
+    requests = _mock_bedrock_with_cap(monkeypatch, cap=20_000)
     (tmp_path / "design.pdf").write_bytes(_pdf(2000))
     (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
     design = await BedrockFileUploader().get_document(tmp_path / "design.pdf")
     assert design is not None
     tool_msg = await _read_document_message(tmp_path, "spec.pdf")
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024,
+        region_name=_REGION, inference_profile="global",
+        model_name=_MODEL, max_tokens_to_sample=1024,
         max_request_bytes=1_000_000, streaming=True,
     )
     conversation = _conversation(design.to_dict(CacheLevel.LONG), tool_msg)
@@ -603,9 +597,10 @@ async def test_lowered_request_budget_is_kept_per_conversation(
 
 @pytest.mark.asyncio
 async def test_request_too_large_without_documents_is_raised(bedrock_env, monkeypatch) -> None:
-    requests = _mock_mantle_with_cap(monkeypatch, cap=10)
+    requests = _mock_bedrock_with_cap(monkeypatch, cap=10)
     llm = ChatAnthropicBedrock(
-        aws_region=_REGION, model_name=_MODEL, max_tokens_to_sample=1024, streaming=True,
+        region_name=_REGION, inference_profile="global",
+        model_name=_MODEL, max_tokens_to_sample=1024, streaming=True,
     )
     with pytest.raises(anthropic.RequestTooLargeError):
         await llm.ainvoke("hi")

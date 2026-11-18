@@ -1,11 +1,12 @@
-"""``ChatAnthropic`` pointed at Claude on Amazon Bedrock through the Mantle endpoint.
+"""langchain-aws's ``ChatAnthropicBedrock``, which sends ``ChatAnthropic`` requests to
+Claude on Amazon Bedrock through InvokeModel, with what a run needs on top.
 
-Mantle serves the Anthropic Messages API itself, so everything ``ChatAnthropic`` does to
-build requests and parse responses applies unchanged. This subclass changes six things:
+InvokeModel takes the Anthropic Messages request body, so everything ``ChatAnthropic`` does to
+build requests and parse responses applies unchanged, and the langchain-aws class supplies
+the SDK's Bedrock clients, AWS credentials and the usage Bedrock reports in a stream. This
+subclass changes six things:
 
-- the SDK clients are the Bedrock Mantle ones, which sign requests with SigV4 from the
-  default AWS credential chain and need no Anthropic API key;
-- the request carries the Bedrock model id, mapped from the logical one;
+- the request carries the inference profile id, mapped from the logical model id;
 - inline documents are dropped, latest first, until the request fits the request budget,
   and a request that refers to a Files API upload fails before it is sent (see
   :func:`composer.llm.bedrock_inline.fit_request_to_budget`);
@@ -13,37 +14,40 @@ build requests and parse responses applies unchanged. This subclass changes six 
   records, pricing and logs see the same name the run was configured with;
 - a failure to fetch the AWS credentials that sign a request is raised as an error that says
   whether retrying can help (see :class:`CredentialErrorMiddleware`);
+- an exception Bedrock sends inside an open stream is raised as a
+  :class:`composer.llm.bedrock.BedrockStreamError` that names it;
 - the SDK's retries back off for longer (see :func:`composer.llm.bedrock.retry_delay_seconds`),
   and a request Bedrock rejects as too large is sent again with fewer inline documents.
 """
 
 import asyncio
+import json
 import logging
 import random
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import Any, override
+from typing import Any, Self, override
 
 import anthropic
 import boto3
 import httpx
 import botocore.exceptions
 from anthropic._models import FinalRequestOptions
-from langchain_anthropic import ChatAnthropic
-from langchain_anthropic._client_utils import (
-    _get_default_async_httpx_client, _get_default_httpx_client,
-)
+from anthropic._streaming import ServerSentEvent
+from anthropic.lib.bedrock._stream_decoder import AWSEventStreamDecoder
+from botocore.eventstream import EventStreamMessage
+from langchain_aws import ChatAnthropicBedrock as _LangchainChatAnthropicBedrock
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatResult
 from langchain_core.runnables.config import ensure_config
-from pydantic import PrivateAttr
+from pydantic import PrivateAttr, model_validator
 
 from composer.llm.bedrock import (
     TRANSIENT_CREDENTIAL_ERROR_CODES, BedrockCredentialRefreshError, BedrockCredentialsError,
-    MAX_REQUEST_BYTES, retry_delay_seconds, to_bedrock_model_id,
+    BedrockStreamError, MAX_REQUEST_BYTES, retry_delay_seconds, to_bedrock_model_id,
 )
 from composer.llm.bedrock_inline import (
     DocumentKey, fit_request_to_budget, serialized_request_size,
@@ -104,7 +108,9 @@ def _client_error(exc: botocore.exceptions.ClientError) -> anthropic.AnthropicEr
     )
 
 
-def _no_credentials_error(exc: RuntimeError, aws_region: str) -> anthropic.AnthropicError | None:
+def _no_credentials_error(
+    exc: RuntimeError, aws_region: str | None
+) -> anthropic.AnthropicError | None:
     """The error to raise for ``exc``, a ``RuntimeError`` from a request attempt, when the
     default AWS credential chain has no credentials; ``None`` when it has some, so ``exc``
     has another cause.
@@ -132,12 +138,12 @@ class CredentialErrorMiddleware(anthropic.Middleware):
     role assumption), or the ``RuntimeError`` the SDK raises when the default credential
     chain has none.
 
-    The Mantle clients sign each attempt before sending it, and the SDK leaves an error from
+    The Bedrock clients sign each attempt before sending it, and the SDK leaves an error from
     signing as it is, so a passing failure to fetch credentials would otherwise end the
     request at once. The SDK runs middleware once per attempt, inside its retry loop, and
     retries a ``RetryableError`` as it does a dropped connection."""
 
-    def __init__(self, aws_region: str) -> None:
+    def __init__(self, aws_region: str | None) -> None:
         self._aws_region = aws_region
 
     @override
@@ -173,7 +179,7 @@ class CredentialErrorMiddleware(anthropic.Middleware):
 
 
 def _bedrock_retry_timeout(
-    client: anthropic.AnthropicBedrockMantle | anthropic.AsyncAnthropicBedrockMantle,
+    client: anthropic.AnthropicBedrock | anthropic.AsyncAnthropicBedrock,
     remaining_retries: int,
     options: FinalRequestOptions,
     response_headers: httpx.Headers | None,
@@ -189,7 +195,39 @@ def _bedrock_retry_timeout(
     return retry_delay_seconds(retries_done) * (1 - 0.25 * random.random())
 
 
-class _MantleClient(anthropic.AnthropicBedrockMantle):
+def _stream_exception(event: EventStreamMessage) -> BedrockStreamError:
+    """The error for a frame of the AWS event stream that reports a failure. A modeled
+    exception names itself in ``:exception-type`` and carries a JSON body with a
+    ``message``; any other error names itself in ``:error-code`` and ``:error-message``."""
+    headers = event.headers
+    if headers.get(":message-type") == "exception":
+        try:
+            body = json.loads(event.payload)
+        except ValueError:
+            body = None
+        message = body.get("message") if isinstance(body, dict) else None
+        return BedrockStreamError(
+            headers.get(":exception-type"),
+            str(message or event.payload.decode(errors="replace")),
+        )
+    return BedrockStreamError(headers.get(":error-code"), str(headers.get(":error-message", "")))
+
+
+class _EventStreamDecoder(AWSEventStreamDecoder):
+    """The SDK's decoder of InvokeModel streams, raising a :class:`BedrockStreamError` for a
+    frame that reports a failure. The SDK's own decoder raises a plain ``ValueError`` there,
+    which loses the exception name that tells a throttled stream from a bad request."""
+
+    @override
+    def _parse_message_from_event(self, event: EventStreamMessage) -> ServerSentEvent | None:
+        if event.headers.get(":message-type") in ("exception", "error"):
+            raise _stream_exception(event)
+        return super()._parse_message_from_event(event)
+
+
+# The SDK's Bedrock clients raise a 413 as the base APIStatusError, unlike its first-party
+# client; these raise RequestTooLargeError for it, which the chat model recovers from.
+class _InvokeModelClient(anthropic.AnthropicBedrock):
     @override
     def _calculate_retry_timeout(
         self,
@@ -199,8 +237,20 @@ class _MantleClient(anthropic.AnthropicBedrockMantle):
     ) -> float:
         return _bedrock_retry_timeout(self, remaining_retries, options, response_headers)
 
+    @override
+    def _make_sse_decoder(self) -> AWSEventStreamDecoder:
+        return _EventStreamDecoder()
 
-class _AsyncMantleClient(anthropic.AsyncAnthropicBedrockMantle):
+    @override
+    def _make_status_error(
+        self, err_msg: str, *, body: object, response: httpx.Response
+    ) -> anthropic.APIStatusError:
+        if response.status_code == 413:
+            return anthropic.RequestTooLargeError(err_msg, response=response, body=body)
+        return super()._make_status_error(err_msg, body=body, response=response)
+
+
+class _AsyncInvokeModelClient(anthropic.AsyncAnthropicBedrock):
     @override
     def _calculate_retry_timeout(
         self,
@@ -209,6 +259,18 @@ class _AsyncMantleClient(anthropic.AsyncAnthropicBedrockMantle):
         response_headers: httpx.Headers | None = None,
     ) -> float:
         return _bedrock_retry_timeout(self, remaining_retries, options, response_headers)
+
+    @override
+    def _make_sse_decoder(self) -> AWSEventStreamDecoder:
+        return _EventStreamDecoder()
+
+    @override
+    def _make_status_error(
+        self, err_msg: str, *, body: object, response: httpx.Response
+    ) -> anthropic.APIStatusError:
+        if response.status_code == 413:
+            return anthropic.RequestTooLargeError(err_msg, response=response, body=body)
+        return super()._make_status_error(err_msg, body=body, response=response)
 
 
 _logger = logging.getLogger(__name__)
@@ -241,12 +303,14 @@ out, and learns its lowered budget again from another 413."""
 _conversations_lock = threading.Lock()
 
 
-class ChatAnthropicBedrock(ChatAnthropic):
-    """``ChatAnthropic`` whose requests go to Bedrock Mantle in ``aws_region``.
+class ChatAnthropicBedrock(_LangchainChatAnthropicBedrock):
+    """langchain-aws's ``ChatAnthropicBedrock`` whose requests go to the
+    ``inference_profile`` routing of the model in ``region_name``.
 
     ``model`` holds the logical id; only the request payload carries the Bedrock id."""
 
-    aws_region: str
+    inference_profile: str
+    """The routing prefix of the inference profile, such as ``global`` or ``eu``."""
     max_request_bytes: int = MAX_REQUEST_BYTES
     """The serialized request size above which inline documents are left out."""
 
@@ -272,51 +336,34 @@ class ChatAnthropicBedrock(ChatAnthropic):
                 self._conversations.move_to_end(key)
             return state
 
-    def _mantle_params(self) -> dict[str, Any]:
-        """The parent's client settings (timeout, retries, default headers) minus the
-        Anthropic API key and base URL, which belong to the first-party endpoint. With no
-        key given, the Mantle client signs with SigV4, and :class:`CredentialErrorMiddleware`
-        classifies a failure to fetch the credentials it signs with."""
+    @model_validator(mode="after")
+    def _static_keys_come_in_pairs(self) -> Self:
+        """langchain-aws reads ``AWS_ACCESS_KEY_ID`` and ``AWS_SECRET_ACCESS_KEY`` and hands
+        them to the SDK client, which signs with whichever is set. One without the other
+        would sign every request with a missing key, so the model refuses to be built."""
+        if (self.aws_access_key_id is None) != (self.aws_secret_access_key is None):
+            raise ValueError(
+                "AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set together; unset both "
+                "to sign Bedrock requests with the default AWS credential chain"
+            )
+        return self
+
+    def _bedrock_client_params(self) -> dict[str, Any]:
+        """The parent's client settings (region, AWS credentials, timeout, retries, default
+        headers) plus :class:`CredentialErrorMiddleware`, which classifies a failure to fetch
+        the credentials the client signs with."""
         params = self._client_params
-        mantle: dict[str, Any] = {
-            "aws_region": self.aws_region,
-            "max_retries": params["max_retries"],
-            "default_headers": params["default_headers"],
-            "middleware": [CredentialErrorMiddleware(self.aws_region)],
-        }
-        if "timeout" in params:
-            mantle["timeout"] = params["timeout"]
-        return mantle
-
-    def _http_client_params(self) -> dict[str, Any]:
-        """Arguments for langchain's cached httpx clients, as the parent builds them: one
-        connection pool shared by every model instance with the same settings, and
-        ``anthropic_proxy`` honoured. The SDK resolves each request URL against its own
-        base URL, so ``base_url`` here only keys the cache per region."""
-        http: dict[str, Any] = {"base_url": f"https://bedrock-mantle.{self.aws_region}.api.aws"}
-        if "timeout" in self._client_params:
-            http["timeout"] = self._client_params["timeout"]
-        if self.anthropic_proxy:
-            http["anthropic_proxy"] = self.anthropic_proxy
-        return http
-
-    # The Mantle clients are not ``anthropic.Client`` subclasses, but expose the
-    # ``messages`` and ``beta.messages`` resources ``ChatAnthropic`` calls.
-    @cached_property
-    @override
-    def _client(self) -> anthropic.AnthropicBedrockMantle:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return _MantleClient(
-            **self._mantle_params(),
-            http_client=_get_default_httpx_client(**self._http_client_params()),
-        )
+        return {**params, "middleware": [CredentialErrorMiddleware(params.get("aws_region"))]}
 
     @cached_property
     @override
-    def _async_client(self) -> anthropic.AsyncAnthropicBedrockMantle:  # pyright: ignore[reportIncompatibleVariableOverride]
-        return _AsyncMantleClient(
-            **self._mantle_params(),
-            http_client=_get_default_async_httpx_client(**self._http_client_params()),
-        )
+    def _client(self) -> anthropic.AnthropicBedrock:
+        return _InvokeModelClient(**self._bedrock_client_params())
+
+    @cached_property
+    @override
+    def _async_client(self) -> anthropic.AsyncAnthropicBedrock:
+        return _AsyncInvokeModelClient(**self._bedrock_client_params())
 
     @override
     def _get_request_payload(
@@ -327,7 +374,7 @@ class ChatAnthropicBedrock(ChatAnthropic):
         **kwargs: dict,
     ) -> dict:
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
-        payload["model"] = to_bedrock_model_id(payload["model"])
+        payload["model"] = to_bedrock_model_id(payload["model"], self.inference_profile)
         conversation = self._conversation()
         return fit_request_to_budget(
             payload, self._request_budget(conversation), conversation.omitted_documents

@@ -1,13 +1,19 @@
 """Backend selection for Claude, and the model-id mapping for Claude on Amazon Bedrock.
 
-Claude is reached either through the Anthropic API or through Amazon Bedrock's Mantle
-endpoint (the native Anthropic Messages API, served at ``bedrock-mantle.{region}.api.aws``).
+Claude is reached either through the Anthropic API or through Amazon Bedrock's InvokeModel
+API on the ``bedrock-runtime`` endpoint, which takes the Anthropic Messages request body.
 ``AUTOPROVER_LLM_BACKEND`` picks one per process.
 
 Model ids stay logical (``claude-opus-5-5``) everywhere outside the Bedrock chat client:
 CLI defaults, budgets, logs, pricing and usage records all key on them. Only the request
 sent to Bedrock carries the Bedrock id, and the model name a Bedrock response reports is
 replaced by the logical id the request was built from before anything downstream sees it.
+
+InvokeModel serves current Claude models only through a cross-Region inference profile,
+whose id is the Bedrock model id behind a routing prefix: ``global.`` lets Bedrock route a
+request to any commercial AWS region, a geography such as ``eu.`` keeps it inside that
+geography. ``AUTOPROVER_BEDROCK_INFERENCE_PROFILE`` picks the prefix
+(see :func:`inference_profile`).
 
 Bedrock has no Files API, so binary documents travel inline as base64 in every request
 that carries them, and Bedrock caps a request at 20 MB. Two byte budgets, measured on the
@@ -84,6 +90,27 @@ def bedrock_region() -> str:
     )
 
 
+INFERENCE_PROFILE_ENV_VAR = "AUTOPROVER_BEDROCK_INFERENCE_PROFILE"
+DEFAULT_INFERENCE_PROFILE = "global"
+"""The routing prefix when ``AUTOPROVER_BEDROCK_INFERENCE_PROFILE`` is unset. Every current
+Claude model has a ``global`` profile, and it costs about 10% less than a geographic one.
+Some models have no profile for some geographies (Fable 5 and 5.1 have no ``eu`` one)."""
+
+
+def inference_profile() -> str:
+    """The inference profile prefix of Bedrock requests (``global``, ``eu``, ``us``, ...).
+    Raises ``ValueError`` for a value that is not a single word of letters."""
+    raw = os.environ.get(INFERENCE_PROFILE_ENV_VAR, "").strip().lower()
+    if not raw:
+        return DEFAULT_INFERENCE_PROFILE
+    if not raw.isalpha():
+        raise ValueError(
+            f"{INFERENCE_PROFILE_ENV_VAR}={os.environ[INFERENCE_PROFILE_ENV_VAR]!r} is not an "
+            "inference profile prefix such as 'global' or 'eu'"
+        )
+    return raw
+
+
 MAX_DOCUMENT_BYTES = 8_000_000
 """The base64 size above which one inline document is left out of a Bedrock request."""
 
@@ -137,11 +164,12 @@ TRANSIENT_ERROR_TYPES = frozenset({
 })
 """Bedrock's names for the errors worth retrying. Most of them come with a status code that
 already says so; the names matter for an error reported inside an open stream, whose status
-is the stream's 200, and for ``ExpiredTokenException``, a 403 that the next request, signed
-with refreshed credentials, does not repeat. The name is read from the payload's
-``error.type`` and from the ``x-amzn-errortype`` response header (see :func:`aws_error_type`);
-a transient name in either one makes the error transient, because a front end can pair a
-generic payload type such as ``permission_error`` with a specific header."""
+is the stream's 200 (see :class:`BedrockStreamError`), and for ``ExpiredTokenException``, a
+403 that the next request, signed with refreshed credentials, does not repeat. For an error
+response, the name is read from the payload's ``error.type`` and from the
+``x-amzn-errortype`` response header (see :func:`aws_error_type`); a transient name in either
+one makes the error transient, because a front end can pair a generic payload type such as
+``permission_error`` with a specific header."""
 
 RETRY_INITIAL_DELAY_SECONDS = 1.0
 RETRY_MAX_DELAY_SECONDS = 60.0
@@ -203,6 +231,17 @@ class BedrockCredentialsError(anthropic.AnthropicError):
     The request was not sent, and retrying does not help."""
 
 
+class BedrockStreamError(anthropic.AnthropicError):
+    """Bedrock ended an open response stream with an exception, such as
+    ``ModelStreamErrorException`` or ``ThrottlingException``. InvokeModel sends it as an
+    exception frame of the AWS event stream rather than as an ``error`` event, so the
+    exception name, :attr:`error_type`, is what tells a transient failure apart."""
+
+    def __init__(self, error_type: str | None, message: str) -> None:
+        super().__init__(f"Bedrock stream failed with {error_type or 'an exception'}: {message}")
+        self.error_type = error_type
+
+
 def _arn_resource(model_id: str) -> str | None:
     """The resource part of a Bedrock ARN (``arn:<partition>:bedrock:<region>:<account>:
     <resource>``), or ``None`` if ``model_id`` is not one."""
@@ -232,9 +271,23 @@ def is_bedrock_model_id(model_id: str) -> bool:
     return _arn_resource(model_id) is not None or _vendor_qualified_suffix(model_id) is not None
 
 
-def to_bedrock_model_id(logical: str) -> str:
-    """The Bedrock id for a logical Claude id: Bedrock names Claude models by the
-    Anthropic id behind an ``anthropic.`` vendor prefix."""
+_BEDROCK_MODEL_NAMES: dict[str, str] = {
+    "claude-haiku-4-5": "claude-haiku-4-5-20251001-v1:0",
+    "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001-v1:0",
+    "claude-opus-4-6": "claude-opus-4-6-v1",
+    "claude-opus-4-5": "claude-opus-4-5-20251101-v1:0",
+    "claude-opus-4-5-20251101": "claude-opus-4-5-20251101-v1:0",
+    "claude-sonnet-4-5": "claude-sonnet-4-5-20250929-v1:0",
+    "claude-sonnet-4-5-20250929": "claude-sonnet-4-5-20250929-v1:0",
+}
+"""The models whose Bedrock name is not their Anthropic id. Bedrock names Claude 4.6 Sonnet,
+4.7 and later, and the Claude 5 family by the Anthropic id itself."""
+
+
+def to_bedrock_model_id(logical: str, profile: str) -> str:
+    """The inference profile id for a logical Claude id: the Bedrock model name behind the
+    ``anthropic.`` vendor prefix and the ``profile`` routing prefix, such as
+    ``global.anthropic.claude-opus-5-5``."""
     if is_bedrock_model_id(logical):
         raise ValueError(f"{logical!r} is already a Bedrock model id, not a logical one")
-    return f"{_BEDROCK_VENDOR}.{logical}"
+    return f"{profile}.{_BEDROCK_VENDOR}.{_BEDROCK_MODEL_NAMES.get(logical, logical)}"
