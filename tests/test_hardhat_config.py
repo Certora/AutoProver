@@ -204,6 +204,27 @@ def test_build_info_skips_files_of_another_format(
     assert manager.parse_config(_hardhat_config(tmp_path)).solc_version == "0.8.28"
 
 
+def test_build_info_output_is_not_parsed(manager: HardhatManager, tmp_path: Path, no_node: None) -> None:
+    build_info_dir = tmp_path / "artifacts" / "build-info"
+    build_info_dir.mkdir(parents=True)
+    head = json.dumps({
+        "_format": "hh-sol-build-info-1",
+        "solcVersion": "0.8.19",
+        "input": {"language": "Solidity", "sources": {}, "settings": {"viaIR": True}},
+    })
+    (build_info_dir / "a.json").write_text(head[:-1] + ', "output": {not json')
+    config = manager.parse_config(_hardhat_config(tmp_path))
+    assert config.solc_version == "0.8.19"
+    assert config.via_ir is True
+
+
+def test_build_info_non_object_is_skipped(manager: HardhatManager, tmp_path: Path, no_node: None) -> None:
+    build_info_dir = tmp_path / "artifacts" / "build-info"
+    _write_build_info(build_info_dir, "a", "0.8.28", {})
+    (build_info_dir / "b.json").write_text(json.dumps(["hh-sol-build-info-1", "0.7.6"]))
+    assert manager.parse_config(_hardhat_config(tmp_path)).solc_version == "0.8.28"
+
+
 @pytest.mark.parametrize("solc_version, settings", [
     ("0.8.19/../../evil", {}),
     ("0.8.19; rm -rf /", {}),

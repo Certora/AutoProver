@@ -14,6 +14,8 @@ from typing import Dict, Any, List, Optional, Tuple
 from pathlib import Path
 from dataclasses import dataclass, field
 
+import ijson
+
 from certora_autosetup.build_systems.base import BuildSystemConfig
 from certora_autosetup.build_systems.config_files import HARDHAT_CONFIG_FILENAMES
 from certora_autosetup.build_systems.manager import BuildSystemManager
@@ -25,6 +27,33 @@ from certora_autosetup.utils.types import ContractHandle
 HARDHAT_BUILD_INFO_FORMATS = frozenset({"hh-sol-build-info-1", "hh3-sol-build-info-1"})
 _SOLC_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 _EVM_VERSION_RE = re.compile(r"[a-z]+")
+
+
+def _read_solc_build_info(path: Path) -> Optional[Tuple[Any, Any]]:
+    """
+    The `solcVersion` and `input` of a solc build-info file, unchecked, or None
+    if the file is not a solc build-info.
+
+    A solc build-info is a top-level object whose `_format` is one of
+    HARDHAT_BUILD_INFO_FORMATS and whose `compilerType`, if present, is `solc`.
+    The file is streamed: reading stops at any other `_format`, and once the
+    `input` of a Hardhat 2 build-info is in — the solc `output` that follows it
+    in the same file is most of its size. A Hardhat 3 build-info keeps its
+    output in a separate file and is read whole.
+    """
+    entries: Dict[str, Any] = {}
+    with open(path, "rb") as f:
+        for key, value in ijson.kvitems(f, ""):
+            entries[key] = value
+            if key == "_format" and value not in HARDHAT_BUILD_INFO_FORMATS:
+                return None
+            if key == "input" and entries.get("_format") == "hh-sol-build-info-1":
+                break
+    if entries.get("_format") not in HARDHAT_BUILD_INFO_FORMATS:
+        return None
+    if entries.get("compilerType", "solc") != "solc":
+        return None
+    return entries.get("solcVersion"), entries.get("input")
 
 
 @dataclass
@@ -272,17 +301,14 @@ class HardhatManager(BuildSystemManager):
         `evmVersion`, each checked against the type and shape solc accepts.
         """
         try:
-            build_info = json.loads(path.read_text())
-        except (OSError, json.JSONDecodeError) as e:
+            build_info = _read_solc_build_info(path)
+        except (OSError, ijson.JSONError) as e:
             self.log(f"Skipping unreadable build-info {path.name}: {e}", "WARNING")
             return None
-        if not isinstance(build_info, dict) or build_info.get("_format") not in HARDHAT_BUILD_INFO_FORMATS:
-            return None
-        if build_info.get("compilerType", "solc") != "solc":
+        if build_info is None:
             return None
 
-        solc_version = build_info.get("solcVersion")
-        solc_input = build_info.get("input")
+        solc_version, solc_input = build_info
         settings = solc_input.get("settings", {}) if isinstance(solc_input, dict) else None
         if (
             not isinstance(solc_version, str)
