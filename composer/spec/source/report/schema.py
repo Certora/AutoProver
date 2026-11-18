@@ -513,11 +513,9 @@ type ConfRunStatus = Literal["ran", "build_failed", "run_failed"]
 class ConfRunRecord(BaseModel):
     """One conf's Prover run: the jobs it ran as, or why it returned no results."""
     conf: str = Field(description="Project-relative path of the conf.")
-    status: ConfRunStatus | None = Field(
-        default=None,
+    status: ConfRunStatus = Field(
         description="ran = the run returned results; build_failed = the conf did not build, so it "
-        "was not run; run_failed = the conf built, and its Prover run returned no results. None when "
-        "the report does not state it.",
+        "was not run; run_failed = the conf built, and its Prover run returned no results.",
     )
     prover_links: list[str] = Field(
         default_factory=list,
@@ -536,12 +534,11 @@ class ConfCoverage(BaseModel):
     """Whether the confs that verify one spec, taken together, check every rule of it on every
     method. A gap is closed by a completing run, and this records what was missing before it."""
     spec: str = Field(description="Project-relative path of the spec.")
-    status: SpecCoverageStatus | None = Field(
-        default=None,
+    status: SpecCoverageStatus = Field(
         description="What the confs select, not how their runs went (see `runs`). complete = every "
         "rule on every method and method combination; incomplete = every rule, but some rule not on "
-        "every method or combination; orphaned = some rule no conf selects; unknown = a conf did "
-        "not build, so what it selects is not known. None when the report does not state it.",
+        "every method or combination; orphaned = some rule no conf selects; unknown = a conf "
+        "selecting this spec did not build, so which rules and methods it covers is unclear.",
     )
     confs: list[str] = Field(
         default_factory=list, description="Project-relative paths of the confs that verify the spec.",
@@ -740,7 +737,7 @@ class AutoProverReport(BaseModel):
     #: Mutation testing of the specs (evaluate run, when mutation ran). None otherwise.
     mutation: MutationReport | None = None
     #: The counts of an evaluate run's specs, confs, rules and properties. None for any other run
-    #: mode, and when the report does not state them.
+    #: mode.
     evaluation_summary: EvaluationSummary | None = None
     #: Set only on the report written in place of one the run did not produce — because it ended
     #: before its report phase, or because building its report failed. That report carries the
