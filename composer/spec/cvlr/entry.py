@@ -487,6 +487,7 @@ async def _executor[App: BaseApplication, Main, U: FeatureUnit](
                 corpus_tools(
                     staged.embed_model,
                     pinned={c.name: c.version for c in selected.reference.crates()},
+                    chain=chain.tag,
                 )
                 if args.corpus else ()
             )

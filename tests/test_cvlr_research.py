@@ -50,11 +50,30 @@ def test_the_api_manifest_tag_resolves_for_the_importer():
 
 def test_both_corpora_bind_their_tools():
     """The pools open lazily, so binding needs no database: this checks the wiring alone."""
-    names = {t.name for t in cvlr_research.corpus_tools(object(), pinned={})}  # type: ignore[arg-type]
+    names = {t.name for t in cvlr_research.corpus_tools(object(), pinned={}, chain="solana")}  # type: ignore[arg-type]
     assert names == {
         "cvlr_manual_search", "cvlr_keyword_search", "cvlr_get_section",
         "cvlr_api_search", "cvlr_api_lookup", "cvlr_api_surface",
     }
+
+
+def test_a_soroban_run_searches_the_api_corpus_and_not_the_solana_manual():
+    """The manual is Solana prose: a Soroban run that searched it would take Solana idiom for
+    authority, and the first dev Soroban runs would be judged against answers from the wrong
+    chain's methodology. The API corpus stays: it filters rows by the run's pinned crates."""
+    names = {t.name for t in cvlr_research.corpus_tools(object(), pinned={}, chain="soroban")}  # type: ignore[arg-type]
+    assert names == {"cvlr_api_search", "cvlr_api_lookup", "cvlr_api_surface"}
+
+
+def test_every_cvlr_chain_is_served_by_some_corpus():
+    """A chain whose tag no corpus lists would run with a researcher over nothing; a new chain
+    must decide what it searches when it is added."""
+    from composer.spec.cvlr.chains import SOLANA_CVLR, SOROBAN_CVLR
+
+    for chain in (SOLANA_CVLR, SOROBAN_CVLR):
+        assert any(
+            chain.tag in corpus.chains for corpus in cvlr_research.CVLR_CORPORA
+        ), chain.tag
 
 
 def test_a_corpus_that_cannot_be_opened_leaves_the_other(monkeypatch: pytest.MonkeyPatch):
@@ -66,7 +85,7 @@ def test_a_corpus_that_cannot_be_opened_leaves_the_other(monkeypatch: pytest.Mon
         return real(connection, model)  # type: ignore[arg-type]
 
     monkeypatch.setattr(cvlr_research, "PostgreSQLRAGDatabase", opener)
-    names = {t.name for t in cvlr_research.corpus_tools(object(), pinned={})}  # type: ignore[arg-type]
+    names = {t.name for t in cvlr_research.corpus_tools(object(), pinned={}, chain="solana")}  # type: ignore[arg-type]
     assert names == {"cvlr_api_search", "cvlr_api_lookup", "cvlr_api_surface"}
 
 

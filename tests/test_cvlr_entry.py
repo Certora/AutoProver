@@ -343,8 +343,9 @@ def wiring(monkeypatch, tmp_path):
             bind_source_tools=lambda tools: {**kw, "source_tools": tools}
         ),
     )
-    def fake_corpus_tools(model, *, pinned):
+    def fake_corpus_tools(model, *, pinned, chain):
         recorded.pinned = dict(pinned)
+        recorded.corpus_chain = chain
         return (f"search:{model}",)
 
     monkeypatch.setattr(entry, "corpus_tools", fake_corpus_tools)

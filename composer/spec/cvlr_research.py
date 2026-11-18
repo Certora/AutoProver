@@ -69,27 +69,44 @@ class CvlrCorpus:
 
     name: str
     connection: str
+    #: The chains whose runs search it. The manual is Solana prose, hand-written against the
+    #: Solana Prover, and a Soroban run that searched it would take Solana idiom for authority.
+    #: The API corpus is generated from every platform generation's crates and already shows a
+    #: run only the releases it builds, so it serves every chain.
+    chains: frozenset[str]
     #: Given the run's pinned releases, crate to version. The manual is not versioned and ignores
     #: them.
     tools: Callable[[ComposerRAGDB, Mapping[str, str]], Iterable[BaseTool]]
 
 
 #: Both corpora, opened by their connections rather than resolved by a registered name. The
-#: researcher needs both or neither, so nothing ever chooses one, and no wheel declares either.
+#: researcher takes every corpus that serves the run's chain or none at all: the chain picks
+#: statically, nothing configures one at run time, and no wheel declares either.
 CVLR_CORPORA: tuple[CvlrCorpus, ...] = (
-    CvlrCorpus("cvlr_kb", CVLR_DEFAULT_CONNECTION, lambda db, _pinned: cvlr_rag.get_tools(db)),
-    CvlrCorpus("cvlr_api_kb", CVLR_API_DEFAULT_CONNECTION, cvlr_api_rag.get_tools),
+    CvlrCorpus(
+        "cvlr_kb",
+        CVLR_DEFAULT_CONNECTION,
+        frozenset({"solana"}),
+        lambda db, _pinned: cvlr_rag.get_tools(db),
+    ),
+    CvlrCorpus(
+        "cvlr_api_kb",
+        CVLR_API_DEFAULT_CONNECTION,
+        frozenset({"solana", "soroban"}),
+        cvlr_api_rag.get_tools,
+    ),
 )
 
 
 def corpus_tools(
-    model: "SentenceTransformer", *, pinned: Mapping[str, str]
+    model: "SentenceTransformer", *, pinned: Mapping[str, str], chain: str
 ) -> tuple[BaseTool, ...]:
-    """The search tools over both CVLR corpora, querying with ``model``.
+    """The search tools over the CVLR corpora that serve ``chain``, querying with ``model``.
 
     ``pinned`` maps each CVLR crate the run builds to its version. The API corpus holds every
     platform generation's releases and shows only these, or an earlier patch release of one
-    (:class:`composer.tools.cvlr_api_rag.ApiCorpus`).
+    (:class:`composer.tools.cvlr_api_rag.ApiCorpus`). The manual is Solana-only, so a Soroban
+    run gets no tools over it rather than searching another chain's methodology.
 
     A corpus that cannot be opened contributes no tools rather than failing the run: search is an
     aid, and what is load-bearing is in the bundle. The pools open lazily, so an absent database
@@ -97,6 +114,10 @@ def corpus_tools(
     """
     tools: list[BaseTool] = []
     for corpus in CVLR_CORPORA:
+        if chain not in corpus.chains:
+            _log.info("CVLR corpus %s does not serve %s runs; searching without it",
+                      corpus.name, chain)
+            continue
         try:
             tools.extend(corpus.tools(PostgreSQLRAGDatabase(corpus.connection, model), pinned))
         except Exception as e:  # noqa: BLE001 — a search aid must never fail a run
