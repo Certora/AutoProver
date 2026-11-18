@@ -1372,22 +1372,18 @@ def test_evaluate_statuses_and_summary_round_trip():
     assert reloaded.evaluation_summary.confs == ConfStatusCounts(in_scope=1, ran=1)
 
 
-def test_a_report_without_the_stated_statuses_loads() -> None:
-    # A report without the status fields and the evaluation summary loads with them as None.
-    cov = ConfCoverage.model_validate({
-        "spec": "s.spec", "confs": ["c.conf"], "complete": False,
-        "runs": [{"conf": "c.conf", "prover_links": []}],
-    })
-    assert cov.status is None and cov.runs[0].status is None
-    report = AutoProverReport.model_validate_json(
-        _evaluate_report().model_dump_json(exclude={"evaluation_summary"})
-    )
-    assert report.evaluation_summary is None
+def test_conf_coverage_states_its_statuses() -> None:
+    with pytest.raises(PydanticValidationError):
+        ConfCoverage.model_validate({"spec": "s.spec", "confs": ["c.conf"], "complete": False})
+    with pytest.raises(PydanticValidationError):
+        ConfRunRecord.model_validate({"conf": "c.conf"})
 
 
 def test_conf_coverage_without_runs_loads() -> None:
     # Reports written before schema 3.5 have no `runs`.
-    cov = ConfCoverage.model_validate({"spec": "s.spec", "confs": ["c.conf"], "complete": False})
+    cov = ConfCoverage.model_validate(
+        {"spec": "s.spec", "status": "complete", "confs": ["c.conf"], "complete": False}
+    )
     assert cov.runs == []
 
 
