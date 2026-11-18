@@ -35,10 +35,10 @@ Three builders existed, one per corpus:
 
 Each had a shell wrapper ([`populate_rag.sh`](../scripts/populate_rag.sh),
 [`populate_foundry_rag.sh`](../scripts/populate_foundry_rag.sh), `populate_crucible_rag.sh`), and
-each pins a default connection constant (`DEFAULT_CONNECTION`, `FOUNDRY_DEFAULT_CONNECTION`,
-`SANITY_DEFAULT_CONNECTION`) in [`composer/rag/db.py`](../composer/rag/db.py). (This section
-describes the state that *motivated* the change: the Crucible builder + wrapper were written that
-way first, and this mechanism is what replaced them — the CVL and Foundry ones remain.)
+each pins a default corpus (`CVL_CORPUS`, `FOUNDRY_CORPUS`, `EXTENDED_CORPUS`, each a corpus file
+under `$CERTORA_AI_COMPOSER_RAG_DIR`) in [`composer/rag/db.py`](../composer/rag/db.py). (This
+section describes the state that *motivated* the change: the Crucible builder + wrapper were written
+that way first, and this mechanism is what replaced them — the CVL and Foundry ones remain.)
 
 The important observation: **only the first column differs.** Everything downstream is already
 common code the three builders call into:
@@ -220,12 +220,12 @@ now *only the importer* does; producers don't.
 
 ## 4. Connection resolution
 
-The importer resolves a manifest's `knowledge_base` tag to a DB connection via a small registry,
+The importer resolves a manifest's `knowledge_base` tag to a corpus location via a small registry,
 overridable by `--output`:
 
 ```python
-KNOWLEDGE_BASES: dict[str, str] = {
-    # "<corpus>_kb": CORPUS_DEFAULT_CONNECTION,
+KNOWLEDGE_BASES: dict[str, RagLocation] = {
+    # "<corpus>_kb": SqliteRag(RAG_CORPUS_DIR / "<corpus>_kb.sqlite"),
 }
 ```
 
@@ -234,7 +234,7 @@ the `composer/tools/<corpus>_rag.py` that searches it, because [`rag_env.py`](..
 requires both halves before a tag is usable. This is the same registry idea
 as `rag_env.py` (tag → search tools) and the ecosystem registry:
 a declarative tag resolved to a concrete resource, not a fork. The existing
-`*_DEFAULT_CONNECTION` constants in `db.py` stay put; if CVL/Foundry ever migrate onto this path,
+`*_CORPUS` constants in `db.py` stay put; if CVL/Foundry ever migrate onto this path,
 their tags join the registry then — and ideally the two registries share the tag namespace, so a
 corpus's *import* target and its *runtime* search tools resolve by one name.
 
@@ -310,11 +310,11 @@ The mechanism, corpus-free:
 
 What an adopting application adds, in one go: its committed `<kb>.rag.json`, both registry halves
 (the `KNOWLEDGE_BASES` connection + a `composer/tools/<corpus>_rag.py` in `rag_env._FACTORIES`), the
-DB role/schema in [`init-db.sql`](../composer/scripts/init-db.sql), and whatever container wiring
-populates it at `setup-db` time.
+corpus file it builds into the image beside the others (see `scripts/Dockerfile`'s `rag-builder`
+stage).
 
-**Untouched:** `foundry_ragbuild.py`, `ragbuild.py` (CVL), their wrappers, and `refresh_rag.sh`.
-No runtime code changes — the search tools, `rag_env.py`, and the DB API are the same.
+The CVL and Foundry builders (`ragbuild.py`, `foundry_ragbuild.py`) still produce their own corpora
+directly rather than through a manifest.
 
 ---
 
@@ -339,5 +339,5 @@ No runtime code changes — the search tools, `rag_env.py`, and the DB API are t
   schema is header-only, so v1 keeps provenance at the manifest level (logs only). Revisit with
   a schema change if retrieval ever needs to filter on it.
 - **One physical DB per corpus vs. one shared DB.** Orthogonal to this proposal — the
-  `KNOWLEDGE_BASES` registry expresses whatever the deployment already does (today: shared
-  `rag_db`, distinct roles; `extended_rag_db` separate). The format doesn't dictate topology.
+  `KNOWLEDGE_BASES` registry expresses whatever the deployment already does (today: one corpus
+  file per corpus, built into the image). The format doesn't dictate topology.

@@ -1,6 +1,6 @@
 from typing import TypedDict, Unpack
 from dataclasses import dataclass
-from composer.rag.db import PostgreSQLRAGDatabase
+from composer.rag.db import ComposerRAGDB
 from langchain_core.tools import BaseTool
 from langgraph.store.base import BaseStore
 from graphcore.graph import Builder
@@ -52,7 +52,7 @@ def build_rag_tools(
 
 
 def build_basic_rag_tools(
-    db: PostgreSQLRAGDatabase,
+    db: ComposerRAGDB,
 ) -> BaseRAGTools:
     return _BaseRAGTools(
         tuple(cvl_manual_tools(db)) + tuple(kb_tools())
@@ -64,7 +64,7 @@ class LLMInputs(TypedDict):
 
 
 class RAGInputs(LLMInputs):
-    db: PostgreSQLRAGDatabase
+    db: ComposerRAGDB
     store: BaseStore
     cvl_index_config: AgentIndexConfig
     recursion_limit: int

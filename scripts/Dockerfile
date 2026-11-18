@@ -35,7 +35,7 @@ WORKDIR /src
 RUN git clone "$FOUNDRY_REPO" . && git checkout "$FOUNDRY_SHA" && git rev-parse HEAD
 RUN cargo build --release --bin forge && /src/target/release/forge --version
 
-# ---- Stage 1: build the CVL documentation HTML for the RAG DB ----
+# ---- Stage 1: the documentation sources the RAG corpora are built from ----
 FROM --platform=linux/amd64 python:3.12-slim AS docs-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -44,23 +44,27 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-# Certora/Documentation is a public repo, so clone over HTTPS — no SSH/auth needed.
+# Certora/Documentation and Certora/foundry-book are public repos, so clone over HTTPS — no
+# SSH/auth needed.
 RUN git clone --depth 1 https://github.com/Certora/Documentation.git docs
+RUN git clone --depth 1 https://github.com/Certora/foundry-book.git foundry-book
 
 RUN python -m venv /venv \
  && /venv/bin/pip install --no-cache-dir -r /build/docs/requirements.txt
 
-# Only the CVL manual is needed for the base rag_db (see scripts/populate_rag.sh).
-# TODO: Include extended_rag for sanity analyzer
+# cvl -> the CVL corpus; cvl + prover + user-guide -> the extended corpus (sanity analyzer).
 RUN set -eux; \
     mkdir -p /out; \
-    target=/build/docs/docs/cvl; \
-    cp /build/docs/conf.py "$target/"; \
-    ( cd "$target" && /venv/bin/sphinx-build -M singlehtml . tmp ); \
-    cp "$target/tmp/singlehtml/index.html" /out/cvl.html
+    for doc in cvl prover user-guide; do \
+      target=/build/docs/docs/$doc; \
+      cp /build/docs/conf.py "$target/"; \
+      ( cd "$target" && /venv/bin/sphinx-build -M singlehtml . tmp ); \
+      cp "$target/tmp/singlehtml/index.html" "/out/$doc.html"; \
+    done; \
+    cp -r /build/foundry-book/src/pages/reference/cheatcodes /out/foundry-cheatcodes
 
-# ---- Stage 2: final runtime image ----
-FROM --platform=linux/amd64 python:3.12-slim AS final
+# ---- Stage 2: system tools and third-party Python deps, shared by the stages below ----
+FROM --platform=linux/amd64 python:3.12-slim AS deps
 
 ENV DEBIAN_FRONTEND=noninteractive \
     AUTOPROVE_HOME=/opt/autoprove \
@@ -140,34 +144,61 @@ RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --no-editable \
       --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
 
+# Pre-download the sentence-transformers embedding model: the corpus build below embeds with it,
+# and a run embeds its queries with it, offline. nomic-embed-text-v1.5 ships custom modeling code,
+# hence trust_remote_code. Then make the cache world-writable so the HF library can drop
+# `.no_exist` marker files at runtime.
+RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)" \
+ && chmod -R go+rwX $HF_HOME
+
+# ---- Stage 3: the RAG corpora, one SQLite file each ----
+# Only the builders' own sources are copied, so this stage (and its minutes of embedding) is
+# rebuilt when the docs or the corpus code change, not on every source change.
+FROM deps AS rag-builder
+WORKDIR /build/src
+COPY composer/__init__.py composer/
+COPY composer/rag/ composer/rag/
+COPY composer/scripts/__init__.py composer/scripts/ragbuild.py composer/scripts/foundry_ragbuild.py \
+     composer/scripts/foundry_process.py composer/scripts/text_processors.py composer/scripts/
+COPY --from=docs-builder /out/ /build/docs/
+ENV PYTHONPATH=/build/src
+# foundry_ragbuild gets every page in one invocation: a corpus file is rebuilt from scratch on
+# each run, so splitting the pages across runs would keep only the last batch.
+RUN set -eux; \
+    python -m composer.scripts.ragbuild --output /out/rag/cvl.sqlite /build/docs/cvl.html; \
+    python -m composer.scripts.ragbuild --output /out/rag/extended.sqlite \
+        /build/docs/cvl.html /build/docs/prover.html /build/docs/user-guide.html; \
+    python -m composer.scripts.foundry_process /build/docs/foundry-cheatcodes /build/foundry-html; \
+    bash -c 'shopt -s globstar nullglob; pages=(/build/foundry-html/**/*.html); \
+             (( ${#pages[@]} > 0 )) || { echo "no foundry cheatcode pages" >&2; exit 1; }; \
+             python -m composer.scripts.foundry_ragbuild --output /out/rag/foundry.sqlite "${pages[@]}"'; \
+    ls -la /out/rag
+
+# ---- Stage 4: final runtime image ----
+FROM deps AS final
+
 # Project layer: copy the rest of the source and install the project itself.
 COPY . ./
 RUN --mount=type=cache,id=uv-cache,target=/root/.cache/uv \
     uv sync --frozen --no-editable \
       --extra cpu --extra ml --extra "$CERTORA_CLI_PACKAGE" --group ragbuild
 
-# Pre-built CVL HTML — the entrypoint's setup-db reads this to populate rag_db.
-COPY --from=docs-builder /out/cvl.html $AUTOPROVE_HOME/prover-docs/cvl.html
+# The RAG corpora, opened by default from CERTORA_AI_COMPOSER_RAG_DIR.
+COPY --from=rag-builder /out/rag/ $AUTOPROVE_HOME/rag/
+ENV CERTORA_AI_COMPOSER_RAG_DIR=$AUTOPROVE_HOME/rag
 
 # The `run-confined` command-sandbox launcher is intentionally NOT baked in here
 # (not every AutoProver image needs it). Services that select the `launcher`
 # provider opt in via the scripts/docker-compose.sandbox.yml overlay, which
 # mounts the binary at $RUN_CONFINED_BIN at runtime — see docs/command-sandbox.md.
 
-# Pre-download the sentence-transformers embedding model so first runs are
-# offline-fast. nomic-embed-text-v1.5 ships custom modeling code, hence
-# trust_remote_code. Then make the cache world-writable so the HF library can
-# drop `.no_exist` marker files at runtime.
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('nomic-ai/nomic-embed-text-v1.5', trust_remote_code=True)" \
- && chmod -R go+rwX $HF_HOME
-
 # Trim build-only tooling now that wheels are installed.
 RUN apt-get purge -y build-essential libffi-dev curl gnupg \
  && apt-get autoremove -y \
  && rm -rf /var/lib/apt/lists/*
 
-# Database host/port assume the compose-managed postgres service; override
-# per-run if needed.
+# Database host/port (checkpoints, store, memory) assume the compose-managed postgres service;
+# override per-run if needed.
 ENV CERTORA_AI_COMPOSER_PGHOST=postgres \
     CERTORA_AI_COMPOSER_PGPORT=5432
 

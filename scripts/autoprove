@@ -2,8 +2,7 @@
 # scripts/autoprove — friendly host wrapper for the AutoProver docker pipeline.
 #
 # Hides docker-compose flags, HOST_UID/GID/WORK_DIR, container path translation,
-# and --cache-ns from the user. Idempotently builds the image, starts postgres,
-# and runs setup-db on first invocation per host.
+# and --cache-ns from the user. Idempotently builds the image and starts postgres.
 
 set -euo pipefail
 
@@ -12,7 +11,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 IMAGE=autoprover-local:latest
-SETUP_SENTINEL="${XDG_CACHE_HOME:-$HOME/.cache}/autoprove/setup-db.done"
 
 usage() {
   cat >&2 <<'EOF'
@@ -164,7 +162,8 @@ export HOST_UID HOST_GID HOST_WORK_DIR
 compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
 
 # ---------------------------------------------------------------------------
-# Idempotent setup: image, postgres, setup-db.
+# Idempotent setup: image, postgres. The RAG corpora are built into the image, and
+# compose's postgres applies its schema on first boot.
 # ---------------------------------------------------------------------------
 
 if (( REBUILD )) || ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -176,13 +175,6 @@ fi
 # otherwise it starts it and blocks until the healthcheck passes.
 echo "[autoprove] ensuring postgres is up ..." >&2
 compose up -d --wait postgres
-
-if [[ ! -f "$SETUP_SENTINEL" ]]; then
-  echo "[autoprove] running one-time setup-db ..." >&2
-  mkdir -p -- "$(dirname -- "$SETUP_SENTINEL")"
-  compose --profile autoprove run --rm autoprove setup-db
-  touch -- "$SETUP_SENTINEL"
-fi
 
 # ---------------------------------------------------------------------------
 # Go.

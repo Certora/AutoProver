@@ -24,8 +24,9 @@ import pathlib
 from bs4 import BeautifulSoup, Tag
 from bs4.element import NavigableString
 import spacy
+from composer.rag.base import ComposerRAGDB
 from composer.rag.db import (
-    get_rag_db, DEFAULT_CONNECTION, SANITY_DEFAULT_CONNECTION, CVLR_DEFAULT_CONNECTION,
+    CVL_CORPUS, CVLR_CORPUS, EXTENDED_CORPUS, RagLocation, parse_rag_location, rag_build_context,
 )
 from composer.rag.types import BlockChunk
 from composer.rag.text import get_code_refs
@@ -34,13 +35,12 @@ from composer.scripts.text_processors import (
     BlockBuilder, BuilderConfig, TextCollector, TextStreamer,
 )
 
-#: Corpora this builder can ingest into, by the name the populate_*.sh scripts pass. The
-#: connections come from composer.rag.db so they follow CERTORA_AI_COMPOSER_PGHOST/PGPORT --
-#: a DSN spelled out at a call site would send a containerised ingest to the wrong host.
-NAMED_CORPORA: dict[str, str] = {
-    "cvl": DEFAULT_CONNECTION,
-    "extended": SANITY_DEFAULT_CONNECTION,
-    "cvlr": CVLR_DEFAULT_CONNECTION,
+#: Corpora this builder can ingest into, by the name the populate_*.sh scripts pass. The locations
+#: come from composer.rag.db, the same ones the runtime opens by default.
+NAMED_CORPORA: dict[str, RagLocation] = {
+    "cvl": CVL_CORPUS,
+    "extended": EXTENDED_CORPUS,
+    "cvlr": CVLR_CORPUS,
 }
 
 logging.basicConfig(
@@ -289,21 +289,24 @@ async def main() -> None:
     target.add_argument('--corpus', choices=sorted(NAMED_CORPORA), default='cvl',
         help='Named corpus to ingest into (default: cvl).')
     target.add_argument('--output', '-o',
-        help='Ingest into this ChromaDB directory or PostgreSQL connection string '
-             'instead of a named corpus.')
+        help='Ingest into this PostgreSQL connection URI or corpus file path instead of a '
+             'named corpus. A corpus file is rebuilt from scratch.')
     args = parser.parse_args()
 
-    file_entries = [{"file": (path:=pathlib.Path(f)), "section": path.stem} for f in args.files]
+    output = parse_rag_location(args.output) if args.output else NAMED_CORPORA[args.corpus]
+    async with rag_build_context(output, get_model()) as db:
+        await _ingest_html(db, [pathlib.Path(f) for f in args.files])
 
-    output = args.output or NAMED_CORPORA[args.corpus]
-    db = await get_rag_db(output, get_model())
+    logger.info(f"RAG database created at {output}")
 
+
+async def _ingest_html(db: ComposerRAGDB, files: list[pathlib.Path]) -> None:
     buffer: list[BlockChunk] = []
 
-    for entry in file_entries:
-        section_label_ctx.set(entry["section"])
+    for path in files:
+        section_label_ctx.set(path.stem)
 
-        with open(entry["file"], "r") as f:
+        with open(path, "r") as f:
             manual = f.read()
 
         m = BeautifulSoup(manual, "html.parser")
@@ -354,8 +357,6 @@ async def main() -> None:
 
     if buffer:
         await db.add_chunks_batch(buffer)
-
-    logger.info(f"RAG database created at {output}")
 
 if __name__ == "__main__":
     import asyncio

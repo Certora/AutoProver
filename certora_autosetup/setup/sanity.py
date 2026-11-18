@@ -18,7 +18,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from sanity_analyzer.analysis import SANITY_DEFAULT_CONNECTION, SanityAnalysisResult, analyze as _sanity_analyze  # type: ignore[import-not-found]
+from composer.rag.db import EXTENDED_CORPUS
+from sanity_analyzer.analysis import SanityAnalysisResult, analyze as _sanity_analyze  # type: ignore[import-not-found]
 from prover_output_utility import JobReport  # type: ignore[import-untyped]
 from prover_output_utility.models import CheckResult, JobStatus as ProverJobStatus, NodeStatus  # type: ignore[import-untyped]
 
@@ -48,7 +49,7 @@ class _SanityArgs:
     checkpoint_id: Optional[str] = None
     thinking_tokens: int = 2048
     tokens: int = 4096
-    rag_db: str = field(default_factory=lambda: SANITY_DEFAULT_CONNECTION)
+    rag_db: str = field(default_factory=lambda: str(EXTENDED_CORPUS.path))
     model: str = "claude-sonnet-5"
     memory_tool: bool = True
     interleaved_thinking: bool = True

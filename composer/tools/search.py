@@ -45,7 +45,7 @@ def _cvl_manual_search_factory(
         tool_call_id: Annotated[str, InjectedToolCallId],
         similarity_cutoff: float = 0.5,
         max_results: int = 10,
-        manual_section: list[str] = []
+        manual_section: list[str] | None = None
     ) -> str:
         """Search the CVL manual database for relevant documentation."""
         rag_db = db_provider()

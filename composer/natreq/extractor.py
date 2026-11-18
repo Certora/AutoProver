@@ -18,7 +18,7 @@ from langgraph.types import interrupt
 from composer.audit.store import ResumeArtifact
 from composer.input.files import Document, TextDocument
 from composer.input.types import RAGDBOptions
-from composer.rag.db import ComposerRAGDB, rag_context
+from composer.rag.db import ComposerRAGDB, parse_rag_location, rag_context
 from composer.rag.models import get_model
 from composer.workflow.services import checkpointer_context
 from composer.tools.search import cvl_manual_tools
@@ -132,7 +132,7 @@ async def get_requirements(
     ]
     async with (
         checkpointer_context() as check,
-        rag_context(options.rag_db, get_model()) as db
+        rag_context(parse_rag_location(options.rag_db), get_model()) as db
     ):
         built : CompiledStateGraph[ExtractionState, ExtractionContext, ExtractionInput, Any] = build_async_workflow(
             state_class=ExtractionState,

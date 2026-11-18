@@ -74,11 +74,11 @@ def build_rag_tools(rag_db: str) -> "tuple[BaseTool, ...]":
     for why the two are treated differently."""
     validate_rag_db(rag_db)
     try:
-        from composer.rag.db import KNOWLEDGE_BASES, PostgreSQLRAGDatabase
+        from composer.rag.db import KNOWLEDGE_BASES, open_rag_db
         from composer.rag.models import get_model
 
-        # Lazy pool — opens on first search; the DB must already be populated.
-        db = PostgreSQLRAGDatabase(KNOWLEDGE_BASES[rag_db], get_model())
+        # Lazy — connects on first search; the corpus must already be populated.
+        db = open_rag_db(KNOWLEDGE_BASES[rag_db], get_model())
         return tuple(_FACTORIES[rag_db](db))
     except Exception as e:  # noqa: BLE001 — RAG is optional; the cheat-sheet suffices
         _log.warning("RAG %r unavailable (%s); using the static cheat-sheet only", rag_db, e)

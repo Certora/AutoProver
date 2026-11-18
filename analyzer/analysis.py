@@ -275,8 +275,8 @@ async def _analyze_core(
         #import here to lazily load sentencetransformers
         from composer.tools.search import cvl_manual_search
         from composer.rag.models import get_model
-        from composer.rag.db import get_rag_db
-        tools.append(cvl_manual_search(await get_rag_db(args.rag_db, get_model())))
+        from composer.rag.db import get_rag_db, parse_rag_location
+        tools.append(cvl_manual_search(await get_rag_db(parse_rag_location(args.rag_db), get_model())))
 
     llm = create_llm(args)
 

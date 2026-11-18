@@ -29,7 +29,7 @@ from collections import defaultdict
 
 import spacy
 
-from composer.rag.db import KNOWLEDGE_BASES, get_rag_db
+from composer.rag.db import KNOWLEDGE_BASES, RagLocation, parse_rag_location, rag_build_context
 from composer.rag.import_format import (
     EmbeddedBlockKind,
     EmbeddedGroup,
@@ -88,17 +88,17 @@ def _load_manifest(path: pathlib.Path) -> RagManifest:
     return manifest
 
 
-def _resolve_output(manifest: RagManifest, override: str | None) -> str:
+def _resolve_output(manifest: RagManifest, override: str | None) -> RagLocation:
     if override:
-        return override
-    conn = KNOWLEDGE_BASES.get(manifest.knowledge_base)
-    if conn is None:
+        return parse_rag_location(override)
+    location = KNOWLEDGE_BASES.get(manifest.knowledge_base)
+    if location is None:
         raise SystemExit(
             f"no connection registered for knowledge_base {manifest.knowledge_base!r} "
             f"(known: {sorted(KNOWLEDGE_BASES)}). Add it to composer.rag.db.KNOWLEDGE_BASES "
-            f"or pass --output <conn>."
+            f"or pass --output <location>."
         )
-    return conn
+    return location
 
 
 def _print_manifest(manifest: RagManifest) -> None:
@@ -152,18 +152,18 @@ async def _async_main(args: argparse.Namespace) -> None:
     model = get_model()
 
     # Group by resolved target so manifests sharing a DB share one connection + one part counter.
-    groups: dict[str, list[RagManifest]] = defaultdict(list)
+    groups: dict[RagLocation, list[RagManifest]] = defaultdict(list)
     for m in manifests:
         groups[_resolve_output(m, args.output)].append(m)
 
     for output, group in groups.items():
-        db = await get_rag_db(output, model)
         seen_paths: dict[tuple[str, ...], int] = {}
         n_docs = n_manual = 0
-        for m in group:
-            d, mn = await _ingest(db, m, config, seen_paths)
-            n_docs += d
-            n_manual += mn
+        async with rag_build_context(output, model) as db:
+            for m in group:
+                d, mn = await _ingest(db, m, config, seen_paths)
+                n_docs += d
+                n_manual += mn
         logger.info(
             "ingested %d embedded chunk(s) + %d manual section(s) from %d manifest(s) into %s",
             n_docs, n_manual, len(group), output,
@@ -176,7 +176,8 @@ def main() -> None:
     parser.add_argument("--max-length", type=int, default=2000, help="Soft cap on embedded-chunk length (chars).")
     parser.add_argument(
         "--output", "-o", default=None,
-        help="RAG DB connection string. Overrides the manifest's knowledge_base -> connection lookup.",
+        help="PostgreSQL connection URI or corpus file path. Overrides the manifest's "
+             "knowledge_base -> location lookup. A corpus file is rebuilt from scratch.",
     )
     parser.add_argument("--print", action="store_true", help="Dry-run: print both products, no DB writes.")
     asyncio.run(_async_main(parser.parse_args()))
