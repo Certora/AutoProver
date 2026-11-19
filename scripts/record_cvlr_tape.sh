@@ -7,7 +7,13 @@
 # scenario, the flags and the model settings all live in composer/testing/cvlr_tape.py, so this
 # script chooses nothing about the run and cannot drift from what the replay test drives.
 #
-#   scripts/record_cvlr_tape.sh
+#   scripts/record_cvlr_tape.sh [--cache-ns NAME] [--workdir DIR]
+#
+# Arguments are forwarded to composer.testing.record_cvlr_tape. Without --workdir the scenario
+# is staged in a fresh temporary directory, and a second invocation cannot resume: the cache key
+# includes the project path. --cache-ns NAME --workdir DIR reuses that directory. A resumed
+# invocation records only the calls it makes and overwrites the tape, so set COMPOSER_RECORD_OUT
+# to another file for it. SIGTERM skips the dump.
 #
 # Then curate the draft (the `generate-tape` skill's step 3) and verify with:
 #

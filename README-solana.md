@@ -11,14 +11,19 @@ The path picks the crate the harness is written into (`--package` overrides it).
 ## What the target project must look like
 
 - **A cargo workspace.** The first argument is the directory holding the root `Cargo.toml`. A single-crate project is a workspace of one.
-- **A supported Solana platform generation.** Each generation has one CVLR line (`composer/spec/cvlr/reference.py`):
+- **A supported Solana platform generation.** Each generation has one CVLR line, pinned exactly in `composer/spec/cvlr/reference.py`. The core is `cvlr` 0.6.2 on every row below. The chain crates of one line are released together:
 
-  | Platform generation | `cvlr` | `cvlr-solana`, `cvlr-spl-token`, `cvlr-solana-stake` |
+  | Platform generation | `cvlr-solana` | Models |
   |---|---|---|
-  | `solana-*` 3.x crates | 0.6.1 | 0.6.0 |
-  | `solana-program` 2.x | 0.6.1 | 0.5.1 |
+  | `solana-*` 3.x | 0.6.1 | `cvlr-spl-token` and `cvlr-solana-stake`, both 0.6.1 |
+  | `solana-program` 2.x (2.2 and later) | 0.5.2 | the same two crates at 0.5.2 |
+  | `solana-program` 1.18 | 0.4.7 | none. Token helpers live in `cvlr-solana`. There is no stake model. |
 
-  The pipeline reads the generation from the resolved dependency graph and adds the matching CVLR crates itself. A project on `solana-program` 1.x is refused, and so is a project that already depends on a different CVLR line.
+  Those three chain-crate pins read an account's flags without a branch per flag. An older crate on the same line adds eight paths per nondeterministic account, and a handler-level rule times out.
+
+  The pipeline reads the generation from the crates the verified package itself links, newest match first, and adds that line. Any other `solana-program` 1.x line, including 1.17, is refused: 1.17 is a different `AccountInfo`, and its `solana-frozen-abi` pin does not build with the platform tools this pipeline uses. A project that already depends on a different CVLR line is refused too.
+
+  On 1.18 the published manual is written for 0.5 and later, so it names `cvlr_spl_token` and `cvlr_solana_stake`, which this line does not have. A token CPI reaches `invoke_signed_unchecked`, which the prover treats as opaque. When a property needs the transfer itself, the stand-in for the program's token call invokes the matching summary in `cvlr_solana::token`: `spl_token_transfer`, `spl_token_2022_transfer`, `spl_mint_to`, `spl_burn`, or `spl_close_account`.
 - **Or a program written on [jiminy](https://github.com/igneous-labs/jiminy).** A program whose package depends on `jiminy-entrypoint` (0.1.x) is on the jiminy generation, whatever SDK crates its dependencies also link. It gets the `cvlr` core and no chain crate: `cvlr-solana`'s helpers build the SDK's `AccountInfo`, which a jiminy handler cannot take. The scaffold writes `src/certora/jiminy.rs` in their place, with `cvlr_jiminy_abr`, `cvlr_jiminy_account` and `cvlr_jiminy_accounts`, compiled against the program's own jiminy through `jiminy-entrypoint`'s re-export. The package must declare `jiminy-entrypoint` itself. No token or stake model applies, and a CPI through `jiminy_cpi` is not modelled.
 - **Or a program written on [Pinocchio](https://github.com/anza-xyz/pinocchio), 0.8 through 0.12.** A package that depends on `pinocchio` is on one of its four generations: 0.11 and 0.12 (`AccountView`, with the original data length recorded in the account header under `account-resize`), 0.10 (`AccountView` with a resize delta), 0.9 (`pinocchio::account_info::AccountInfo` with a resize delta), and 0.8 (the same `AccountInfo` with its borrow state inverted and the original data length in the header). Each gets the `cvlr` core and a `src/certora/pinocchio.rs` with `cvlr_pinocchio_account` and `cvlr_pinocchio_accounts`, written for its generation's account header and compiled against the program's own Pinocchio. The package must declare `pinocchio` itself. Most Pinocchio programs are `no_std` and install their own panic handler, which collides with the one `std` brings through cvlr, so the scaffold gates `no_std` and the handler off under the `certora` feature. No token or stake model applies, and a CPI through `pinocchio::cpi` (`pinocchio-token`, `pinocchio-system`) is not modelled.
 - **Anchor, if used, at a version Certora's fork covers.** The Prover cannot analyze crates.io `anchor-lang`: every handler fails with [3006]. The pipeline redirects `anchor-lang` and `anchor-spl` to the matching `certora-v<version>` branch of [Certora/anchor](https://github.com/Certora/anchor) through `[patch.crates-io]`. Covered versions are every stable release from 0.26.0 through 1.2.1 (`ANCHOR_FORK` in `composer/spec/cvlr/forks.py`). Any other version stops the run with a message naming those versions. The `fixed` crate is handled the same way, at 1.23.1 only.
@@ -41,8 +46,9 @@ $COMPOSE run --rm autoprove-solana console-solana /work/<proj> programs/<pkg>/sr
 
 - **All three compose files, always.** Every cargo build of the target project runs inside the `run-confined` sandbox (Landlock and seccomp; see [docs/command-sandbox.md](docs/command-sandbox.md)), and the sandbox overlay provides the launcher. Without it the project does not load.
 - **Run `setup-db` from `autoprove-solana`, not the base image.** It fills every corpus, the EVM ones included. Only the Solana image carries the `cvlr_api_kb` manifest; a `setup-db` from the base image skips that corpus.
-- **`HOST_WORK_DIR`** is mounted at `/work`, and project paths are relative to it. It defaults to the current directory.
-- **Credentials.** `~/.certora` is mounted into the container, so run `certora-cloud login` on the host first (see [README.md](README.md#certora-prover)).
+- **`HOST_WORK_DIR`** is mounted at `/work`, and project paths are relative to it. It defaults to the current directory. Point it at the project under test. If it is this repository, the repo's `rust-toolchain.toml` is what cargo sees inside the container.
+- **Host port 5432 belongs to the development database** (`docker compose -p composer_db -f scripts/docker-compose.yml`). `scripts/verify-solana-image.sh` starts its own compose project without publishing that port. Reusing that port override on the development project leaves nothing listening on 5432, and `tests/test_cvlr_tape.py` then skips as "corpus unreachable" while the data volume is still full. Recreate only that postgres, from `scripts/`, with `docker compose -p composer_db -f docker-compose.yml up -d --no-deps postgres`.
+- **Credentials.** `~/.certora` is mounted into the container, so log in on the host first (see [README.md](README.md#certora-prover)).
 - `scripts/autoprove`, the EVM quickstart wrapper, does not run the Solana image.
 
 A cold build of both images takes about 35 minutes.
@@ -87,7 +93,13 @@ SOLANA_EXAMPLES_REPO=~/src/SolanaExamples \
 env -u CERTORA uv run --no-sync pytest tests/test_cvlr_tape.py -m expensive -q -s
 ```
 
-Each submits real Prover jobs and takes several minutes. `env -u CERTORA` matters: with `$CERTORA` set, submissions go to a local Prover build, and the end-to-end test skips. The end-to-end test also skips, naming what is missing, when there is no SolanaExamples checkout (`$SOLANA_EXAMPLES_REPO`, by default `~/src/SolanaExamples`), no cargo, no platform tools or no sandbox. Re-record the tape with `scripts/record_cvlr_tape.sh` when the pipeline's shape changes on purpose.
+Each submits real Prover jobs and takes several minutes. `env -u CERTORA` matters: with `$CERTORA` set, `certora_cli` targets a local Prover build and refuses the cloud submission before upload, in a message that names neither the variable nor the tool. The record script checks for this and stops. The end-to-end test also skips, naming what is missing, when there is no SolanaExamples checkout (`$SOLANA_EXAMPLES_REPO`, by default `~/src/SolanaExamples`), no cargo, no platform tools or no sandbox. A skip there is a missing prerequisite. `scripts/verify-solana-image.sh` treats a skipped in-container end-to-end test as a failure for that reason.
+
+Re-record the tape with `scripts/record_cvlr_tape.sh` when the pipeline's shape changes on purpose. The script checks the prerequisites that otherwise fail after the run has started: `$CERTORA`, `CERTORAKEY`, the platform tools, postgres, both CVLR corpora, and a Certora login that can still refresh. Extra arguments are passed through. `--cache-ns NAME --workdir DIR` stages the scenario in a stable directory so a second invocation resumes. The cache key includes the project path, so the default fresh temporary directory is never a cache hit. A resumed invocation records only the calls it makes and writes them over the tape, so point `COMPOSER_RECORD_OUT` at another file for that invocation.
+
+## Dev cloud
+
+A dev-cloud Solana job runs the AutoProver commit that AIAutoProver's `feature/solana` pins, published on push as `autoprover-solana:latest-solana`. It does not run this checkout, and it does not follow `feature/solana` here until that pin moves. Staging and production use a separate image tag built from AIAutoProver's master. `scripts/verify-solana-image.sh` is the local check before a pin bump. The header of that script says what it checks.
 
 ## Known limitations
 
