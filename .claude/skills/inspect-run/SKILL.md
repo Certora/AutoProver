@@ -99,4 +99,12 @@ If the answer involves a long quote (e.g. a multi-paragraph tool-result), includ
 - **`ModuleNotFoundError: composer`** (or similar import error): you used the wrong Python. Ask the user which venv / Python interpreter they use for this repo and re-invoke with that one.
 - **`connection refused` / DB errors**: the Postgres services aren't running. Tell the user — they need to start the composer DB stack before the script can fetch messages.
 - **Empty message list / thread not found**: the run may have died before its first checkpoint, or the thread_id was mistyped. Re-run `summary` to confirm available threads.
+- **The run was an expensive pytest, and pytest has already exited.** That test's Postgres is a testcontainer, deleted when the process ends. The console log has phase lines and the give-up reason, not the tool result the model saw. Dump the checkpoint database while the container is still up:
+
+  ```bash
+  docker ps --format '{{.Names}} {{.Ports}}'
+  docker exec <name> pg_dump -U langgraph_checkpoint_user -d langgraph_checkpoint_db -Fc > ckpt.dump
+  ```
+
+  Restore into a scratch `pgvector/pgvector:pg16` on a spare port. Create role `langgraph_checkpoint_user` / password `langgraph_checkpoint_password` and database `langgraph_checkpoint_db` (those names are `_DATABASE_CONFIGS` in `composer/workflow/services.py`), then `pg_restore --no-owner`. Point this script at the scratch port with `CERTORA_AI_COMPOSER_PGHOST` and `CERTORA_AI_COMPOSER_PGPORT`. Do not restore into the development `composer_db` container: the database name collides with real run history. `runs` also needs the run-index database. To read one thread, take a `thread_id` from `select thread_id from checkpoints` and fetch that thread's messages.
 - **`No threads found for run_id …` / empty `runs` output**: the run_id may be wrong, or it's registered under a different user namespace — try `--uid`. `runs` reads the same index, so an empty `runs` list means this DB has no run-index records (older runs, or a fresh/different database).

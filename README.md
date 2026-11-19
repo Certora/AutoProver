@@ -62,6 +62,14 @@ of failing, and the CI pyright job runs this way.
 
 **Cloud mode (the default):** One organization API key in `CERTORAKEY` submits the jobs and fetches their results. Create it on the organization's **API** page with **Use Certora Prover** ticked.
 
+Fetching a finished job's sources also uses the token in `~/.certora/credentials.json`, which expires. Submission still succeeds on `CERTORAKEY`. The fetch then falls back to an interactive browser login, waits 300 seconds, and fails with `CertoraLoginRefreshError`. There is no `certora-cli` binary and no `certoraRun --login` flag. Refresh the file in a session that can open a browser:
+
+```bash
+uv run --no-sync python -c "from certora_login.cli import main; main()" --force-file --force-refresh
+```
+
+`--force-file` writes `credentials.json`. `--force-refresh` deletes the stale token first; copy the file aside if you may want it back.
+
 **Local mode:** You need a full local Prover build from https://github.com/Certora/CertoraProver. From the Prover repo root, run `./gradlew copy-assets` and set `CERTORA` to point to `CertoraProver/target`. (N.B. Local mode is not yet wired through the `scripts/autoprove` Docker wrapper.)
 
 ## (One Time) Database Setup
