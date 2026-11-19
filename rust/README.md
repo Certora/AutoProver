@@ -110,10 +110,6 @@ uv run pytest tests/test_rustapp.py    # `uv sync` already built the echoprover 
 
 ## Notes
 
-* A pytest failure of the form `Field required` or `missing field '…'` inside a callout,
-  after an edit to the FFI types, is the installed wheel. `cargo test` does not refresh
-  it, and each worktree has its own `.venv`. Re-run the full `uv sync` from the
-  repository [CLAUDE.md](../CLAUDE.md) in the worktree you are about to test.
 * `Backend` is `Send + Sync + 'static` (one instance per wheel, built once in
   `export_app!`); holding no per-call state satisfies this without effort.
 * `compile`/`validate` author their own command line but never their own

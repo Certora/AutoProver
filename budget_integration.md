@@ -6,13 +6,11 @@ trips, and what your side needs to handle: the new report fields, the on-disk
 artifacts, and the operational caveats of the metering.
 
 A *run budget* is a USD ceiling on LLM spend, enforced inside the pipeline while it
-runs. `--time-budget SECONDS` is a second ceiling, on wall-clock time, with the same
-80% wrap-up. When spend or time approaches a limit, in-flight agents are told to wrap
-up and publish their best partial result; when the limit is exceeded, they are
-terminated cooperatively. A component whose formalization was cut short this way is
-**curtailed**: it is not a delivery, its outputs are quarantined on disk, and it is
-reported in a dedicated appendix of `report.json` rather than in the main property/rule
-tables.
+runs. When spend approaches a limit, in-flight agents are told to wrap up and publish
+their best partial result; when spend exceeds the limit, they are terminated
+cooperatively. A component whose formalization was cut short this way is **curtailed**:
+it is not a delivery, its outputs are quarantined on disk, and it is reported in a
+dedicated appendix of `report.json` rather than in the main property/rule tables.
 
 ## 1. The budget file and the `--budget` / `--budget-total` flags
 
@@ -211,18 +209,9 @@ published)`.
   must tolerate curtailed components with `artifact: null` even though the budget
   "asked nicely" first.
 - **A model missing from the pricing table accrues $0.** The meter prices each call
-  via `composer/llm/pricing.py`. A budgeted run is refused at startup when a model it
-  names has no price (`reject_unpriced_budget` in `composer/pipeline/cli.py`). A call
-  that still arrives unpriced spends nothing, and the budget never trips on it. Keep
-  the pricing table in sync with the model roster, and read the rates from that file
-  when estimating a live run. The logged `in=` figure is total input, cached tokens
-  included; fresh input is `in - cache_read - cache_write`.
-- **A console `BUDGET:` line is either ceiling.** Curtailment from the dollar pool and
-  from `--time-budget` prints the same `BUDGET: formalization cut short` summary. The
-  stored detail says which: `Time budget exhausted` or `Token cost budget exhausted`.
-  A run that ends before writing its own report records the same choice as
-  `run_failure.budget`, `time` or `token`. The 80% warning is a message injected into
-  the agent, not a log line, so an empty `grep budget` on the log shows nothing.
+  via `composer/llm/pricing.py`; an unpriced model spends invisibly and the budget
+  never trips on it. Silent in production — keep the pricing table in sync with the
+  model roster.
 - **Warm caches spend ~$0.** Components served from the generation cache skip
   authoring entirely, so a budget calibrated for a cold run will never trip on a
   re-run against the same cache namespace. Conversely (per §3) curtailed work is
