@@ -25,7 +25,7 @@ from graphcore.tools.schemas import (
 from composer.prover.conf import dump_conf
 from composer.spec.cvlr.conf import OptimisticLoop, OptimisticLoopOff, SettingsEdit, tunable_conf
 from composer.spec.cvlr.state import CvlrGenerationState
-from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
+from composer.spec.cvlr.tuning import InvalidSummaryType, SummaryDirective, TuningFiles
 from composer.spec.types import CheckName
 from composer.ui.tool_display import tool_display
 
@@ -40,6 +40,9 @@ class SummarizeForProver(
 
     The stand-in returns an unconstrained value and writes only the locations
     ``returns`` names. Every other store the real function makes is dropped.
+    It replaces every call the pattern matches, including calls to the
+    program's own functions, which the prover otherwise analyzes through
+    their bodies.
 
     The directive applies from the next build. Adding one invalidates the
     prover stamp. Re-run ``verify_rules``.
@@ -55,13 +58,14 @@ class SummarizeForProver(
         "properties in this batch. This is written into the project's tuning file and carried into "
         "the report — it is the only account a reader gets of what was assumed."
     )
-    returns: str | None = Field(
-        default=None,
+    returns: str = Field(
         description="What the summarized function returns, as `<location>:<kind>` — e.g. "
-        "`(*i32)(r1+0):num`. A location is `r0` (the return register) or memory at an offset from "
-        "a register, such as `(*i64)(r1+8)` for an out-pointer return. A kind is `num`, "
-        "`ptr_heap` or `ptr_external`. Give only that text; the `#[type(` and `)]` around it are "
-        "added for you. Omit to leave the return unconstrained.",
+        "`r0:num` for a scalar or `Result` returned in the register, `(*i32)(r1+0):num` for one "
+        "written through an out-pointer. A location is `r0` (the return register) or memory at an "
+        "offset from a register, such as `(*i64)(r1+8)`. A kind is `num`, `ptr_heap` or "
+        "`ptr_external`. Give only that text; the `#[type(` and `)]` around it are added for you. "
+        "The value at that location stays unconstrained; the type tells the pointer analysis "
+        "what it is.",
     )
 
     @override
@@ -81,9 +85,12 @@ class SummarizeForProver(
                 f"This project has no {', '.join(absent)}, so the prover is not reading any tuning "
                 "file and a summary would have no effect. Report this rather than working around it."
             )
-        directive = SummaryDirective(
-            pattern=self.symbol_pattern, why=self.why, returns=self.returns
-        )
+        try:
+            directive = SummaryDirective(
+                pattern=self.symbol_pattern, why=self.why, types=(self.returns,)
+            )
+        except InvalidSummaryType as exc:
+            return str(exc)
         if any(d.pattern == directive.pattern for d in self.state["summaries"]):
             return f"{directive.pattern} is already summarized."
         # Record only this directive. The state reducer merges, and the build

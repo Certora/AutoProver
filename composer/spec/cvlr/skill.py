@@ -85,7 +85,13 @@ from composer.spec.cvlr.prover import (
     write_submission,
 )
 from composer.spec.cvlr.scaffold import ENVS_DIR, HARNESS_DIR, SPECS_DIR, declare_unit_features
-from composer.spec.cvlr.tuning import SUMMARIES, extend_composite, layer_patterns
+from composer.spec.cvlr.tuning import (
+    SUMMARIES,
+    LayerRejected,
+    extend_composite,
+    parse_layer,
+    render_layer,
+)
 from composer.spec.cvlr.vacuity import CoreFinding, core_finding
 from composer.spec.cvlr.verify import failure_symptoms, inert_summaries_note, symptoms
 from composer.spec.source.report_prover import fetch_unsat_cores
@@ -105,9 +111,9 @@ _CHAIN = "solana"
 #: job does not check them again.
 INVARIANT_RULES = "invariant_rules"
 
-#: Where a component's points-to summaries go, one file per module, in the format of
-#: :class:`~composer.spec.cvlr.tuning.SummaryDirective`. Composed into the file the component's
-#: conf names on every prove.
+#: Where a component's points-to summaries go, one file per module, in the format
+#: :func:`~composer.spec.cvlr.tuning.parse_layer` reads. Composed into the file the component's
+#: conf names on every prove, with every directive forced.
 SUMMARY_LAYERS_DIR = HARNESS_DIR / "summaries"
 
 
@@ -367,7 +373,15 @@ class NoRules:
     reason: str
 
 
-type ProveOutcome = JobStarted | BuildRejected | NoRules | SubmissionFailed
+@dataclass(frozen=True)
+class SummariesRejected:
+    """The component's summaries layer has a line the Prover would refuse, so nothing was built."""
+
+    path: Path
+    rejected: LayerRejected
+
+
+type ProveOutcome = JobStarted | BuildRejected | NoRules | SubmissionFailed | SummariesRejected
 
 
 async def prove(
@@ -390,10 +404,15 @@ async def prove(
     workspace_root = located.workspace_root
     package_root = located.package_root
     layer_path = package_root / SUMMARY_LAYERS_DIR / f"{module.module}.txt"
-    layer = layer_path.read_text() if layer_path.is_file() else ""
+    try:
+        directives = parse_layer(layer_path.read_text()) if layer_path.is_file() else ()
+    except LayerRejected as rejected:
+        return SummariesRejected(layer_path, rejected)
     envs = package_root / ENVS_DIR
     composite = envs / SUMMARIES.unit_composite(module.module)
-    composite.write_text(extend_composite((envs / SUMMARIES.composite).read_text(), layer))
+    composite.write_text(
+        extend_composite((envs / SUMMARIES.composite).read_text(), render_layer(directives))
+    )
 
     session = await sbf_session(workspace_root, sandbox=sandbox)
     submission = Submission(
@@ -437,9 +456,9 @@ async def prove(
     return JobStarted(
         link=started.link,
         rules=rules,
-        summaries=layer_path if layer else None,
+        summaries=layer_path if directives else None,
         inert_summaries=await inert_summaries_note(
-            layer_patterns(layer), build.verdict.manifest.artifact
+            tuple(d.pattern for d in directives), build.verdict.manifest.artifact
         ),
     )
 

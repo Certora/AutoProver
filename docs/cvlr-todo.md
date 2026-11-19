@@ -324,6 +324,10 @@ branch but not all released, so the conf also names `prover_version: master`. Th
 development and wrong for a shipped product. Remove `prover_version` once those fixes are in a
 release, and rerun the CVLR gate against the released Prover first, since P8's two-hour timeouts are
 what the release has to have fixed.
+The release must also have [EVMVerifier#8837](https://github.com/Certora/EVMVerifier/pull/8837)
+(merge `f1120946`): every summary the author or the skill adds is written with `#[force]`, and a
+Prover without it refuses the whole summaries file (`CannotParseSummaryFile`), so every job with a
+summary fails.
 
 **~~U26. Ship blocker: the Solana reference set reads `cvlr-solana` from a git commit.~~** —
 **published (2026-10-27).** The reference set ([reference.py](../composer/spec/cvlr/reference.py))
@@ -1058,7 +1062,21 @@ function that *writes* state a rule asserts over, not only one whose result it r
     CPI *havocs* the caller's `Account<T>` is not reproduced either: a direct probe shows the
     deserialized copy untouched across an `invoke` (`upstream-defects.md` P6, now marked so). The
     handler form it was first seen in could not be measured, because the vault `deposit` path hits
-    [3308] in `#[error_code]` formatting that is inlined where no summary reaches. **Done:** the
+    [3308] in `#[error_code]` formatting that is inlined where no summary reaches. **Measured
+    2026-11-19, after EVMVerifier#8837** (four rules on the vault scenario: `apply_deposit`'s
+    overflow is an error, its success is reachable, the `deposit` handler credits the vault by
+    exactly `amount`, and its success is reachable). With no summary, all four end in [3308], a
+    store to address 1 under `#[error_code]` → `core::fmt::write` → `String::push_str`. A forced
+    summary of `^<T as alloc::string::SpecToString>::spec_to_string$` returning a `String`
+    (`ptr_heap` at 0, `num` at 8 and 16) makes all four VERIFIED; the same directive unforced leaves
+    all four at [3308], since nothing in the starting inlining layers keeps that symbol opaque. So
+    the handler form answers the question above: across the handler's `invoke` the deserialized
+    vault keeps what the handler wrote. A forced summary of the program's own
+    `From<VaultError> for anchor_lang::error::Error` (`num` at 0, `ptr_heap` at 8) also clears the
+    [3308] but is unsound: `Result<(), Error>` keeps `Ok` in a spare value of `Error`'s tag, the
+    stand-in's tag is unconstrained, and an overflow came back as `Ok` with the balance unchanged
+    (two false VIOLATEDs). K10 and the judge now forbid summarizing an enum-returning function.
+    **Done:** the
     author prompt, the judge, the munge editor and reviewer, and two docstrings now say what was
     measured. A CPI moves nothing, so a property about its effect fails, and one that needs it not to
     move anything passes unchecked. **Open:** a faithful model of a system transfer (debit the
@@ -1066,8 +1084,9 @@ function that *writes* state a rule asserts over, not only one whose result it r
     **Lead:** the [3308]'s failing store is to absolute address 1, the dangling pointer of an empty
     `Vec`. That fits a dropped write in an external `alloc` growth call (the `^<?alloc::.*$`
     blanket). If so, some [3308]s blamed on formatting are this effect.
-    **Lead:** a `SummaryDirective` renders at most one `#[type]` line, so an author cannot write a
-    sound summary for a function returning a multi-field value such as a `String`.
+    **Lead:** `summarize_for_prover` takes one `returns`, so an author cannot write a sound summary
+    for a function returning a multi-field value such as a `String`. A `SummaryDirective` holds
+    several types, and a skill-written layer can give several `#[type]` lines; the tool cannot.
   * **Anchor's `system_program::transfer`: never succeeded; fixed by inlining it.** Under the
     `^.*anchor_lang.*$` blanket it was external, and its success branch was statically unreachable
     (the satisfy rule FAILed by static analysis), so everything after `system_program::transfer(…)?`

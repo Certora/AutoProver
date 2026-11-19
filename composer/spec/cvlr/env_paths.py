@@ -31,9 +31,10 @@ _log = logging.getLogger(__name__)
 #: An inlining directive: the attribute and the pattern on one line.
 _INLINE_LINE = re.compile(r"^(?P<lead>#\[inline(?:\(never\))?\]\s+)(?P<pattern>\S.*?)\s*$")
 
-#: A points-to summary's type annotation. These *precede* the pattern they belong to, one per line,
-#: so a summary whose pattern fans out has to carry its whole annotation block along with it.
-_TYPE_LINE = re.compile(r"^#\[type\(.*\)\]\s*$")
+#: A points-to summary's annotation, ``#[type(...)]`` or ``#[force]``. These *precede* the pattern
+#: they belong to, one per line, so a summary whose pattern fans out has to carry its whole
+#: annotation block along with it.
+_ANNOTATION_LINE = re.compile(r"^#\[(type\(.*\)|\s*force\s*)\]\s*$")
 
 
 def _crate_of(path: str) -> str:
@@ -75,7 +76,7 @@ class PathDialect:
         annotations: list[str] = []
         for line in text.splitlines():
             stripped = line.strip()
-            if _TYPE_LINE.match(stripped):
+            if _ANNOTATION_LINE.match(stripped):
                 annotations.append(line)
                 continue
             inline = _INLINE_LINE.match(stripped)

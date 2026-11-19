@@ -257,6 +257,21 @@ def test_a_fanned_out_summary_carries_its_whole_annotation_block(split: PathDial
     )
 
 
+def test_a_fanned_out_forced_summary_stays_forced(split: PathDialect) -> None:
+    """``#[force]`` is part of the annotation block. Left behind, the second spelling's summary
+    would not apply wherever the Prover inlines the function."""
+    source = "#[force]\n#[type(r0:num)]\n^solana_program::program::invoke_signed_unchecked$\n"
+    assert split.render(source) == (
+        "#[force]\n"
+        "#[type(r0:num)]\n"
+        "^solana_program::program::invoke_signed_unchecked$\n"
+        "\n"
+        "#[force]\n"
+        "#[type(r0:num)]\n"
+        "^solana_cpi::invoke_signed_unchecked$\n"
+    )
+
+
 def test_rendering_twice_is_not_claimed_and_is_not_reachable(split: PathDialect) -> None:
     """Rendering rendered output is not the identity. The alias for a symbol that exists on both
     sides of the split lists the canonical spelling as one of its own replacements, so a second

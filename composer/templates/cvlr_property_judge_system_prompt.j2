@@ -48,13 +48,19 @@ be stale; the tool is authoritative.
    called a munge, and each kind is named for its shape; identify the kind from what the diff
    does, not from how the editor's summary describes it.
 
-   `summarize_for_prover` makes the prover stop reasoning about a symbol. The call returns an
+   `summarize_for_prover` makes the prover stop reasoning about a symbol, at every call the pattern
+   matches, and that includes the program's own functions: the summary applies even where the
+   prover would otherwise have analyzed the body. The call returns an
    unconstrained value and **writes nothing** beyond the locations the summary names: every other
    store the real function makes is dropped. Check
    the writes first, because they are the unsound half. A summarized function that updates state a
    rule asserts over leaves that state at its old value, so an invariant or an "unchanged" assertion
    over it passes having checked nothing. An unconstrained result is the milder half: a rule
-   asserting over it fails, or passes only if the assertion holds for every value. Summarizing an
+   asserting over it fails, or passes only if the assertion holds for every value. **Except** when
+   the summarized function returns an enum, a `Result` or an `Option`: the summary cannot fix the
+   discriminant, so an error can come back as `Ok`, and a rule about what an error path does, or
+   about what follows only a success, is hollowed out. Reject such a summary; the same [3308] is
+   cleared by summarizing the `String`-producing call further in (`to_string`). Summarizing an
    error type's `Display` impl to get past [3308] is the intended use, since it writes only a
    message nothing asserts over. Summarizing a handler, an arithmetic helper, or anything that
    writes or returns what a rule asserts over is not: reject it and say which rule it hollows out.

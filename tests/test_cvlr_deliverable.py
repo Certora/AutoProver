@@ -265,7 +265,7 @@ async def test_settling_writes_every_unit_with_a_harness_and_the_report_names_th
     snapshot(root)
     _scaffold(root)
     settings = TunableConf(loop_iter=4, optimistic_loop=OptimisticLoop(why="bounded by input"))
-    summary = SummaryDirective(pattern="^<p::E as Display>::fmt$", why="[3308]")
+    summary = SummaryDirective(pattern="^<p::E as Display>::fmt$", why="[3308]", types=("r0:num",))
     edited = GeneratedHarness(
         commentary="",
         harness="// vault rules\n",

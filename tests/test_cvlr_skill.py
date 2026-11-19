@@ -36,9 +36,11 @@ from composer.prover.conf import ExcludeRules, InheritRules, SelectRules
 from composer.spec.cvlr.tuning import (
     SUMMARIES,
     SummaryDirective,
+    FORCE,
+    LayerRejected,
     compose_env,
     extend_composite,
-    layer_patterns,
+    parse_layer,
     render_layer,
 )
 
@@ -216,14 +218,84 @@ def test_a_job_names_the_listed_rules_the_selection_matches(selection, chosen):
     assert selected_rules(selection, listed) == chosen
 
 
-def test_a_summaries_layer_s_patterns_are_its_uncommented_lines():
-    layer = render_layer(
-        (
-            SummaryDirective("^a::f$", "formatting only"),
-            SummaryDirective("^b::g$", "two lines\nof why", returns="(*i64)(r1+8):num"),
-        )
+def test_a_rendered_layer_parses_back_to_its_directives():
+    directives = (
+        SummaryDirective("^a::f$", "formatting only", types=("r0:num",)),
+        SummaryDirective(
+            "^b::g$", "two lines\nof why", types=("r0:num", "(*i64)(r1+8):ptr_heap(16)")
+        ),
     )
-    assert layer_patterns(layer) == ("^a::f$", "^b::g$")
+    assert parse_layer(render_layer(directives)) == directives
+
+
+@pytest.mark.skill_interface
+def test_a_hand_written_layer_reaches_the_prover_forced():
+    """The layer as the skill's reference text tells the agent to write it, with and without the
+    ``#[force]`` that ``prove`` adds."""
+    plain, forced = interface.SUMMARY_ANNOTATIONS
+    layer = (
+        "; [3308] in the error's Display impl\n"
+        f"{plain}r0:num)]\n"
+        "^<p::E as core::fmt::Display>::fmt$\n"
+        "\n"
+        "; already forced\n"
+        f"{forced}\n"
+        f"{plain}(*i64)(r1+0):ptr_heap)]\n"
+        "^p::grow$\n"
+    )
+    assert forced == FORCE
+    assert render_layer(parse_layer(layer)) == (
+        "; [3308] in the error's Display impl\n"
+        "#[force]\n"
+        "#[type(r0:num)]\n"
+        "^<p::E as core::fmt::Display>::fmt$\n"
+        "\n"
+        "; already forced\n"
+        "#[force]\n"
+        "#[type((*i64)(r1+0):ptr_heap)]\n"
+        "^p::grow$\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("layer", "line_number", "reason"),
+    [
+        ("; why\n^p::f$\n", 2, "no `#[type"),
+        ("#[force]\n^p::f$\n", 2, "no `#[type"),
+        ("#[type(r0:number)]\n^p::f$\n", 1, "not a `<location>:<kind>`"),
+        ("#[inline(never)] ^p::f$\n", 1, "not a summary annotation"),
+        ("#[type(r0:num)]\n^p::f$\n#[type(r0:num)]\n^p::f$\n", 4, "already summarized"),
+        ("#[type(r0:num)]\n^p::f$\n#[type(r0:num)]\n", 3, "no pattern after them"),
+    ],
+)
+def test_a_layer_the_prover_would_refuse_names_the_line(layer, line_number, reason):
+    with pytest.raises(LayerRejected) as rejected:
+        parse_layer(layer)
+    assert rejected.value.line_number == line_number
+    assert reason in rejected.value.reason
+
+
+@pytest.mark.skill_interface
+def test_prove_refuses_a_layer_the_prover_would_reject_before_building(
+    tmp_path: Path, monkeypatch, capsys
+):
+    module = HarnessModule("deposits")
+    layers = tmp_path / SUMMARY_LAYERS_DIR
+    layers.mkdir(parents=True)
+    (layers / "deposits.txt").write_text("; why\n^p::f$\n")
+
+    async def located(*args, **kwargs):
+        return skill._Located("p", tmp_path, Path("."), module)
+
+    async def no_session(*args, **kwargs):
+        raise AssertionError("built despite a rejected layer")
+
+    monkeypatch.setattr(skill, "_locate", located)
+    monkeypatch.setattr(skill, "sbf_session", no_session)
+    assert main(["prove", str(tmp_path), "--component", "deposits"]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("summaries rejected, nothing submitted:")
+    assert "deposits.txt, line 2:" in out and "^p::f$" in out
 
 
 @pytest.mark.skill_interface
@@ -258,7 +330,15 @@ def test_without_rustup_the_toolchain_check_stops_and_installs_nothing(monkeypat
 
 
 def test_a_units_summaries_compose_from_the_package_file_as_from_the_layers():
-    layer = "; formatting only\n^<vault::VaultError as core::fmt::Display>::fmt$\n"
+    layer = render_layer(
+        (
+            SummaryDirective(
+                "^<vault::VaultError as core::fmt::Display>::fmt$",
+                "formatting only",
+                types=("r0:num",),
+            ),
+        )
+    )
     package = compose_env(SUMMARIES)
     assert extend_composite(package, layer) == compose_env(SUMMARIES, unit_layer=layer)
     assert extend_composite(package, "") == package
@@ -440,7 +520,9 @@ def test_a_component_that_assumes_a_shared_invariant_is_checked_proved_and_waite
     (specs / "deposits.rs").write_text(_RULES)
     layers = tmp_path / SUMMARY_LAYERS_DIR
     layers.mkdir(parents=True)
-    (layers / "deposits.txt").write_text("; matches nothing\n^no_such_crate::nothing$\n")
+    (layers / "deposits.txt").write_text(
+        "; matches nothing\n#[type(r0:num)]\n^no_such_crate::nothing$\n"
+    )
     capsys.readouterr()
 
     assert main(["check", str(tmp_path), "--component", "deposits"]) == 0, capsys.readouterr()

@@ -304,7 +304,7 @@ async def test_a_timeout_is_not_excused_by_a_marking(gate: _Gate):
 
 
 async def test_unreadable_symbols_are_said_rather_than_left_as_a_match(gate: _Gate):
-    gate.state["summaries"] = [SummaryDirective(pattern="^foo$", why="formatting")]
+    gate.state["summaries"] = [SummaryDirective(pattern="^foo$", why="formatting", types=("r0:num",))]
 
     out = await gate.verify()
 
