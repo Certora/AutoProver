@@ -188,7 +188,7 @@ requires-dist = [
     { name = "certora-cli", marker = "extra == 'certora-cli'", specifier = ">=8.20.3" },
     { name = "certora-cli-beta", marker = "extra == 'certora-cli-beta'", specifier = ">=8.18.0" },
     { name = "certora-cli-beta-mirror", marker = "extra == 'certora-cli-beta-mirror'", specifier = ">=8.18.0" },
-    { name = "certora-prover-cli", specifier = ">=0.2.5" },
+    { name = "certora-prover-cli", specifier = ">=0.2.6" },
     { name = "chromadb", specifier = ">=0.4.0" },
     { name = "claude-agent-sdk", specifier = ">=0.1.0" },
     { name = "einops", marker = "extra == 'ml'" },
@@ -827,7 +827,7 @@ wheels = [
 
 [[package]]
 name = "certora-prover-cli"
-version = "0.2.5"
+version = "0.2.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "boto3" },
@@ -836,9 +836,9 @@ dependencies = [
     { name = "requests" },
     { name = "urllib3" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/2c/ec/f24e8739d69c9eeee9756ed5aee998c3bffd16bce179259d72fa7541a271/certora_prover_cli-0.2.5.tar.gz", hash = "sha256:e74d7c594f8c56616cb5f07cb41e38290f035d63762e9ed9c2c37c4dac24cfc8", size = 69913, upload-time = "2026-10-18T13:20:18.117Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/77/94ce48777e88e856b8d908f111537ba1820a504845d8d7f21f538b8af144/certora_prover_cli-0.2.6.tar.gz", hash = "sha256:a91aa993addf9761142b2da0be308635af9d70b1329d72d188b6d8f700176468", size = 77016, upload-time = "2026-11-19T11:40:44.113Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/0a/57e2b2bcf8dd8233dae22070b008e63cd7e2b5e2044f397339faff8e3122/certora_prover_cli-0.2.5-py3-none-any.whl", hash = "sha256:80c8182e6fe57572a765c009cc235ffe91a5953e72980fe72230aeb1ddcea3b1", size = 82201, upload-time = "2026-10-18T13:20:16.584Z" },
+    { url = "https://files.pythonhosted.org/packages/52/e4/40e745344b8a1e40af79b4cb28c7121f7afcfc1cdf5b5b3bb19fb6157dc9/certora_prover_cli-0.2.6-py3-none-any.whl", hash = "sha256:5dfc373f5e5b0bd613f01661accda31c6ea6fa7ab856d5a08b33f8049713c8f7", size = 91113, upload-time = "2026-11-19T11:40:42.698Z" },
 ]
 
 [[package]]
