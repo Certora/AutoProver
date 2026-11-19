@@ -8,6 +8,7 @@ from composer.prover.ptypes import AnalysisErrorKind, Uncoded, UnknownCode
 from composer.prover.results import prover_message
 
 _MESSAGES = {
+    AnalysisErrorKind.INDETERMINATE_STACK_ACCESS: "[3001] access to an indeterminate stack location",
     AnalysisErrorKind.UNKNOWN_PROVENANCE_DEREF: "[3003] dereference of a register with unknown provenance",
     AnalysisErrorKind.DYNAMIC_MEMCPY: "[3005] memcpy with dynamically sized length",
     AnalysisErrorKind.STACK_POINTER_STORE: "[3006] illegal store of a stack pointer",

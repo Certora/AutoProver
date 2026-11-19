@@ -970,3 +970,18 @@ def test_the_author_is_sent_to_k15_before_asking_for_a_narrower_type():
     assert "Decide it when the unit starts" in recipe
     assert "cvlr_satisfy!" in recipe
 
+
+
+def test_an_indeterminate_stack_access_pushes_k16():
+    """`[3001]` on 256-bit arithmetic is cleared by redirecting the integer type, and summaries do
+    not clear it. Without the push, an author spent submissions on summaries and an `inline_never`
+    edit and skipped every property that went through the type."""
+    from composer.kb.kb_context import ErrorSymptom, recipes_pushed_on
+    from composer.prover.ptypes import AnalysisErrorKind
+
+    pushed = recipes_pushed_on({ErrorSymptom(error=AnalysisErrorKind.INDETERMINATE_STACK_ACCESS)})
+    assert [r.id for r in pushed] == ["K16"]
+    recipe = _recipe("K16")
+    assert "redirect_module" in recipe
+    assert "exactly the same values with the same panics" in recipe
+    assert "Read K16" in _recipe("K10")

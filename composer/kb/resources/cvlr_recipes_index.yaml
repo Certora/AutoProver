@@ -136,6 +136,17 @@ recipes:
   file: recipes/cvlr-k11-state-the-analysis-cannot-size.md
   pushed_on:
   - error: 3005
+- id: K16
+  name: 'A stack array the analysis cannot index: `[3001]` in a wide-integer library'
+  triggers:
+  - A rule ends in `[3001]` access to an indeterminate stack location
+  - The `source:` of a pointer-analysis error is in the `uint` crate (`construct_uint!`) or another
+    `[u64; N]` bignum
+  - You are about to summarize, or ask for `inline_never` on, a caller of 256-bit arithmetic
+  channel: [EDIT, SKIP]
+  file: recipes/cvlr-k16-a-stack-array-the-analysis-cannot-index.md
+  pushed_on:
+  - error: 3001
 - id: K8
   name: 'A rule that times out: its shape first, then a bounded stand-in'
   triggers:

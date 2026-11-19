@@ -88,6 +88,13 @@ is a verdict on prose.
    Fourth, **does `why` name the dropped behaviour?** Not the goal — the behaviour. That sentence is
    the only thing that reaches the judge, and a redirect whose justification says "so the CPI does
    not blow up" tells nobody what the verdicts now exclude.
+   **A wide integer type (`U256` from `construct_uint!`, recipe K16) is the exception to all of
+   that: its stand-in must be exact.** There is nothing to drop and nothing to `nondet()`; read each
+   operator against the original for the same value, the same overflow panic and the same
+   truncation on shifts, and send back any loop or computed array index, which is the `[3001]`
+   the swap exists to remove. When the original is an inline `mod { construct_uint! { .. } }`, the
+   declaration is gated off with `#[cfg(not(feature = ..))]` and a file module of the same name is
+   declared beside it; that is the expected diff, not a touched declaration.
 5. **On a `swap_import`: is the stand-in the author's, and does the diff say what else it catches?**
    Three things. First, the aliased name must point at an item in the *harness* — if the diff also
    adds the stand-in, the editor wrote it and that is outside the charter. Second, the swap is

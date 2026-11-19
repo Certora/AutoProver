@@ -175,6 +175,16 @@ everything that module was responsible for. Two things follow, and they are your
 And if the obstruction is a single free function, `mock_fn` is the honest edit; reach for a whole
 module only when the code is a method or the module's items are entangled.
 
+**A wide integer type is the one module you reproduce exactly.** When the request is a `[3001]` in
+a `[u64; N]` bignum (the `uint` crate's `construct_uint!`, recipe K16), the stand-in defines the
+same types with the same public surface and computes **the same values, with the same panics**, as
+straight-line code over `u128` halves: no loop, and no array index that is not a literal. Nothing
+is `nondet()` and nothing is dropped, so `why_sound` says that and names the operators you
+implemented; an operator the program uses that you leave out is a build error, not a weakening.
+When the types are defined by an inline module (`mod uint_types { construct_uint! { ... } }`), there
+is no file to redirect: put `#[cfg(not(feature = "<feature>"))]` on the inline module and declare
+`#[cfg(feature = "<feature>")] #[path = "..."] mod uint_types;` beside it, with the same name.
+
 ### `swap_import`, the kind for code the program calls but does not own
 
 The commonest instance is a CPI. `vault_program::deposit` calls
