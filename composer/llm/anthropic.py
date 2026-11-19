@@ -23,10 +23,10 @@ from composer.llm.provider import (
 )
 from composer.llm.pricing import PriceProvider, price_provider_for
 from composer.llm.bedrock import (
-    MAX_DOCUMENT_BYTES, MAX_TOKENS_ENV_VAR, BedrockStreamError, llm_backend, bedrock_region,
-    inference_profile, max_output_tokens, aws_error_type, is_transient_error_type,
+    INLINE_MEDIA_TYPES, MAX_DOCUMENT_BYTES, MAX_TOKENS_ENV_VAR, BedrockDocumentError,
+    BedrockStreamError, base64_size, llm_backend, bedrock_region, inference_profile,
+    max_output_tokens, aws_error_type, is_transient_error_type,
 )
-from composer.llm.bedrock_inline import INLINE_MEDIA_TYPES, base64_size, omitted_document_block
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
 
@@ -183,9 +183,9 @@ def _cache_control(cache_level: CacheLevel) -> CacheControlEphemeralParam | None
 
 @dataclass
 class BedrockRenderer(AnthropicRenderer):
-    """Content blocks for Claude on Bedrock: binary documents are inlined, within the
-    per-document byte budget. A document that cannot be inlined, being over budget or of a
-    type a ``document`` block does not accept, becomes a text block that names it."""
+    """Content blocks for Claude on Bedrock: binary documents are inlined. A document that
+    cannot be inlined, being over the per-document byte budget or of a type a ``document``
+    block does not accept, raises :class:`BedrockDocumentError`."""
 
     max_document_bytes: int = MAX_DOCUMENT_BYTES
 
@@ -203,23 +203,17 @@ class BedrockRenderer(AnthropicRenderer):
         self, basename: str, contents: bytes, mime: str,
         *, cache_level: CacheLevel = CacheLevel.NONE
     ) -> dict:
-        cache_control = _cache_control(cache_level)
         if mime not in INLINE_MEDIA_TYPES:
-            return omitted_document_block(
-                basename,
-                f"Claude on Bedrock accepts inline documents of type "
-                f"{', '.join(sorted(INLINE_MEDIA_TYPES))} only, and this one is {mime}",
-                cache_control=cache_control,
+            raise BedrockDocumentError(
+                f"Cannot send {basename!r} to Claude on Bedrock: it is {mime}, and Bedrock "
+                f"accepts inline documents of type {', '.join(sorted(INLINE_MEDIA_TYPES))} only"
             )
         if (size := base64_size(len(contents))) > self.max_document_bytes:
-            return omitted_document_block(
-                basename,
-                f"it is {size} bytes as base64, over the {self.max_document_bytes}-byte "
-                "per-document budget for Claude on Bedrock",
-                cache_control=cache_control,
+            raise BedrockDocumentError(
+                f"Cannot send {basename!r} to Claude on Bedrock: it is {size} bytes as base64, "
+                f"over the {self.max_document_bytes}-byte limit for one inline document"
             )
-        # ``title`` names the document to the model, and lets a request that has to drop
-        # the block for size say which document it dropped.
+        # ``title`` names the document to the model.
         block: dict[str, Any] = {
             "type": "document",
             "source": {
@@ -229,7 +223,7 @@ class BedrockRenderer(AnthropicRenderer):
             },
             "title": basename,
         }
-        if cache_control is not None:
+        if (cache_control := _cache_control(cache_level)) is not None:
             block["cache_control"] = cache_control
         return block
 
@@ -287,8 +281,8 @@ class BedrockFileUploader(UploaderBase):
     """``FileUploader`` for Claude on Bedrock, which has no Files API. Text that would be
     uploaded stays in the prompt instead, and binary documents become
     :class:`InMemoryBytesFile`, sent as base64 in every request that carries them. The
-    document keeps its bytes whatever its size; :class:`BedrockRenderer` decides, when it is
-    rendered, whether they fit the budget."""
+    document keeps its bytes whatever its size; :class:`BedrockRenderer` raises, when it is
+    rendered, for one that cannot be sent."""
 
     renderer: ContentRenderer = field(default_factory=BedrockRenderer)
 

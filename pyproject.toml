@@ -59,19 +59,16 @@ dependencies = [
     # (AnthropicBedrock / AsyncAnthropicBedrock) sign requests with. <1.0 matches
     # langchain-anthropic 1.4's own anthropic<1.0 requirement.
     # composer/llm/bedrock_chat.py also uses private SDK names: the clients'
-    # _calculate_retry_timeout, _parse_retry_after_header and _make_sse_decoder,
-    # anthropic._models.FinalRequestOptions, and
-    # anthropic.lib.bedrock._stream_decoder.AWSEventStreamDecoder.
-    # tests/test_bedrock_retry.py runs a 429 and a mid-stream AWS exception through
-    # the real SDK, so a lock update that renames them fails the suite.
+    # _make_sse_decoder and anthropic.lib.bedrock._stream_decoder.AWSEventStreamDecoder.
+    # tests/test_bedrock_retry.py runs a mid-stream AWS exception through the real
+    # SDK, so a lock update that renames them fails the suite.
     "anthropic[bedrock]>=0.122.0,<1.0",
     # The Bedrock chat model subclasses langchain-aws's ChatAnthropicBedrock (requests
     # go to InvokeModel on bedrock-runtime). 1.5 and later need a newer langchain-core
     # than the pin above allows.
     "langchain-aws[anthropic]>=1.4.6,<1.5",
     # composer/llm/bedrock_chat.py overrides private ChatAnthropic methods (_client,
-    # _async_client, _create, _acreate, _get_request_payload and the stream-event and
-    # output hooks). Those can change in any minor release, so the upper bound moves
+    # _async_client, _get_request_payload and the stream-event and output hooks). Those can change in any minor release, so the upper bound moves
     # only after the Bedrock tests pass on the new release.
     "langchain-anthropic>=1.4.0,<1.5",
     "openai>=1.50.0",

@@ -16,12 +16,10 @@ geography. ``AUTOPROVER_BEDROCK_INFERENCE_PROFILE`` picks the prefix
 (see :func:`inference_profile`).
 
 Bedrock has no Files API, so binary documents travel inline as base64 in every request
-that carries them, and Bedrock caps a request at 20 MB. Two byte budgets, measured on the
-serialized request, keep a run under that cap (see :mod:`composer.llm.bedrock_inline`):
-:data:`MAX_DOCUMENT_BYTES` for the base64 body of one document, and
-:data:`MAX_REQUEST_BYTES` for the whole serialized request.
-
-A document over budget is replaced by a short text block naming it, never an error.
+that carries them, and Bedrock caps a request at 20 MB. A document that cannot be sent
+inline, being of a type a ``document`` block does not accept or over
+:data:`MAX_DOCUMENT_BYTES`, raises :class:`BedrockDocumentError` when it is rendered. A
+request over the cap fails with Bedrock's own error.
 
 Bedrock admits a request against the account's input-tokens-per-minute quota by its input
 tokens plus its ``max_tokens``, before the model has produced anything. A ``max_tokens``
@@ -111,13 +109,23 @@ def inference_profile() -> str:
     return raw
 
 
-MAX_DOCUMENT_BYTES = 8_000_000
-"""The base64 size above which one inline document is left out of a Bedrock request."""
+INLINE_MEDIA_TYPES: frozenset[str] = frozenset({"application/pdf"})
+"""The media types a base64 ``document`` block accepts."""
 
-MAX_REQUEST_BYTES = 16_000_000
-"""The serialized request size above which inline documents are left out of a Bedrock
-request. The margin below Bedrock's 20 MB cap absorbs request headers and the difference
-between this estimate and what the SDK sends."""
+MAX_DOCUMENT_BYTES = 8_000_000
+"""The largest base64 size of one inline document in a Bedrock request. Every request of the
+conversation carries the document, so one near Bedrock's 20 MB request cap leaves no room
+for the rest of the conversation."""
+
+
+def base64_size(raw_size: int) -> int:
+    """The length of the base64 encoding of ``raw_size`` bytes, padding included."""
+    return 4 * ((raw_size + 2) // 3)
+
+
+class BedrockDocumentError(ValueError):
+    """A document cannot be sent inline to Claude on Bedrock: its type is one a ``document``
+    block does not accept, or it is over :data:`MAX_DOCUMENT_BYTES`."""
 
 
 def _positive_setting(var: str, default: int, unit: str) -> int:
@@ -170,22 +178,6 @@ response, the name is read from the payload's ``error.type`` and from the
 ``x-amzn-errortype`` response header (see :func:`aws_error_type`); a transient name in either
 one makes the error transient, because a front end can pair a generic payload type such as
 ``permission_error`` with a specific header."""
-
-RETRY_INITIAL_DELAY_SECONDS = 1.0
-RETRY_MAX_DELAY_SECONDS = 60.0
-"""The backoff of the SDK's own retries on Bedrock, when the response names no
-``retry-after``: the wait doubles from :data:`RETRY_INITIAL_DELAY_SECONDS` up to this value,
-so the 8 retries span about three minutes. The SDK's defaults (0.5 s doubling to 8 s, about
-35 s in all) suit an API that usually sends ``retry-after`` on a 429. Bedrock throttles
-against a per-account tokens-per-minute quota that parallel requests share, and a
-minute-long quota window needs waits of the same order."""
-
-
-def retry_delay_seconds(retries_done: int) -> float:
-    """The wait before the next SDK retry of a Bedrock request after ``retries_done`` retries,
-    without jitter."""
-    return min(RETRY_INITIAL_DELAY_SECONDS * 2.0 ** min(retries_done, 32), RETRY_MAX_DELAY_SECONDS)
-
 
 TRANSIENT_CREDENTIAL_ERROR_CODES = frozenset({
     "Throttling",

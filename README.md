@@ -225,20 +225,17 @@ model answers, so an oversized `max_tokens` throttles a run before its real usag
 requests cap `max_tokens` at `AUTOPROVER_BEDROCK_MAX_TOKENS`. The default, 128000, is the same as on the Anthropic API.
 If the quota is small, a lower value reserves less quota per request, but a turn that reaches the cap is cut off.
 
-**Throttling.** Bedrock throttles against a per-account quota that parallel requests share. When Bedrock sends no
-`retry-after`, the SDK's 8 retries of a Bedrock request wait from 1 second up to 60 seconds, about three minutes in all.
-After that, the run-wide retry policy takes over, as on the Anthropic API.
+**Throttling.** Bedrock throttles against a per-account quota that parallel requests share. The SDK retries a
+throttled request 8 times with its default waits. After that, the run-wide retry policy takes over, as on the
+Anthropic API. An error that Bedrock sends in the middle of a streamed response is retried the same way when its
+exception name is a transient one, such as `ThrottlingException`.
 
 **PDFs and other files.** Bedrock has no Files API. On Bedrock, a PDF design document (or any other binary file the
 pipeline gives the model) is sent inline as base64 in every request of the conversation that carries it, with its
-prompt-cache marker kept. Bedrock rejects a request over 20 MB, and base64 makes a file about a third larger. A
-document over 8,000,000 bytes as base64 is replaced by a short text note naming it. When a serialized request is
-over 16,000,000 bytes, documents are replaced the same way, latest first, until it fits. If Bedrock still rejects a
-request as too large, the request is sent again with more documents replaced, up to 3 times, and the lower limit stays
-for the rest of that conversation. In each conversation, the first replacement of a document is logged as a warning,
-and later ones of the same document at DEBUG. Binary files other than PDFs are always replaced by such a note on
-Bedrock. A thread started on the Anthropic API that refers to a Files API upload cannot continue on Bedrock: its first
-Bedrock request fails with an error naming the file.
+prompt-cache marker kept. Bedrock rejects a request over 20 MB, and base64 makes a file about a third larger. The run
+stops with an error that names the file if a document is over 8,000,000 bytes as base64, or if it is a binary file other
+than a PDF. If a request is still over 20 MB, it fails with the error from Bedrock. A thread started on the Anthropic
+API that refers to a Files API upload cannot continue on Bedrock: its first Bedrock request fails.
 
 **Docker.** `scripts/autoprove` and `scripts/docker-compose.yml` pass `AUTOPROVER_LLM_BACKEND`, the region variables,
 the Bedrock limits above, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_SESSION_TOKEN`,

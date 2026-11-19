@@ -10,7 +10,6 @@ denied, unknown model, missing credentials) are not.
 Everything runs offline against an ``httpx.MockTransport``. See composer/llm/bedrock.py,
 composer/llm/bedrock_chat.py and composer/llm/anthropic.py."""
 
-import json
 from typing import Any
 
 import anthropic
@@ -170,6 +169,8 @@ async def test_transient_bedrock_status_is_retried(
     (400, "invalid_request_error", anthropic.BadRequestError),
     (403, "AccessDeniedException", anthropic.PermissionDeniedError),
     (404, "ResourceNotFoundException", anthropic.NotFoundError),
+    # A request over Bedrock's 20 MB cap fails as it is; nothing is dropped from it.
+    (413, "ValidationException", anthropic.APIStatusError),
     (424, "ModelErrorException", anthropic.APIStatusError),
 ])
 @pytest.mark.asyncio
@@ -535,67 +536,6 @@ def test_credential_refresh_blip_is_retried_by_the_sync_client(
     assert len(calls) == 2
     assert len(requests) == 1
     assert requests[0].url.path == f"/model/global.anthropic.{_MODEL}/invoke-with-response-stream"
-
-
-# --- SDK backoff ------------------------------------------------------------------------
-
-
-def test_bedrock_backoff_doubles_up_to_a_minute() -> None:
-    from composer.llm.bedrock import retry_delay_seconds
-    assert [retry_delay_seconds(n) for n in range(8)] == [1, 2, 4, 8, 16, 32, 60, 60]
-
-
-def _retry_waits(client: Any, response_headers: httpx.Headers | None = None) -> list[float]:
-    from anthropic._models import FinalRequestOptions
-    options = FinalRequestOptions(method="post", url="/v1/messages")
-    retries = client.max_retries
-    return [
-        client._calculate_retry_timeout(remaining, options, response_headers)
-        for remaining in range(retries, 0, -1)
-    ]
-
-
-def test_bedrock_clients_back_off_for_minutes_without_retry_after(bedrock_env) -> None:
-    llm = _build()
-    for client in (llm._client, llm._async_client):
-        waits = _retry_waits(client)
-        assert len(waits) == 8
-        # Jitter takes off up to a quarter of each wait.
-        assert 0.75 * 183 <= sum(waits) <= 183
-        assert max(waits) <= 60
-
-
-@pytest.mark.asyncio
-async def test_sdk_retry_loop_sleeps_with_the_bedrock_backoff(bedrock_env, monkeypatch) -> None:
-    # Through the SDK's real retry loop, so a rename of the overridden hook fails here.
-    import anyio
-    slept: list[float] = []
-
-    async def record(seconds: float) -> None:
-        slept.append(seconds)
-
-    monkeypatch.setattr(anyio, "sleep", record)
-    exc, attempts = await _invoke_failing(monkeypatch, _error(429, "ThrottlingException"))
-    assert isinstance(exc, anthropic.RateLimitError)
-    assert attempts == _MAX_RETRIES + 1
-    assert len(slept) == _MAX_RETRIES
-    # The Bedrock waits for the first two retries are 1 s and 2 s, less up to a quarter of
-    # jitter; the SDK's own would be at most 0.5 s and 1 s.
-    assert 0.75 <= slept[0] <= 1.0
-    assert 1.5 <= slept[1] <= 2.0
-
-
-def test_bedrock_clients_honour_retry_after(bedrock_env) -> None:
-    llm = _build()
-    assert set(_retry_waits(llm._async_client, httpx.Headers({"retry-after": "7"}))) == {7.0}
-
-
-def test_anthropic_client_keeps_the_sdk_backoff(monkeypatch) -> None:
-    monkeypatch.delenv(BACKEND_ENV_VAR, raising=False)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-used")
-    llm = _build()
-    assert type(llm) is ChatAnthropic
-    assert sum(_retry_waits(llm._async_client)) <= 0.5 + 1 + 2 + 4 + 8 * 4
 
 
 # --- AWS API errors while credentials are fetched ---------------------------------------

@@ -1,29 +1,26 @@
-"""Inline documents for Claude on Bedrock and the byte budgets around them.
+"""Inline documents for Claude on Bedrock: how they are rendered, the errors for one that
+cannot be sent, and how they reach InvokeModel.
 
-Offline: requests go to an ``httpx.MockTransport``. See composer/llm/bedrock_inline.py."""
+Offline: requests go to an ``httpx.MockTransport``."""
 
 import base64
-import copy
 import json
-import logging
 from typing import Any
 
 import anthropic
 import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.runnables import RunnableLambda
 
 from composer.llm import bedrock_chat
 from composer.input.files import InMemoryBytesFile
 from composer.llm.anthropic import (
-    AnthropicModelProvider, AnthropicRenderer, BedrockFileUploader, BedrockRenderer,
+    AnthropicRenderer, BedrockFileUploader, BedrockRenderer,
 )
-from composer.llm.bedrock import BACKEND_ENV_VAR, MAX_DOCUMENT_BYTES, MAX_REQUEST_BYTES
+from composer.llm.bedrock import (
+    BACKEND_ENV_VAR, MAX_DOCUMENT_BYTES, BedrockDocumentError, base64_size,
+)
 from composer.llm.bedrock_chat import ChatAnthropicBedrock
-from composer.llm.bedrock_inline import (
-    FilesApiReferenceError, base64_size, fit_request_to_budget,
-)
 from composer.llm.types import CacheLevel
 from tests.test_bedrock_backend import _EVENT_STREAM, _stream_body
 from composer.spec.source.design_doc_finder import read_document_tool
@@ -58,39 +55,19 @@ def _pdf(size: int) -> bytes:
     return head + b"x" * (size - len(head))
 
 
-def _inline(name: str, size: int, *, cache: bool = False) -> dict[str, Any]:
-    block: dict[str, Any] = {
-        "type": "document",
-        "source": {
-            "type": "base64", "media_type": "application/pdf",
-            "data": base64.b64encode(_pdf(size)).decode("ascii"),
-        },
-        "title": name,
-    }
-    if cache:
-        block["cache_control"] = _LONG_CACHE
-    return block
-
-
-def _size(payload: dict[str, Any]) -> int:
-    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode())
-
-
 # --- configuration -----------------------------------------------------------------
 
 
-def test_budgets_default(bedrock_env) -> None:
-    # The request budget leaves room under Bedrock's 20 MB request cap.
-    assert MAX_DOCUMENT_BYTES < MAX_REQUEST_BYTES < 20_000_000
+def test_document_limit_leaves_room_under_the_request_cap(bedrock_env) -> None:
+    # Bedrock rejects a request over 20 MB, and every request of a conversation carries
+    # the document.
+    assert MAX_DOCUMENT_BYTES < 20_000_000
     assert BedrockRenderer().max_document_bytes == MAX_DOCUMENT_BYTES
-    llm = AnthropicModelProvider.create(_MODEL, _Options()).builder_for()
-    assert isinstance(llm, ChatAnthropicBedrock)
-    assert llm.max_request_bytes == MAX_REQUEST_BYTES
 
 
 def test_anthropic_renderer_does_not_inline() -> None:
     """On the Anthropic API binary documents go through the Files API, so only the Bedrock
-    renderer inlines them, with its size checks."""
+    renderer inlines them, with its checks."""
     with pytest.raises(NotImplementedError):
         AnthropicRenderer().inline_file_block("a.pdf", _pdf(100), "application/pdf")
 
@@ -122,38 +99,29 @@ def test_base64_size_matches_encoding(raw_size: int) -> None:
     assert base64_size(raw_size) == len(base64.b64encode(b"\0" * raw_size))
 
 
-def test_document_at_budget_is_inlined_and_one_byte_over_is_omitted(caplog) -> None:
+def test_document_at_the_limit_is_inlined_and_one_byte_over_raises() -> None:
     contents = _pdf(300)  # 400 bytes as base64
-    at_budget = BedrockRenderer(max_document_bytes=400)
-    assert at_budget.inline_file_block(
+    at_limit = BedrockRenderer(max_document_bytes=400)
+    assert at_limit.inline_file_block(
         "spec.pdf", contents, "application/pdf"
     )["type"] == "document"
 
     over = BedrockRenderer(max_document_bytes=399)
-    with caplog.at_level(logging.WARNING, logger="composer.llm.bedrock_inline"):
-        block = over.inline_file_block(
-            "spec.pdf", contents, "application/pdf", cache_level=CacheLevel.LONG
-        )
-    assert block["type"] == "text"
-    assert "'spec.pdf'" in block["text"]
-    assert "399-byte per-document budget" in block["text"]
-    assert block["cache_control"] == _LONG_CACHE
-    assert any("spec.pdf" in r.getMessage() for r in caplog.records)
+    with pytest.raises(BedrockDocumentError, match=r"'spec\.pdf'.*399-byte limit"):
+        over.inline_file_block("spec.pdf", contents, "application/pdf")
 
 
-def test_unsupported_binary_type_is_omitted_not_sent() -> None:
-    block = BedrockRenderer(max_document_bytes=10_000).inline_file_block(
-        "blob.bin", b"\0\1\2", "application/octet-stream"
-    )
-    assert block["type"] == "text"
-    assert "'blob.bin'" in block["text"]
-    assert "application/octet-stream" in block["text"]
-    assert "cache_control" not in block
+def test_unsupported_binary_type_raises() -> None:
+    renderer = BedrockRenderer(max_document_bytes=10_000)
+    with pytest.raises(BedrockDocumentError, match=r"'blob\.bin'.*application/octet-stream"):
+        renderer.inline_file_block("blob.bin", b"\0\1\2", "application/octet-stream")
 
 
 @pytest.mark.asyncio
-async def test_oversized_document_keeps_its_bytes(bedrock_env, tmp_path) -> None:
-    """The budget applies when the document is rendered; the document itself, which digests
+async def test_oversized_document_keeps_its_bytes_and_raises_when_rendered(
+    bedrock_env, tmp_path
+) -> None:
+    """The limit applies when the document is rendered; the document itself, which digests
     and audit records read, keeps the real bytes."""
     contents = _pdf(100)
     (tmp_path / "big.pdf").write_bytes(contents)
@@ -161,148 +129,8 @@ async def test_oversized_document_keeps_its_bytes(bedrock_env, tmp_path) -> None
     doc = await uploader.get_document(tmp_path / "big.pdf")
     assert doc is not None
     assert doc.bytes_contents == contents
-    assert doc.to_dict()["type"] == "text"
-
-
-# --- request budget ----------------------------------------------------------------
-
-
-def _payload(*system_docs: dict[str, Any], tool_docs: tuple[dict[str, Any], ...] = ()) -> dict:
-    return {
-        "model": "anthropic.claude-opus-5-5",
-        "max_tokens": 1024,
-        "system": [{"type": "text", "text": "You are a verifier."}, *system_docs],
-        "messages": [
-            {"role": "user", "content": [{"type": "text", "text": "start"}]},
-            {"role": "assistant", "content": [
-                {"type": "tool_use", "id": "t1", "name": "read_document", "input": {}},
-            ]},
-            {"role": "user", "content": [{
-                "type": "tool_result", "tool_use_id": "t1", "is_error": False,
-                "content": [{"type": "text", "text": "Contents:"}, *tool_docs],
-            }]},
-        ],
-    }
-
-
-def test_payload_within_budget_is_returned_unchanged() -> None:
-    payload = _payload(_inline("a.pdf", 300), tool_docs=(_inline("b.pdf", 300),))
-    assert fit_request_to_budget(payload, _size(payload)) is payload
-
-
-def test_payload_one_byte_over_drops_the_latest_document(caplog) -> None:
-    first = _inline("a.pdf", 300, cache=True)
-    last = _inline("b.pdf", 300)
-    payload = _payload(first, tool_docs=(last,))
-    before = copy.deepcopy(payload)
-
-    with caplog.at_level(logging.WARNING, logger="composer.llm.bedrock_inline"):
-        fitted = fit_request_to_budget(payload, _size(payload) - 1)
-
-    assert payload == before, "the input payload must not be mutated"
-    assert fitted["system"][1] == first
-    tool_result = fitted["messages"][2]["content"][0]
-    assert tool_result["type"] == "tool_result"
-    assert tool_result["tool_use_id"] == "t1"
-    placeholder = tool_result["content"][1]
-    assert placeholder["type"] == "text"
-    assert "'b.pdf'" in placeholder["text"]
-    assert "request budget" in placeholder["text"]
-    assert _size(fitted) <= _size(payload) - 1
-    assert sum("b.pdf" in r.getMessage() for r in caplog.records) == 1
-
-
-def test_drops_documents_latest_first_until_it_fits() -> None:
-    a, b, c = _inline("a.pdf", 3000, cache=True), _inline("b.pdf", 3000), _inline("c.pdf", 3000)
-    payload = _payload(a, b, tool_docs=(c,))
-    # Room for exactly one document.
-    without_two = _size(payload) - 2 * len(json.dumps(b, separators=(",", ":"))) + 1000
-    fitted = fit_request_to_budget(payload, without_two)
-    assert fitted["system"][1] == a
-    assert fitted["system"][2]["type"] == "text" and "'b.pdf'" in fitted["system"][2]["text"]
-    assert fitted["messages"][2]["content"][0]["content"][1]["type"] == "text"
-    assert _size(fitted) <= without_two
-
-
-def test_placeholder_keeps_the_cache_breakpoint() -> None:
-    payload = _payload(_inline("a.pdf", 3000, cache=True))
-    fitted = fit_request_to_budget(payload, 500)
-    assert fitted["system"][1]["type"] == "text"
-    assert fitted["system"][1]["cache_control"] == _LONG_CACHE
-
-
-def test_over_budget_without_documents_is_sent_as_is() -> None:
-    payload = _payload()
-    assert fit_request_to_budget(payload, 10) is payload
-
-
-def test_everything_dropped_when_text_alone_is_over_budget() -> None:
-    payload = _payload(_inline("a.pdf", 300), tool_docs=(_inline("b.pdf", 300),))
-    fitted = fit_request_to_budget(payload, 10)
-    assert fitted["system"][1]["type"] == "text"
-    assert fitted["messages"][2]["content"][0]["content"][1]["type"] == "text"
-
-
-def _omission_logs(caplog, name: str) -> list[int]:
-    """The levels of the records that report leaving ``name`` out."""
-    return [r.levelno for r in caplog.records if f"{name!r} out of" in r.getMessage()]
-
-
-def test_omitted_document_is_warned_about_once_per_reported_set(caplog) -> None:
-    payload = _payload(_inline("a.pdf", 3000), tool_docs=(_inline("b.pdf", 3000),))
-    reported: set = set()
-    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
-        for _ in range(3):
-            # A fresh copy each time, as each request rebuilds its payload.
-            fit_request_to_budget(copy.deepcopy(payload), 500, reported)
-    assert _omission_logs(caplog, "a.pdf") == [logging.WARNING, logging.DEBUG, logging.DEBUG]
-    assert _omission_logs(caplog, "b.pdf") == [logging.WARNING, logging.DEBUG, logging.DEBUG]
-
-    caplog.clear()
-    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
-        # A new set, as a new chat model has, warns again.
-        fit_request_to_budget(payload, 500, set())
-        # Without a set, every omission is a warning.
-        fit_request_to_budget(payload, 500)
-    assert _omission_logs(caplog, "a.pdf") == [logging.WARNING, logging.WARNING]
-
-
-def test_documents_with_the_same_title_are_reported_separately(caplog) -> None:
-    reported: set = set()
-    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
-        fit_request_to_budget(_payload(_inline("a.pdf", 3000)), 500, reported)
-        fit_request_to_budget(_payload(_inline("a.pdf", 4000)), 500, reported)
-    assert _omission_logs(caplog, "a.pdf") == [logging.WARNING, logging.WARNING]
-
-
-def test_same_block_object_twice_is_counted_per_position() -> None:
-    """The ordinal, not object identity, picks what to drop: a block object that the
-    conversation holds twice is dropped only where the budget needs it."""
-    shared = _inline("a.pdf", 3000)
-    payload = _payload(shared, tool_docs=(shared,))
-    fitted = fit_request_to_budget(payload, _size(payload) - 1)
-    assert fitted["system"][1] is shared
-    assert fitted["messages"][2]["content"][0]["content"][1]["type"] == "text"
-
-
-# --- Files API references from checkpoints -----------------------------------------
-
-
-_FILE_BLOCK = {"type": "document", "source": {"type": "file", "file_id": "file_011abc"}}
-
-
-@pytest.mark.parametrize("where", ["system", "message", "tool_result"])
-def test_files_api_reference_fails_with_a_clear_error(where: str) -> None:
-    payload = _payload()
-    match where:
-        case "system":
-            payload["system"].append(_FILE_BLOCK)
-        case "message":
-            payload["messages"][0]["content"].append(_FILE_BLOCK)
-        case "tool_result":
-            payload["messages"][2]["content"][0]["content"].append(_FILE_BLOCK)
-    with pytest.raises(FilesApiReferenceError, match=rf"file_011abc.*{BACKEND_ENV_VAR}=anthropic"):
-        fit_request_to_budget(payload, 10**9)
+    with pytest.raises(BedrockDocumentError):
+        doc.to_dict()
 
 
 # --- end to end against a mocked InvokeModel endpoint --------------------------------
@@ -384,224 +212,3 @@ async def test_documents_reach_bedrock_inline_including_inside_tool_results(
     assert nested["source"]["type"] == "base64"
     assert nested["title"] == "spec.pdf"
     assert base64.b64decode(nested["source"]["data"]) == _pdf(300)
-
-
-@pytest.mark.asyncio
-async def test_request_over_budget_reaches_bedrock_with_document_omitted(
-    bedrock_env, monkeypatch, tmp_path
-) -> None:
-    requests = _mock_bedrock(monkeypatch)
-    (tmp_path / "design.pdf").write_bytes(_pdf(2000))
-    (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
-    design = await BedrockFileUploader().get_document(tmp_path / "design.pdf")
-    assert design is not None
-    tool_msg = await _read_document_message(tmp_path, "spec.pdf")
-
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global",
-        model_name=_MODEL, max_tokens_to_sample=1024,
-        max_request_bytes=20_000, streaming=True,
-    )
-    await llm.ainvoke(_conversation(design.to_dict(CacheLevel.LONG), tool_msg))
-
-    sent = requests[0].content
-    assert len(sent) <= 20_000
-    body = json.loads(sent)
-    assert body["system"][1]["type"] == "document"
-    (tool_result,) = body["messages"][-1]["content"]
-    assert tool_result["content"][-1]["type"] == "text"
-    assert "'spec.pdf'" in tool_result["content"][-1]["text"]
-
-
-@pytest.mark.asyncio
-async def test_chat_model_warns_once_about_a_document_every_request_omits(
-    bedrock_env, monkeypatch, tmp_path, caplog
-) -> None:
-    _mock_bedrock(monkeypatch)
-    (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
-    tool_msg = await _read_document_message(tmp_path, "spec.pdf")
-    system = {"type": "text", "text": "You are a verifier."}
-
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global",
-        model_name=_MODEL, max_tokens_to_sample=1024,
-        max_request_bytes=20_000, streaming=True,
-    )
-    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
-        for _ in range(3):
-            await llm.ainvoke(_conversation(system, tool_msg))
-    assert _omission_logs(caplog, "spec.pdf") == [
-        logging.WARNING, logging.DEBUG, logging.DEBUG,
-    ]
-
-
-async def _ainvoke_in_thread(llm: ChatAnthropicBedrock, messages: list[Any], thread_id: str) -> Any:
-    """Calls ``llm`` as a graph node does: from a runnable whose config carries the LangGraph
-    thread id of the conversation."""
-    async def call(m: list[Any]) -> Any:
-        return await llm.ainvoke(m)
-    return await RunnableLambda(call).ainvoke(
-        messages, {"configurable": {"thread_id": thread_id}}
-    )
-
-
-@pytest.mark.asyncio
-async def test_chat_model_warns_once_per_conversation(
-    bedrock_env, monkeypatch, tmp_path, caplog
-) -> None:
-    """Each conversation a model serves warns about a document it leaves out, even when
-    another conversation already left out the same document."""
-    _mock_bedrock(monkeypatch)
-    (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
-    tool_msg = await _read_document_message(tmp_path, "spec.pdf")
-    system = {"type": "text", "text": "You are a verifier."}
-
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global",
-        model_name=_MODEL, max_tokens_to_sample=1024,
-        max_request_bytes=20_000, streaming=True,
-    )
-    with caplog.at_level(logging.DEBUG, logger="composer.llm.bedrock_inline"):
-        for thread_id in ("a", "b", "a", "b"):
-            await _ainvoke_in_thread(llm, _conversation(system, tool_msg), thread_id)
-    assert _omission_logs(caplog, "spec.pdf") == [
-        logging.WARNING, logging.WARNING, logging.DEBUG, logging.DEBUG,
-    ]
-
-
-@pytest.mark.asyncio
-async def test_resumed_checkpoint_with_file_id_fails_before_sending(
-    bedrock_env, monkeypatch
-) -> None:
-    requests = _mock_bedrock(monkeypatch)
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global",
-        model_name=_MODEL, max_tokens_to_sample=1024, streaming=True)
-    with pytest.raises(FilesApiReferenceError, match="file_011abc"):
-        await llm.ainvoke([HumanMessage(content=[
-            {"type": "text", "text": "Design document:"}, _FILE_BLOCK,
-        ])])
-    assert requests == []
-
-
-def _mock_bedrock_with_cap(monkeypatch: pytest.MonkeyPatch, cap: int) -> list[httpx.Request]:
-    """Like :func:`_mock_bedrock`, but answers 413 to a request whose body exceeds ``cap``,
-    with the body and header of an AWS error response."""
-    requests: list[httpx.Request] = []
-    real = bedrock_chat._AsyncInvokeModelClient
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        if len(request.content) > cap:
-            return httpx.Response(
-                413, headers={"x-amzn-errortype": "ServiceQuotaExceededException"},
-                json={"message": "Request exceeds the maximum size"},
-            )
-        return _stream_response()
-
-    def factory(**kwargs: Any) -> anthropic.AsyncAnthropicBedrock:
-        return real(**{
-            **kwargs, "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        })
-
-    monkeypatch.setattr(bedrock_chat, "_AsyncInvokeModelClient", factory)
-    return requests
-
-
-@pytest.mark.asyncio
-async def test_request_rejected_as_too_large_is_sent_again_with_fewer_documents(
-    bedrock_env, monkeypatch, tmp_path, caplog
-) -> None:
-    # The size estimate says the request fits, but Bedrock's real limit is lower.
-    requests = _mock_bedrock_with_cap(monkeypatch, cap=20_000)
-    (tmp_path / "design.pdf").write_bytes(_pdf(2000))
-    (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
-    design = await BedrockFileUploader().get_document(tmp_path / "design.pdf")
-    assert design is not None
-    tool_msg = await _read_document_message(tmp_path, "spec.pdf")
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global",
-        model_name=_MODEL, max_tokens_to_sample=1024,
-        max_request_bytes=1_000_000, streaming=True,
-    )
-    conversation = _conversation(design.to_dict(CacheLevel.LONG), tool_msg)
-
-    with caplog.at_level(logging.WARNING):
-        msg = await llm.ainvoke(conversation)
-    assert msg.content == "hello"
-    assert [len(r.content) > 20_000 for r in requests] == [True, False]
-    body = json.loads(requests[1].content)
-    assert body["system"][1]["type"] == "document"
-    (tool_result,) = body["messages"][-1]["content"]
-    assert "'spec.pdf'" in tool_result["content"][-1]["text"]
-    assert any("too large" in r.getMessage() for r in caplog.records)
-
-    # The lowered budget stays, so the next request of the conversation fits at once.
-    await llm.ainvoke(conversation)
-    assert len(requests) == 3
-    assert len(requests[2].content) <= 20_000
-
-
-@pytest.mark.asyncio
-async def test_conversation_state_forgets_the_least_recently_used(
-    bedrock_env, monkeypatch
-) -> None:
-    """A model keeps state for a bounded number of conversations, and forgets the one it
-    used least recently first."""
-    monkeypatch.setattr(bedrock_chat, "_MAX_CONVERSATIONS", 2)
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global",
-        model_name=_MODEL, max_tokens_to_sample=1024)
-
-    async def state(thread_id: str) -> Any:
-        async def call(_: Any) -> Any:
-            return llm._conversation()
-        return await RunnableLambda(call).ainvoke(
-            None, {"configurable": {"thread_id": thread_id}}
-        )
-
-    a = await state("a")
-    b = await state("b")
-    assert await state("a") is a  # "a" is now the most recently used
-    await state("c")  # forgets "b"
-    assert list(llm._conversations) == ["a", "c"]
-    assert await state("a") is a
-    assert await state("b") is not b
-
-
-@pytest.mark.asyncio
-async def test_lowered_request_budget_is_kept_per_conversation(
-    bedrock_env, monkeypatch, tmp_path
-) -> None:
-    """A request rejected as too large lowers the budget of its own conversation only."""
-    requests = _mock_bedrock_with_cap(monkeypatch, cap=20_000)
-    (tmp_path / "design.pdf").write_bytes(_pdf(2000))
-    (tmp_path / "spec.pdf").write_bytes(_pdf(30_000))
-    design = await BedrockFileUploader().get_document(tmp_path / "design.pdf")
-    assert design is not None
-    tool_msg = await _read_document_message(tmp_path, "spec.pdf")
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global",
-        model_name=_MODEL, max_tokens_to_sample=1024,
-        max_request_bytes=1_000_000, streaming=True,
-    )
-    conversation = _conversation(design.to_dict(CacheLevel.LONG), tool_msg)
-
-    await _ainvoke_in_thread(llm, conversation, "a")
-    await _ainvoke_in_thread(llm, conversation, "b")
-    await _ainvoke_in_thread(llm, conversation, "a")
-    # Thread "a": rejected, then sent again smaller. Thread "b" starts from the full
-    # budget, so it is rejected too. Thread "a" then fits at once.
-    assert [len(r.content) > 20_000 for r in requests] == [True, False, True, False, False]
-
-
-@pytest.mark.asyncio
-async def test_request_too_large_without_documents_is_raised(bedrock_env, monkeypatch) -> None:
-    requests = _mock_bedrock_with_cap(monkeypatch, cap=10)
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global",
-        model_name=_MODEL, max_tokens_to_sample=1024, streaming=True,
-    )
-    with pytest.raises(anthropic.RequestTooLargeError):
-        await llm.ainvoke("hi")
-    assert len(requests) == 1
