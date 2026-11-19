@@ -35,3 +35,14 @@ harness: state the function should have changed keeps its old value, and an asse
 unchanged, or still within bounds, holds trivially. Summarize the formatting path, never the
 handler, never a function that writes state you assert over, and never one whose result you assert
 over.
+
+**Never summarize a function that returns an enum, a `Result` or an `Option`.** The type lines can
+say only that a word is a number, never which number, so the discriminant the stand-in returns is
+any value — and a `Result` often keeps its `Ok` in a spare value of the error's own tag. Measured on
+an Anchor program: a summary of its `From<ErrorEnum> for anchor_lang::error::Error` cleared the
+[3308], and an overflow then came back from the handler as `Ok` with the balance unchanged. Aim one
+call further in, at the function that returns the message as a plain `String`: `to_string`
+(`^<T as alloc::string::SpecToString>::spec_to_string$`) with `returns` naming its three words,
+`(*i64)(r1+0):ptr_heap`, `(*i64)(r1+8):num` and `(*i64)(r1+16):num`, cleared the same [3308] with
+every rule verified. That symbol is the standard library's, not that program's, but your build may
+not have it: the report after the next run says whether it matched.

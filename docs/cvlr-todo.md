@@ -1062,9 +1062,20 @@ function that *writes* state a rule asserts over, not only one whose result it r
     CPI *havocs* the caller's `Account<T>` is not reproduced either: a direct probe shows the
     deserialized copy untouched across an `invoke` (`upstream-defects.md` P6, now marked so). The
     handler form it was first seen in could not be measured, because the vault `deposit` path hits
-    [3308] in `#[error_code]` formatting that is inlined where no summary reaches. (A summary now
-    reaches a function the Prover would inline, since every added directive is forced, per
-    EVMVerifier#8837. Not yet re-measured; the compiler still inlines functions out of existence.)
+    [3308] in `#[error_code]` formatting that is inlined where no summary reaches. **Measured
+    2026-11-19, after EVMVerifier#8837** (four rules on the vault scenario: `apply_deposit`'s
+    overflow is an error, its success is reachable, the `deposit` handler credits the vault by
+    exactly `amount`, and its success is reachable). With no summary, all four end in [3308], a
+    store to address 1 under `#[error_code]` → `core::fmt::write` → `String::push_str`. A forced
+    summary of `^<T as alloc::string::SpecToString>::spec_to_string$` returning a `String`
+    (`ptr_heap` at 0, `num` at 8 and 16) makes all four VERIFIED; the same directive unforced leaves
+    all four at [3308], since nothing in the starting inlining layers keeps that symbol opaque. So
+    the handler form answers the question above: across the handler's `invoke` the deserialized
+    vault keeps what the handler wrote. A forced summary of the program's own
+    `From<VaultError> for anchor_lang::error::Error` (`num` at 0, `ptr_heap` at 8) also clears the
+    [3308] but is unsound: `Result<(), Error>` keeps `Ok` in a spare value of `Error`'s tag, the
+    stand-in's tag is unconstrained, and an overflow came back as `Ok` with the balance unchanged
+    (two false VIOLATEDs). K10 and the judge now forbid summarizing an enum-returning function.
     **Done:** the
     author prompt, the judge, the munge editor and reviewer, and two docstrings now say what was
     measured. A CPI moves nothing, so a property about its effect fails, and one that needs it not to
