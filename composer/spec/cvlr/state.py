@@ -308,7 +308,7 @@ class HarnessAssumptions:
             parts.append("Points-to summaries:")
             parts += [
                 f"  {d.pattern}\n"
-                f"    Returns: {d.returns if d.returns is not None else 'unconstrained'}\n"
+                f"    Types: {', '.join(d.types)}\n"
                 f"    {d.why}"
                 for d in self.summaries
             ]

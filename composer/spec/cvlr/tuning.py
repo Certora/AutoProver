@@ -25,6 +25,13 @@ Summaries (:data:`SUMMARIES`)
     The pointer analysis needs a type for memory an opaque call wrote, and without the body a
     summary is the only source of one.
 
+    A summary applies only to a call the Prover leaves opaque. The Prover inlines every function
+    the inlining file does not mark ``#[inline(never)]``, which includes the program's own, and
+    ignores the summary of an inlined function. A ``#[force]`` line among the annotations makes
+    the function opaque, overriding the inlining file, so the summary always applies. The Prover
+    rejects ``#[force]`` on a summary with no ``#[type]`` line. The starting layers do not force:
+    they are written for functions the starting inlining layers leave opaque.
+
 A pattern that matches nothing is not an error. The directive does not apply, and the Prover runs
 with a different configuration than the file appears to describe. Most of the care taken below
 is about that failure.
@@ -60,6 +67,12 @@ Summaries the authoring loop adds (:class:`SummaryDirective`, written by :class:
     ``require!`` or ``?`` in a handler can reach it, and a rule on that path
     gets no verdict. The remedy is a summary in the unit layer.
 
+    Every directive in a unit layer is forced, because the function in the
+    way is usually one the Prover would inline: the program's own, or a
+    library function inlined for its effects. Unforced, its summary would
+    parse, match a symbol the build defines, and change nothing. So every
+    directive also carries at least one ``#[type]``.
+
     A summary is unsound. It replaces a function with one that returns an
     unconstrained value and writes only the locations the summary names.
     Summarizing the wrong function produces a green rule that checked less
@@ -70,6 +83,7 @@ Summaries the authoring loop adds (:class:`SummaryDirective`, written by :class:
     build. The judge does that, using ``why``.
 """
 
+import re
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -193,14 +207,41 @@ def extend_composite(package_composite: str, unit_layer: str) -> str:
     return package_composite.rstrip("\n") + "\n" + unit_layer.rstrip("\n") + "\n"
 
 
-#: A summary body. A ``#[type(...)]`` annotation is optional. Omitting it means
-#: the return is unconstrained, which is the usual case for a formatting path
-#: nothing asserts over.
-_TYPE_ANNOTATION = "#[type({body})]"
+#: Marks a summary whose function the Prover never inlines, so that the summary applies.
+FORCE = "#[force]"
+
+_TYPE_ANNOTATION = re.compile(r"#\[\s*type\s*\((?P<body>.*)\)\s*\]")
+
+#: ``<location>:<kind>``, as the Prover's summaries parser accepts it.
+_SUMMARY_TYPE = re.compile(
+    r"\s*(\(\*i\d+\))?(\(r\d+\+\d+\)|r\d+)\s*:\s*"
+    r"(num|ptr_stack|ptr_input|ptr_global|ptr_heap|ptr_external)\s*(\(\s*\d+\s*\))?\s*"
+)
+
+
+class InvalidSummaryType(ValueError):
+    """A ``<location>:<kind>`` the Prover's summaries parser would refuse."""
+
+
+def summary_type_problem(summary_type: str) -> str | None:
+    """Why the Prover would refuse ``summary_type`` as a ``<location>:<kind>``, if it would."""
+    if _SUMMARY_TYPE.fullmatch(summary_type):
+        return None
+    return (
+        f"{summary_type!r} is not a `<location>:<kind>`. A location is `r<N>` or "
+        "`(*i<W>)(r<N>+<offset>)`; a kind is num, ptr_stack, ptr_input, ptr_global, ptr_heap or "
+        "ptr_external, optionally with a size, `ptr_heap(16)`."
+    )
+
 
 @dataclass(frozen=True)
 class SummaryDirective:
-    """One symbol pattern the prover should summarize rather than analyze."""
+    """One symbol pattern the prover should summarize rather than analyze.
+
+    Rendered forced (:data:`FORCE`), so it applies whether or not the Prover would have inlined the
+    function. Raises :class:`InvalidSummaryType` when ``types`` is empty or one of them is not a
+    ``<location>:<kind>``.
+    """
 
     #: A regex over demangled symbols, spelled as the canonical files spell them.
     #: Anchored with ``^`` and ``$`` by convention, for example
@@ -209,20 +250,94 @@ class SummaryDirective:
     #: Why analyzing it fails, and why summarizing it is sound for this batch.
     #: Written into the unit's tuning file and the report.
     why: str
-    #: ``<location>:<kind>``, such as ``(*i32)(r1+0):num``. :meth:`render` wraps
-    #: it in ``#[type(...)]``. ``None`` leaves the return unconstrained.
-    returns: str | None = None
+    #: Each a ``<location>:<kind>``, such as ``(*i32)(r1+0):num``, rendered as one
+    #: ``#[type(...)]`` line. Every location the function writes that a later
+    #: dereference reaches needs one: the rest keep their old contents.
+    types: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.types:
+            raise InvalidSummaryType(
+                f"{self.pattern} has no type. The Prover rejects a forced summary without one, "
+                "and an unforced one does not apply to a function it inlines."
+            )
+        for t in self.types:
+            if (problem := summary_type_problem(t)) is not None:
+                raise InvalidSummaryType(problem)
 
     def render(self) -> str:
         lines = [f"; {line}" for line in self.why.strip().splitlines() or [""]]
-        if self.returns is not None:
-            lines.append(_TYPE_ANNOTATION.format(body=self.returns))
+        lines.append(FORCE)
+        lines += [f"#[type({t.strip()})]" for t in self.types]
         lines.append(self.pattern)
         return "\n".join(lines)
 
 
 def render_layer(directives: tuple[SummaryDirective, ...]) -> str:
     return "".join(f"{d.render()}\n\n" for d in directives).removesuffix("\n")
+
+
+class LayerRejected(ValueError):
+    """A line of a hand-written summaries layer that :func:`parse_layer` refuses."""
+
+    def __init__(self, line_number: int, line: str, reason: str) -> None:
+        super().__init__(f"line {line_number}: {reason}\n  {line}")
+        self.line_number = line_number
+        self.line = line
+        self.reason = reason
+
+
+def parse_layer(text: str) -> tuple[SummaryDirective, ...]:
+    """The directives in a summaries layer written by hand.
+
+    The format :func:`render_layer` writes: ``;`` comments, at least one ``#[type(...)]`` line, then
+    the pattern. A ``#[force]`` line is accepted and ignored, since every directive is rendered
+    forced. The comments since the previous pattern become the directive's ``why``. Raises
+    :class:`LayerRejected` naming the first line the Prover would refuse, or one that would not
+    apply.
+    """
+    directives: list[SummaryDirective] = []
+    seen: set[str] = set()
+    why: list[str] = []
+    types: list[str] = []
+    last_type = (0, "")
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        if not line:
+            continue
+        if line.startswith(";"):
+            why.append(line.removeprefix(";").removeprefix(" "))
+            continue
+        if line.replace(" ", "") == FORCE:
+            continue
+        if (annotation := _TYPE_ANNOTATION.fullmatch(line)) is not None:
+            if (problem := summary_type_problem(annotation["body"])) is not None:
+                raise LayerRejected(number, raw, problem)
+            types.append(annotation["body"])
+            last_type = (number, raw)
+            continue
+        if line.startswith("#"):
+            raise LayerRejected(
+                number,
+                raw,
+                "not a summary annotation. Only `#[type(...)]` and `#[force]` go before a pattern; "
+                "an inlining directive belongs in the inlining file",
+            )
+        if not types:
+            raise LayerRejected(
+                number,
+                raw,
+                "this pattern has no `#[type(<location>:<kind>)]` line before it. The Prover "
+                "rejects a forced summary without one.",
+            )
+        if line in seen:
+            raise LayerRejected(number, raw, "this pattern is already summarized in this file")
+        seen.add(line)
+        directives.append(SummaryDirective(pattern=line, why="\n".join(why), types=tuple(types)))
+        why, types = [], []
+    if types:
+        raise LayerRejected(*last_type, "these `#[type(...)]` lines have no pattern after them")
+    return tuple(directives)
 
 
 @dataclass(frozen=True)
@@ -293,16 +408,6 @@ class TuningFiles:
         )
 
 
-def layer_patterns(layer: str) -> tuple[str, ...]:
-    """The symbol patterns in a summaries layer written as :func:`render_layer` writes one: every
-    line that is not a ``;`` comment or a ``#[type(...)]`` annotation."""
-    return tuple(
-        line
-        for raw in layer.splitlines()
-        if (line := raw.strip()) and not line.startswith((";", "#["))
-    )
-
-
 def merge_summaries(
     left: list[SummaryDirective], right: list[SummaryDirective]
 ) -> list[SummaryDirective]:
@@ -326,10 +431,8 @@ def merge_summaries(
 def summary_history(directives: tuple[SummaryDirective, ...]) -> tuple[str, ...]:
     """The directives as ``version_history`` tokens, so an earlier stamp goes stale.
 
-    Keyed on the pattern and the return type, which is what the prover does
-    differently. ``why`` is left out, so rewording a justification does not
-    require a new submission.
+    Keyed on the pattern and the types, which is what the prover does
+    differently, and on the rendering being forced. ``why`` is left out, so
+    rewording a justification does not require a new submission.
     """
-    return tuple(
-        f"summary:{d.pattern}:{'' if d.returns is None else d.returns}" for d in directives
-    )
+    return tuple(f"forced-summary:{d.pattern}:{','.join(d.types)}" for d in directives)

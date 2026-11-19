@@ -8,19 +8,20 @@ absolute address (most often a program's own `#[error_code]` enum formatting its
 
 Work down these in order:
 
-- **`summarize_for_prover(symbol_pattern, why)`**, which tells the prover to replace that symbol
-  with an unconstrained stand-in instead of analyzing it. A directive matches *demangled symbols
-  the build defines*, so it invalidates the prover stamp and `verify_rules` reports which of your
-  directives matched **no symbol at all** — read that, it is the common failure. Do not summarize
-  your program's own small functions: the compiler inlines them into their callers, so no spelling
-  of them exists to match. Aim at the library function one level out, which survives with a real
-  symbol; the report names candidates.
+- **`summarize_for_prover(symbol_pattern, why, returns)`**, which tells the prover to replace that
+  symbol with an unconstrained stand-in instead of analyzing it, at every call, including when it
+  is one of your program's own functions. It invalidates the prover stamp. A directive matches
+  *demangled symbols the build defines*, and `verify_rules` reports which of your directives
+  matched **no symbol at all** — read that, it is the common failure. A small function of your
+  program often has no symbol: the compiler inlined it into its callers, and no spelling of it
+  exists to match. Aim at the nearest function out that still has one, often the library function
+  one level out; the report names candidates. `returns` types what the function returns, `r0:num` for a scalar or a `Result`
+  returned in the register.
 
-  **Give up on this remedy after about three directives down one path.** Measured: one unit spent
-  nine submissions on eleven directives walking a formatting chain frame by frame — seven of them
-  matched real symbols — and the error never moved, because the code the prover objects to had
-  been inlined *into the handler itself* where no summary can reach it. If three have not cleared
-  it, it is not summarizable at this level; weaken or skip;
+  **Give up on this remedy after about three directives down one path.** If three directives that
+  each matched a symbol have not moved the error, the code the prover objects to is most likely in
+  a function the compiler inlined *into the handler itself*, and no summary short of the handler
+  reaches it. Weaken or skip;
 - **weaken the rule to a sub-property the prover can reach** — assume away the failing path if the
   program genuinely excludes it, or assert something strictly weaker, and say so;
 - **skip the property** with the error code and what you tried.

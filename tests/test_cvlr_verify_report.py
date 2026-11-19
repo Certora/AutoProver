@@ -162,7 +162,7 @@ async def test_a_submission_without_results_does_not_stamp():
 @pytest.mark.asyncio
 async def test_unreadable_symbols_are_said_rather_than_left_as_a_match():
     tool = _tool()
-    tool.state["summaries"] = [SummaryDirective(pattern="^foo$", why="formatting")]
+    tool.state["summaries"] = [SummaryDirective(pattern="^foo$", why="formatting", types=("r0:num",))]
     build = SbfRun(
         duration_ms=1,
         verdict=Built(manifest=SimpleNamespace(artifact=Path("/nonexistent/prog.so"))),  # type: ignore[arg-type]

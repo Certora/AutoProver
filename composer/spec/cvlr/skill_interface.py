@@ -66,6 +66,10 @@ SHARED_INVARIANTS_FILE = "src/certora/specs/invariants.rs"
 INVARIANT_RULES = "invariant_rules"
 #: A component's points-to summaries, with its module name in place of ``{module}``.
 SUMMARY_LAYER = "src/certora/summaries/{module}.txt"
+#: The annotations a summaries layer's directive carries before its pattern, after its ``;``
+#: comment lines: at least one ``#[type(<location>:<kind>)]``, and optionally ``#[force]``, which
+#: ``prove`` adds when it is absent.
+SUMMARY_ANNOTATIONS = ("#[type(", "#[force]")
 #: A component's cargo feature, with its module name in place of ``{module}``.
 UNIT_FEATURE = "certora_unit_{module}"
 #: The feature every verification build enables.

@@ -45,14 +45,14 @@ def tuning(tmp_path: Path) -> TuningFiles:
 
 
 def test_the_directive_reaches_the_file_the_conf_names(tuning: TuningFiles):
-    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
+    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY, types=("r0:num",)),))
     assert _DISPLAY in tuning.composite_path().read_text()
 
 
 def test_the_layer_is_rewritten_rather_than_appended_to(tuning: TuningFiles):
     """Each write replaces the file. Appending would keep directives the state no longer has."""
-    tuning.write((SummaryDirective(pattern="^a$", why="w"),))
-    tuning.write((SummaryDirective(pattern="^b$", why="w"),))
+    tuning.write((SummaryDirective(pattern="^a$", why="w", types=("r0:num",)),))
+    tuning.write((SummaryDirective(pattern="^b$", why="w", types=("r0:num",)),))
     composite = tuning.composite_path().read_text()
     assert "^b$" in composite and "^a$" not in composite
 
@@ -60,14 +60,14 @@ def test_the_layer_is_rewritten_rather_than_appended_to(tuning: TuningFiles):
 def test_the_inlining_family_is_left_alone(tuning: TuningFiles):
     """Writing summaries does not create or change an inlining file."""
     before = (tuning.envs_dir / INLINING.composite).read_text()
-    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
+    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY, types=("r0:num",)),))
     assert (tuning.envs_dir / INLINING.composite).read_text() == before
     assert not (tuning.envs_dir / INLINING.unit_composite(_UNIT)).exists()
 
 
 def test_dropping_every_directive_removes_it_from_the_file(tuning: TuningFiles):
     """Writing an empty list removes a directive that an earlier write put on disk."""
-    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY),))
+    tuning.write((SummaryDirective(pattern=_DISPLAY, why=_WHY, types=("r0:num",)),))
     tuning.write(())
     assert _DISPLAY not in tuning.composite_path().read_text()
 
@@ -94,8 +94,8 @@ def test_two_units_do_not_see_each_others_directives(tmp_path: Path):
         (envs / family.composite).write_text("; composed\n")
     a = TuningFiles(envs_dir=envs, dialect=PathDialect(), unit="a")
     b = TuningFiles(envs_dir=envs, dialect=PathDialect(), unit="b")
-    a.write((SummaryDirective(pattern="^only_a$", why="w"),))
-    b.write((SummaryDirective(pattern="^only_b$", why="w"),))
+    a.write((SummaryDirective(pattern="^only_a$", why="w", types=("r0:num",)),))
+    b.write((SummaryDirective(pattern="^only_b$", why="w", types=("r0:num",)),))
     assert "^only_b$" not in a.composite_path().read_text()
     assert "^only_a$" not in b.composite_path().read_text()
 
@@ -124,20 +124,20 @@ def test_a_summary_invalidates_a_stamp_earned_before_it():
     }
     stamp = make_validation_stamper(PROVER_VALIDATION_KEY)(state, tuning_history(state))  # type: ignore[arg-type]
 
-    after = {**state, "summaries": [SummaryDirective(pattern=_DISPLAY, why=_WHY)]}
+    after = {**state, "summaries": [SummaryDirective(pattern=_DISPLAY, why=_WHY, types=("r0:num",))]}
     assert stamp[PROVER_VALIDATION_KEY] != checked_digest(after, tuning_history(after))  # type: ignore[arg-type]
 
 
 def test_rewording_a_justification_does_not_cost_a_submission():
     """Rewording ``why`` does not change the history token. The prover does not read it."""
-    one = (SummaryDirective(pattern=_DISPLAY, why="first wording"),)
+    one = (SummaryDirective(pattern=_DISPLAY, why="first wording", types=("r0:num",)),)
     two = (dataclasses.replace(one[0], why="a clearer second wording"),)
     assert tuning_history({"summaries": list(one), "version_history": [], "prover_settings": TunableConf()}) == tuning_history({"summaries": list(two), "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
 
 
-def test_changing_the_return_shape_does_cost_one():
-    one = (SummaryDirective(pattern="^f$", why="w"),)
-    two = (SummaryDirective(pattern="^f$", why="w", returns="(*i32)(r1+0):num"),)
+def test_changing_the_types_does_cost_one():
+    one = (SummaryDirective(pattern="^f$", why="w", types=("r0:num",)),)
+    two = (SummaryDirective(pattern="^f$", why="w", types=("(*i32)(r1+0):num",)),)
     assert tuning_history({"summaries": list(one), "version_history": [], "prover_settings": TunableConf()}) != tuning_history({"summaries": list(two), "version_history": [], "prover_settings": TunableConf()})  # type: ignore[arg-type]
 
 
@@ -163,14 +163,14 @@ def test_two_directives_recorded_in_one_step_both_survive():
     LangGraph allows one write per step on a field with no reducer. Each call
     contributes only its own directive.
     """
-    a = SummaryDirective(pattern="^a$", why="w")
-    b = SummaryDirective(pattern="^b$", why="w")
+    a = SummaryDirective(pattern="^a$", why="w", types=("r0:num",))
+    b = SummaryDirective(pattern="^b$", why="w", types=("r0:num",))
     assert [d.pattern for d in merge_summaries([], [a])] == ["^a$"]
     assert [d.pattern for d in merge_summaries([a], [b])] == ["^a$", "^b$"]
 
 
 def test_the_same_pattern_twice_is_recorded_once():
-    a = SummaryDirective(pattern="^a$", why="first")
-    again = SummaryDirective(pattern="^a$", why="second")
+    a = SummaryDirective(pattern="^a$", why="first", types=("r0:num",))
+    again = SummaryDirective(pattern="^a$", why="second", types=("r0:num",))
     merged = merge_summaries([a], [again])
     assert [d.why for d in merged] == ["first"]

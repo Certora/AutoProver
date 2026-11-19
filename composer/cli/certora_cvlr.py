@@ -56,6 +56,7 @@ from composer.spec.cvlr.skill import (
     ResultsUnreadable,
     Running,
     SetupResult,
+    SummariesRejected,
     check,
     check_toolchain,
     prove,
@@ -317,6 +318,9 @@ async def _prove(args: argparse.Namespace) -> int:
         case SubmissionFailed(failure=failure):
             print(f"submission failed:\n{failure.render()}")
             _print_recipes(recipes_for(failure))
+            return 1
+        case SummariesRejected(path=path, rejected=rejected):
+            print(f"summaries rejected, nothing submitted: {path}, {rejected}")
             return 1
 
 

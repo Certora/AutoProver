@@ -29,6 +29,7 @@ from composer.spec.types import CheckName
 _DISPLAY = SummaryDirective(
     pattern="^<vault::VaultError as core::fmt::Display>::fmt$",
     why="[3308] on the #[error_code] Display impl; no property asserts over an error message",
+    types=("r0:num",),
 )
 _PANIC = AppliedEdit(
     edit_id="e1",
@@ -53,17 +54,13 @@ def test_a_summary_reaches_the_judge_with_the_argument_for_it():
     assert _DISPLAY.why in briefing
 
 
-def test_an_unconstrained_return_is_said_rather_than_left_blank():
-    """`returns=None` is the common case and it is the *worse* one — the prover assumes anything
-    about the value. Rendering it as an empty field reads like a detail nobody filled in."""
-    assert "unconstrained" in _text(HarnessAssumptions(summaries=(_DISPLAY,), edits=()))
-
-
-def test_a_constrained_return_is_shown_instead():
-    shaped = SummaryDirective(pattern="^f$", why="w", returns="(*i32)(r1+0):num")
+def test_every_type_the_summary_names_is_shown():
+    """The types say which locations the stand-in writes. Every other store is dropped, which is
+    what the judge has to weigh."""
+    shaped = SummaryDirective(pattern="^f$", why="w", types=("r0:num", "(*i64)(r1+8):ptr_heap"))
     briefing = _text(HarnessAssumptions(summaries=(shaped,), edits=()))
-    assert "(*i32)(r1+0):num" in briefing
-    assert "unconstrained" not in briefing
+    assert "r0:num" in briefing
+    assert "(*i64)(r1+8):ptr_heap" in briefing
 
 
 def test_an_edit_reaches_the_judge_with_the_editors_account_and_argument():
