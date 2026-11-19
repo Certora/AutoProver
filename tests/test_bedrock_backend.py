@@ -1,7 +1,7 @@
 """The Bedrock backend for Claude, selected by ``AUTOPROVER_LLM_BACKEND``.
 
 Everything runs offline: requests go to an ``httpx.MockTransport`` and are signed with fake
-AWS credentials. See composer/llm/bedrock.py and composer/llm/bedrock_chat.py."""
+AWS credentials. See composer/llm/bedrock.py and composer/llm/anthropic.py."""
 
 import base64
 import json
@@ -12,14 +12,15 @@ from typing import Any, Callable
 
 import anthropic
 import httpx
+import langchain_aws.chat_models.anthropic as langchain_aws_anthropic
 import pytest
 from langchain_anthropic import ChatAnthropic
+from langchain_aws import ChatAnthropicBedrock
 from langchain_core.messages import AIMessage
 
 from graphcore.utils import get_normalized_token_usage
 
 from composer.input.files import InMemoryBytesFile, InMemoryTextFile
-from composer.llm import bedrock_chat
 from composer.llm.anthropic import (
     AnthropicFileUploader, AnthropicModelProvider, AnthropicService, BedrockFileUploader,
     uploader_for_backend,
@@ -28,7 +29,6 @@ from composer.llm.bedrock import (
     BACKEND_ENV_VAR, INFERENCE_PROFILE_ENV_VAR, is_bedrock_model_id, llm_backend,
     to_bedrock_model_id,
 )
-from composer.llm.bedrock_chat import ChatAnthropicBedrock
 from composer.llm.registry import get_provider_for
 
 
@@ -137,9 +137,7 @@ def test_anthropic_path_keeps_files_beta_without_other_betas(monkeypatch) -> Non
 def test_bedrock_builder_wires_invoke_model_clients(bedrock_env) -> None:
     llm = _build()
     assert isinstance(llm, ChatAnthropicBedrock)
-    # Logical outside the client.
-    assert llm.model == _MODEL
-    assert llm.inference_profile == "global"
+    assert llm.model == "global.anthropic.claude-opus-5-5"
     # No Files API on Bedrock, and no other beta asked for: the plain messages endpoint.
     assert llm.betas is None
     for client, cls in (
@@ -152,8 +150,6 @@ def test_bedrock_builder_wires_invoke_model_clients(bedrock_env) -> None:
         assert str(client.base_url) == f"https://bedrock-runtime.{_REGION}.amazonaws.com"
         assert client.aws_region == _REGION
         assert client.api_key is None
-        assert len(client._middleware) == 1
-        assert isinstance(client._middleware[0], bedrock_chat.CredentialErrorMiddleware)
 
 
 def test_bedrock_builder_never_sends_files_beta(bedrock_env) -> None:
@@ -166,14 +162,11 @@ def test_bedrock_payload_carries_bedrock_id(bedrock_env) -> None:
     payload = llm._get_request_payload("hi")
     assert payload["model"] == "global.anthropic.claude-opus-5-5"
     assert "betas" not in payload
-    assert llm.model == _MODEL
 
 
 def test_bedrock_inference_profile_setting(bedrock_env, monkeypatch) -> None:
     monkeypatch.setenv(INFERENCE_PROFILE_ENV_VAR, " EU ")
-    llm = _build()
-    assert llm.inference_profile == "eu"
-    assert llm._get_request_payload("hi")["model"] == "eu.anthropic.claude-opus-5-5"
+    assert _build().model == "eu.anthropic.claude-opus-5-5"
 
 
 def test_bedrock_bad_inference_profile_fails_when_the_model_is_built(
@@ -267,7 +260,7 @@ def _mock_bedrock(
     """Route the async Bedrock client through a MockTransport, recording each request and
     the constructor arguments the chat model passed."""
     rec = _Recorder([], [])
-    real = bedrock_chat._AsyncInvokeModelClient
+    real = anthropic.AsyncAnthropicBedrock
 
     def handler(request: httpx.Request) -> httpx.Response:
         rec.requests.append(request)
@@ -278,7 +271,7 @@ def _mock_bedrock(
         mocked = {**kwargs, "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler))}
         return real(**mocked)
 
-    monkeypatch.setattr(bedrock_chat, "_AsyncInvokeModelClient", factory)
+    monkeypatch.setattr(langchain_aws_anthropic, "AsyncAnthropicBedrock", factory)
     return rec
 
 
@@ -302,10 +295,15 @@ def _check_signed_bedrock_request(
     return body
 
 
+# Bedrock names the model in a response by its logical id, as the Anthropic API does
+# (checked live with Opus 5.5 through the global profile), so usage records and pricing
+# see the id the run was configured with.
+
+
 @pytest.mark.asyncio
 async def test_bedrock_streaming_round_trip(bedrock_env, monkeypatch) -> None:
     rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
-        200, headers=_EVENT_STREAM, content=_stream_body("anthropic.claude-opus-5-5"),
+        200, headers=_EVENT_STREAM, content=_stream_body(_MODEL),
     ))
     llm = _build()
     msg = await llm.ainvoke("hi")
@@ -333,10 +331,10 @@ async def test_bedrock_streaming_round_trip(bedrock_env, monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_bedrock_non_streaming_round_trip(bedrock_env, monkeypatch) -> None:
     rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
-        200, json=json.loads(_json_body("us.anthropic.claude-sonnet-5-5")),
+        200, json=json.loads(_json_body("claude-sonnet-5-5")),
     ))
     llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="eu", model_name="claude-sonnet-5-5",
+        region_name=_REGION, model="eu.anthropic.claude-sonnet-5-5",
         max_tokens_to_sample=1024, streaming=False,
     )
     msg = await llm.ainvoke("hi")
@@ -350,7 +348,7 @@ async def test_bedrock_non_streaming_round_trip(bedrock_env, monkeypatch) -> Non
 @pytest.mark.asyncio
 async def test_bedrock_beta_request_carries_betas_in_the_body(bedrock_env, monkeypatch) -> None:
     rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
-        200, headers=_EVENT_STREAM, content=_stream_body("anthropic.claude-opus-5-5"),
+        200, headers=_EVENT_STREAM, content=_stream_body(_MODEL),
     ))
     llm = _build(memory_tool=True)
     await llm.ainvoke("hi")
@@ -422,49 +420,6 @@ def test_model_id_mapping(logical: str, profile: str, expected: str) -> None:
     assert bedrock_id == expected
     assert is_bedrock_model_id(bedrock_id)
     assert not is_bedrock_model_id(logical)
-
-
-# Whatever name Bedrock reports, the response carries the logical id the request was built
-# from: the client knows which model it asked for.
-_REPORTED_NAMES = [
-    "anthropic.claude-opus-5-5",
-    "anthropic.claude-opus-5-5-v1:0",
-    "us.anthropic.claude-opus-5-5",
-    "us.anthropic.claude-opus-5-5-v1:0",
-    "global.anthropic.claude-opus-5-5",
-    "arn:aws:bedrock:us-east-1:000000000000:inference-profile/us.anthropic.claude-opus-5-5-v1:0",
-    "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-opus-5-5-v1:0",
-    "claude-opus-5-5",
-]
-
-
-@pytest.mark.parametrize("reported", _REPORTED_NAMES)
-@pytest.mark.asyncio
-async def test_reported_model_name_is_the_logical_id_when_streaming(
-    bedrock_env, monkeypatch, reported: str
-) -> None:
-    _mock_bedrock(monkeypatch, lambda _: httpx.Response(
-        200, headers=_EVENT_STREAM, content=_stream_body(reported),
-    ))
-    msg = await _build().ainvoke("hi")
-    assert msg.response_metadata["model_name"] == _MODEL
-    assert get_normalized_token_usage(msg)["model_name"] == _MODEL
-
-
-@pytest.mark.parametrize("reported", _REPORTED_NAMES)
-@pytest.mark.asyncio
-async def test_reported_model_name_is_the_logical_id(
-    bedrock_env, monkeypatch, reported: str
-) -> None:
-    _mock_bedrock(monkeypatch, lambda _: httpx.Response(200, json=json.loads(_json_body(reported))))
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global", model_name=_MODEL,
-        max_tokens_to_sample=1024, streaming=False,
-    )
-    msg = await llm.ainvoke("hi")
-    assert msg.response_metadata["model_name"] == _MODEL
-    assert msg.response_metadata["model"] == _MODEL
-    assert get_normalized_token_usage(msg)["model_name"] == _MODEL
 
 
 @pytest.mark.parametrize("model", [

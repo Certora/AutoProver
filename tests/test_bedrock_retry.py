@@ -2,30 +2,22 @@
 
 Bedrock admits a request against the token quota by its input plus its ``max_tokens``, so
 Bedrock requests carry a capped ``max_tokens``; the Anthropic API path keeps the configured
-value. Transient Bedrock failures (throttling, model not ready, 5xx, a model timeout, a
-transient error inside a stream, a passing failure to fetch AWS credentials) are retried, by
-the SDK and then by ``AnthropicService.should_retry``; deterministic ones (validation, access
-denied, unknown model, missing credentials) are not.
+value. Bedrock errors are retried by their HTTP status, by the SDK and then by
+``AnthropicService.should_retry``, as on the Anthropic API.
 
-Everything runs offline against an ``httpx.MockTransport``. See composer/llm/bedrock.py,
-composer/llm/bedrock_chat.py and composer/llm/anthropic.py."""
+Everything runs offline against an ``httpx.MockTransport``. See composer/llm/bedrock.py and
+composer/llm/anthropic.py."""
 
 from typing import Any
 
 import anthropic
-import botocore.exceptions
 import httpx
 import pytest
 from langchain_anthropic import ChatAnthropic
+from langchain_aws import ChatAnthropicBedrock
 
-from anthropic.lib.bedrock import _auth
-from composer.llm import bedrock_chat
 from composer.llm.anthropic import AnthropicModelProvider, AnthropicService
-from composer.llm.bedrock import (
-    BACKEND_ENV_VAR, DEFAULT_MAX_TOKENS, MAX_TOKENS_ENV_VAR, BedrockCredentialRefreshError,
-    BedrockCredentialsError, BedrockStreamError,
-)
-from composer.llm.bedrock_chat import ChatAnthropicBedrock
+from composer.llm.bedrock import BACKEND_ENV_VAR, DEFAULT_MAX_TOKENS, MAX_TOKENS_ENV_VAR
 
 from tests.test_bedrock_backend import (
     _EVENT_STREAM, _MODEL, _REGION, _Options, _build, _event_stream, _exception_frame,
@@ -35,7 +27,6 @@ from tests.test_bedrock_backend import (
 __all__ = ["bedrock_env"]  # the fixture, imported for the tests below
 
 _MAX_RETRIES = 2
-_INVOKE_URL = f"https://bedrock-runtime.{_REGION}.amazonaws.com/model/global.anthropic.{_MODEL}/invoke"
 
 
 def _svc() -> AnthropicService:
@@ -46,7 +37,7 @@ def _svc() -> AnthropicService:
 def no_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the SDK's retry loop, without its backoff delays."""
     monkeypatch.setattr(
-        bedrock_chat._AsyncInvokeModelClient, "_calculate_retry_timeout",
+        anthropic.AsyncAnthropicBedrock, "_calculate_retry_timeout",
         lambda self, *args, **kwargs: 0.0,
     )
 
@@ -134,7 +125,7 @@ async def _invoke_failing(
     exception the chat model raised and how many attempts the SDK made."""
     rec = _mock_bedrock(monkeypatch, lambda _: response)
     llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global", model_name=_MODEL,
+        region_name=_REGION, model=f"global.anthropic.{_MODEL}",
         max_tokens_to_sample=1024,
         max_retries=_MAX_RETRIES, streaming=True,
     )
@@ -186,43 +177,27 @@ async def test_deterministic_bedrock_status_is_not_retried(
     assert message in str(exc)
 
 
-@pytest.mark.asyncio
-async def test_expired_token_is_retried_by_the_run(bedrock_env, monkeypatch, no_retry_sleep) -> None:
-    # A 403 the SDK does not retry, but a later request, signed with refreshed
-    # credentials, does not repeat.
-    exc, attempts = await _invoke_failing(monkeypatch, _error(403, "ExpiredTokenException"))
-    assert isinstance(exc, anthropic.PermissionDeniedError)
-    assert attempts == 1
-    assert _svc().should_retry(exc) is True
-
-
 # --- errors inside a stream -----------------------------------------------------------
 
 
 def _stream_ending_with_exception(name: str) -> httpx.Response:
     """A stream that Bedrock ends with an exception frame after the first event."""
-    body = _event_stream(_stream_events("anthropic.claude-opus-5-5")[:1])
+    body = _event_stream(_stream_events(_MODEL)[:1])
     return httpx.Response(200, headers=_EVENT_STREAM, content=body + _exception_frame(name, "..."))
 
 
-@pytest.mark.parametrize("name, transient", [
-    ("ThrottlingException", True),
-    ("ModelStreamErrorException", True),
-    ("InternalServerException", True),
-    ("ServiceUnavailableException", True),
-    ("ValidationException", False),
-    ("ModelErrorException", False),
-])
+# The SDK raises an exception frame inside a stream as a plain ValueError, which the run does
+# not retry, whatever the exception. How often Bedrock does this is to be seen live.
+@pytest.mark.parametrize("name", ["ThrottlingException", "ValidationException"])
 @pytest.mark.asyncio
-async def test_exception_inside_a_stream(
-    bedrock_env, monkeypatch, name: str, transient: bool
+async def test_exception_inside_a_stream_is_not_retried(
+    bedrock_env, monkeypatch, name: str
 ) -> None:
     rec = _mock_bedrock(monkeypatch, lambda _: _stream_ending_with_exception(name))
-    with pytest.raises(BedrockStreamError) as info:
+    with pytest.raises(ValueError, match=name) as info:
         await _build().ainvoke("hi")
-    assert info.value.error_type == name
     assert len(rec.requests) == 1
-    assert _svc().should_retry(info.value) is transient
+    assert _svc().should_retry(info.value) is False
 
 
 @pytest.mark.parametrize("error_type, transient", [
@@ -234,7 +209,7 @@ async def test_error_event_inside_a_stream(
     bedrock_env, monkeypatch, error_type: str, transient: bool
 ) -> None:
     body = _event_stream([
-        *_stream_events("anthropic.claude-opus-5-5")[:1],
+        *_stream_events(_MODEL)[:1],
         {"type": "error", "error": {"type": error_type, "message": "..."}},
     ])
     rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(200, headers=_EVENT_STREAM, content=body))
@@ -243,341 +218,3 @@ async def test_error_event_inside_a_stream(
     assert info.value.status_code == 200
     assert len(rec.requests) == 1
     assert _svc().should_retry(info.value) is transient
-
-
-@pytest.mark.parametrize("error_type", sorted({
-    "ThrottlingException", "ModelNotReadyException", "ServiceUnavailableException",
-    "InternalServerException", "ModelTimeoutException", "ModelStreamErrorException",
-    "ExpiredTokenException",
-}))
-def test_bedrock_transient_names_on_any_status(error_type: str) -> None:
-    request = httpx.Request("POST", _INVOKE_URL)
-    exc = anthropic.APIStatusError(
-        "Error code: 200",
-        response=httpx.Response(200, request=request),
-        body={"type": "error", "error": {"type": error_type, "message": "..."}},
-    )
-    assert _svc().should_retry(exc) is True
-
-
-def _header_error(status: int, header: str, body: Any) -> httpx.Response:
-    return httpx.Response(status, headers={"x-amzn-errortype": header}, json=body)
-
-
-@pytest.mark.parametrize("header", [
-    "ExpiredTokenException",
-    "ExpiredTokenException:http://example.com/errors/",
-])
-@pytest.mark.parametrize("body", [
-    {"message": "The security token included in the request is expired"},
-    {"Message": "The security token included in the request is expired"},
-])
-@pytest.mark.asyncio
-async def test_expired_token_named_in_header_is_retried_by_the_run(
-    bedrock_env, monkeypatch, no_retry_sleep, header: str, body: dict[str, str]
-) -> None:
-    exc, attempts = await _invoke_failing(monkeypatch, _header_error(403, header, body))
-    assert isinstance(exc, anthropic.PermissionDeniedError)
-    assert attempts == 1
-    assert _svc().should_retry(exc) is True
-
-
-@pytest.mark.parametrize("header, transient", [
-    ("ThrottlingException", True),
-    ("ThrottlingException:http://example.com/errors/", True),
-    ("AccessDeniedException", False),
-    ("AccessDeniedException:http://example.com/errors/", False),
-    ("", False),
-])
-def test_header_error_type_on_a_body_without_one(header: str, transient: bool) -> None:
-    request = httpx.Request("POST", _INVOKE_URL)
-    exc = anthropic.APIStatusError(
-        "Error code: 400",
-        response=httpx.Response(400, request=request, headers={"x-amzn-errortype": header}),
-        body={"message": "..."},
-    )
-    assert _svc().should_retry(exc) is transient
-
-
-def test_transient_header_counts_next_to_a_payload_error_type() -> None:
-    # A front end can pair a generic payload type with the specific exception in the header.
-    request = httpx.Request("POST", _INVOKE_URL)
-    exc = anthropic.APIStatusError(
-        "Error code: 403",
-        response=httpx.Response(
-            403, request=request, headers={"x-amzn-errortype": "ExpiredTokenException"},
-        ),
-        body={"type": "error", "error": {"type": "permission_error", "message": "..."}},
-    )
-    assert _svc().should_retry(exc) is True
-
-
-@pytest.mark.asyncio
-async def test_expired_token_in_header_with_anthropic_body_is_retried_by_the_run(
-    bedrock_env, monkeypatch, no_retry_sleep
-) -> None:
-    response = _header_error(
-        403, "ExpiredTokenException",
-        {"type": "error", "error": {"type": "permission_error", "message": "expired"}},
-    )
-    exc, attempts = await _invoke_failing(monkeypatch, response)
-    assert isinstance(exc, anthropic.PermissionDeniedError)
-    assert attempts == 1
-    assert _svc().should_retry(exc) is True
-
-
-def test_deterministic_payload_and_header_are_not_retried() -> None:
-    request = httpx.Request("POST", _INVOKE_URL)
-    exc = anthropic.APIStatusError(
-        "Error code: 403",
-        response=httpx.Response(
-            403, request=request, headers={"x-amzn-errortype": "AccessDeniedException"},
-        ),
-        body={"type": "error", "error": {"type": "permission_error", "message": "..."}},
-    )
-    assert _svc().should_retry(exc) is False
-
-
-# --- AWS credentials --------------------------------------------------------------------
-
-
-def _signing_fails(monkeypatch: pytest.MonkeyPatch, *errors: Exception) -> list[int]:
-    """Make SigV4 signing raise ``errors`` in turn, then sign normally. Returns a list that
-    counts the signing attempts."""
-    real = _auth.get_auth_headers
-    pending = list(errors)
-    calls: list[int] = []
-
-    def signer(**kwargs: Any) -> dict[str, str]:
-        calls.append(1)
-        if pending:
-            raise pending.pop(0)
-        return real(**kwargs)
-
-    monkeypatch.setattr(_auth, "get_auth_headers", signer)
-    return calls
-
-
-def _retrieval_error() -> Exception:
-    return botocore.exceptions.CredentialRetrievalError(
-        provider="container-role", error_msg="timed out"
-    )
-
-
-@pytest.mark.asyncio
-async def test_credential_refresh_blip_is_retried_by_the_sdk(
-    bedrock_env, monkeypatch, no_retry_sleep
-) -> None:
-    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
-        200, headers=_EVENT_STREAM,
-        content=_stream_body("anthropic.claude-opus-5-5"),
-    ))
-    calls = _signing_fails(
-        monkeypatch, _retrieval_error(),
-        botocore.exceptions.EndpointConnectionError(endpoint_url="http://169.254.170.2"),
-    )
-    msg = await _build().ainvoke("hi")
-    assert msg.content == "hello"
-    assert len(calls) == 3
-    assert len(rec.requests) == 1
-
-
-@pytest.mark.asyncio
-async def test_persistent_credential_refresh_failure_is_retried_by_the_run(
-    bedrock_env, monkeypatch, no_retry_sleep
-) -> None:
-    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
-    calls = _signing_fails(monkeypatch, *(_retrieval_error() for _ in range(_MAX_RETRIES + 1)))
-    llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global", model_name=_MODEL,
-        max_tokens_to_sample=1024,
-        max_retries=_MAX_RETRIES, streaming=True,
-    )
-    with pytest.raises(BedrockCredentialRefreshError, match="timed out") as info:
-        await llm.ainvoke("hi")
-    assert isinstance(info.value.__cause__, botocore.exceptions.CredentialRetrievalError)
-    assert len(calls) == _MAX_RETRIES + 1
-    assert rec.requests == []
-    assert _svc().should_retry(info.value) is True
-
-
-@pytest.fixture
-def empty_credential_chain(bedrock_env, monkeypatch, tmp_path) -> Any:
-    """A default AWS credential chain that finds nothing: no credential variables, config
-    and credentials files that do not exist, and no container or instance role. The SDK
-    caches its boto3 session, which would keep credentials an earlier test resolved, so
-    its cache is cleared on the way in and out."""
-    for var in (
-        "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
-        "AWS_DEFAULT_PROFILE", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
-        "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN",
-    ):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("AWS_CONFIG_FILE", str(tmp_path / "config"))
-    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(tmp_path / "credentials"))
-    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
-    _auth._get_session.cache_clear()
-    yield
-    _auth._get_session.cache_clear()
-
-
-def _count_signing(monkeypatch: pytest.MonkeyPatch) -> list[int]:
-    """Count the calls to the SDK's real signer."""
-    real = _auth.get_auth_headers
-    calls: list[int] = []
-
-    def signer(**kwargs: Any) -> dict[str, str]:
-        calls.append(1)
-        return real(**kwargs)
-
-    monkeypatch.setattr(_auth, "get_auth_headers", signer)
-    return calls
-
-
-@pytest.mark.asyncio
-async def test_no_credentials_are_not_retried(
-    empty_credential_chain, monkeypatch, no_retry_sleep
-) -> None:
-    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
-    calls = _count_signing(monkeypatch)
-    with pytest.raises(BedrockCredentialsError, match="has no credentials") as info:
-        await _build().ainvoke("hi")
-    # The SDK's own failure, kept as the cause.
-    assert isinstance(info.value.__cause__, RuntimeError)
-    assert len(calls) == 1
-    assert rec.requests == []
-    assert _svc().should_retry(info.value) is False
-
-
-def test_no_credentials_are_not_retried_by_the_sync_client(
-    empty_credential_chain, monkeypatch
-) -> None:
-    requests: list[httpx.Request] = []
-    real = bedrock_chat._InvokeModelClient
-
-    def factory(**kwargs: Any) -> anthropic.AnthropicBedrock:
-        transport = httpx.MockTransport(lambda r: requests.append(r) or httpx.Response(500))
-        return real(**{**kwargs, "http_client": httpx.Client(transport=transport)})
-
-    monkeypatch.setattr(bedrock_chat, "_InvokeModelClient", factory)
-    calls = _count_signing(monkeypatch)
-    with pytest.raises(BedrockCredentialsError, match="has no credentials"):
-        _build().invoke("hi")
-    assert len(calls) == 1
-    assert requests == []
-
-
-@pytest.mark.parametrize("env, cause", [
-    ({"AWS_PROFILE": "missing"}, botocore.exceptions.ProfileNotFound),
-])
-@pytest.mark.asyncio
-async def test_unusable_credentials_are_not_retried(
-    empty_credential_chain, monkeypatch, no_retry_sleep, env: dict[str, str], cause: type
-) -> None:
-    for var, value in env.items():
-        monkeypatch.setenv(var, value)
-    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
-    calls = _count_signing(monkeypatch)
-    with pytest.raises(BedrockCredentialsError, match="default credential chain") as info:
-        await _build().ainvoke("hi")
-    assert isinstance(info.value.__cause__, cause)
-    assert len(calls) == 1
-    assert rec.requests == []
-    assert _svc().should_retry(info.value) is False
-
-
-@pytest.mark.parametrize("var", ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"])
-def test_half_a_static_key_pair_fails_when_the_model_is_built(
-    empty_credential_chain, monkeypatch, var: str
-) -> None:
-    monkeypatch.setenv(var, "EXAMPLE")
-    with pytest.raises(ValueError, match="must be set together"):
-        _build()
-
-
-@pytest.mark.asyncio
-async def test_unrelated_runtime_error_passes_through(
-    bedrock_env, monkeypatch, no_retry_sleep
-) -> None:
-    # With credentials in the chain, a RuntimeError from the attempt is not about them.
-    _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
-    error = RuntimeError("something else")
-    _signing_fails(monkeypatch, error)
-    with pytest.raises(RuntimeError) as info:
-        await _build().ainvoke("hi")
-    assert info.value is error
-
-
-def test_credential_refresh_blip_is_retried_by_the_sync_client(
-    bedrock_env, monkeypatch
-) -> None:
-    monkeypatch.setattr(
-        bedrock_chat._InvokeModelClient, "_calculate_retry_timeout",
-        lambda self, *args, **kwargs: 0.0,
-    )
-    requests: list[httpx.Request] = []
-
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return httpx.Response(
-            200, headers=_EVENT_STREAM,
-            content=_stream_body("anthropic.claude-opus-5-5"),
-        )
-
-    real = bedrock_chat._InvokeModelClient
-
-    def factory(**kwargs: Any) -> anthropic.AnthropicBedrock:
-        return real(**{**kwargs, "http_client": httpx.Client(transport=httpx.MockTransport(respond))})
-
-    monkeypatch.setattr(bedrock_chat, "_InvokeModelClient", factory)
-    calls = _signing_fails(monkeypatch, _retrieval_error())
-    msg = _build().invoke("hi")
-    assert msg.content == "hello"
-    assert len(calls) == 2
-    assert len(requests) == 1
-    assert requests[0].url.path == f"/model/global.anthropic.{_MODEL}/invoke-with-response-stream"
-
-
-# --- AWS API errors while credentials are fetched ---------------------------------------
-
-
-def _sts_error(code: str, status: int) -> botocore.exceptions.ClientError:
-    return botocore.exceptions.ClientError(
-        {"Error": {"Code": code, "Message": "..."}, "ResponseMetadata": {"HTTPStatusCode": status}},
-        "AssumeRole",
-    )
-
-
-@pytest.mark.parametrize("code, status", [
-    ("Throttling", 400),
-    ("RequestLimitExceeded", 400),
-    ("SomethingNew", 503),
-    ("SomethingNew", 429),
-])
-@pytest.mark.asyncio
-async def test_transient_sts_error_while_signing_is_retried_by_the_sdk(
-    bedrock_env, monkeypatch, no_retry_sleep, code: str, status: int
-) -> None:
-    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
-        200, headers=_EVENT_STREAM,
-        content=_stream_body("anthropic.claude-opus-5-5"),
-    ))
-    calls = _signing_fails(monkeypatch, _sts_error(code, status))
-    msg = await _build().ainvoke("hi")
-    assert msg.content == "hello"
-    assert len(calls) == 2
-    assert len(rec.requests) == 1
-
-
-@pytest.mark.asyncio
-async def test_deterministic_sts_error_while_signing_is_not_retried(
-    bedrock_env, monkeypatch, no_retry_sleep
-) -> None:
-    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(500))
-    calls = _signing_fails(monkeypatch, _sts_error("AccessDenied", 403))
-    with pytest.raises(BedrockCredentialsError) as info:
-        await _build().ainvoke("hi")
-    assert isinstance(info.value.__cause__, botocore.exceptions.ClientError)
-    assert _svc().should_retry(info.value) is False
-    assert len(calls) == 1
-    assert rec.requests == []

@@ -7,12 +7,11 @@ import base64
 import json
 from typing import Any
 
-import anthropic
 import httpx
 import pytest
+from langchain_aws import ChatAnthropicBedrock
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
-from composer.llm import bedrock_chat
 from composer.input.files import InMemoryBytesFile
 from composer.llm.anthropic import (
     AnthropicRenderer, BedrockFileUploader, BedrockRenderer,
@@ -20,9 +19,8 @@ from composer.llm.anthropic import (
 from composer.llm.bedrock import (
     BACKEND_ENV_VAR, MAX_DOCUMENT_BYTES, BedrockDocumentError, base64_size,
 )
-from composer.llm.bedrock_chat import ChatAnthropicBedrock
 from composer.llm.types import CacheLevel
-from tests.test_bedrock_backend import _EVENT_STREAM, _stream_body
+from tests.test_bedrock_backend import _EVENT_STREAM, _mock_bedrock, _stream_body
 from composer.spec.source.design_doc_finder import read_document_tool
 
 _REGION = "us-west-2"
@@ -136,27 +134,6 @@ async def test_oversized_document_keeps_its_bytes_and_raises_when_rendered(
 # --- end to end against a mocked InvokeModel endpoint --------------------------------
 
 
-def _stream_response() -> httpx.Response:
-    return httpx.Response(200, headers=_EVENT_STREAM, content=_stream_body("anthropic." + _MODEL))
-
-
-def _mock_bedrock(monkeypatch: pytest.MonkeyPatch) -> list[httpx.Request]:
-    requests: list[httpx.Request] = []
-    real = bedrock_chat._AsyncInvokeModelClient
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return _stream_response()
-
-    def factory(**kwargs: Any) -> anthropic.AsyncAnthropicBedrock:
-        return real(**{
-            **kwargs, "http_client": httpx.AsyncClient(transport=httpx.MockTransport(handler)),
-        })
-
-    monkeypatch.setattr(bedrock_chat, "_AsyncInvokeModelClient", factory)
-    return requests
-
-
 async def _read_document_message(tmp_path, name: str) -> ToolMessage:
     """The ToolMessage the design-doc finder's ``read_document`` tool produces for ``name``
     under the Bedrock uploader."""
@@ -184,7 +161,9 @@ def _conversation(system_doc: dict[str, Any], tool_msg: ToolMessage) -> list[Any
 async def test_documents_reach_bedrock_inline_including_inside_tool_results(
     bedrock_env, monkeypatch, tmp_path
 ) -> None:
-    requests = _mock_bedrock(monkeypatch)
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(
+        200, headers=_EVENT_STREAM, content=_stream_body(_MODEL),
+    ))
     (tmp_path / "design.pdf").write_bytes(_pdf(200))
     (tmp_path / "spec.pdf").write_bytes(_pdf(300))
     uploader = BedrockFileUploader()
@@ -193,11 +172,11 @@ async def test_documents_reach_bedrock_inline_including_inside_tool_results(
     tool_msg = await _read_document_message(tmp_path, "spec.pdf")
 
     llm = ChatAnthropicBedrock(
-        region_name=_REGION, inference_profile="global",
-        model_name=_MODEL, max_tokens_to_sample=1024, streaming=True)
+        region_name=_REGION, model=f"global.anthropic.{_MODEL}",
+        max_tokens_to_sample=1024, streaming=True)
     await llm.ainvoke(_conversation(design.to_dict(CacheLevel.LONG), tool_msg))
 
-    body = json.loads(requests[0].content)
+    body = json.loads(rec.requests[0].content)
     system_doc = body["system"][1]
     assert system_doc["type"] == "document"
     assert system_doc["source"]["type"] == "base64"

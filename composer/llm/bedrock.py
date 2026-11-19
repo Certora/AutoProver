@@ -4,10 +4,10 @@ Claude is reached either through the Anthropic API or through Amazon Bedrock's I
 API on the ``bedrock-runtime`` endpoint, which takes the Anthropic Messages request body.
 ``AUTOPROVER_LLM_BACKEND`` picks one per process.
 
-Model ids stay logical (``claude-opus-5-5``) everywhere outside the Bedrock chat client:
-CLI defaults, budgets, logs, pricing and usage records all key on them. Only the request
-sent to Bedrock carries the Bedrock id, and the model name a Bedrock response reports is
-replaced by the logical id the request was built from before anything downstream sees it.
+Model ids stay logical (``claude-opus-5-5``) everywhere outside the Bedrock chat model:
+CLI defaults, budgets, logs, pricing and usage records all key on them. Only the chat model
+carries the Bedrock id, which Bedrock puts in the request path. A Bedrock response names
+the model by its logical id, as the Anthropic API does.
 
 InvokeModel serves current Claude models only through a cross-Region inference profile,
 whose id is the Bedrock model id behind a routing prefix: ``global.`` lets Bedrock route a
@@ -28,22 +28,17 @@ reaches the quota. ``AUTOPROVER_BEDROCK_MAX_TOKENS`` (default 128,000) caps ``ma
 on Bedrock requests, so an account with a small quota can reserve less per request; see
 :data:`DEFAULT_MAX_TOKENS`.
 
-Transient failures are retried, deterministic ones are not (see
-:meth:`composer.llm.anthropic.AnthropicService.should_retry`). Besides the HTTP statuses the
-Anthropic API shares, Bedrock reports some errors by its own exception names
-(:data:`TRANSIENT_ERROR_TYPES`), and a request can fail before it is sent, while the AWS
-credentials that sign it are fetched (:class:`BedrockCredentialRefreshError`,
-:class:`BedrockCredentialsError`).
+Bedrock errors reach the run-wide retry policy as the Anthropic SDK raises them (see
+:meth:`composer.llm.anthropic.AnthropicService.should_retry`): throttling and server errors by
+their HTTP status, like on the Anthropic API.
 
-Kept free of langchain imports so the registry can use the id predicates cheaply; the chat
-model itself lives in :mod:`composer.llm.bedrock_chat`.
+Kept free of langchain imports so the registry can use the id predicates cheaply. The chat
+model is langchain-aws's ``ChatAnthropicBedrock``, built in :mod:`composer.llm.anthropic`.
 """
 
 import os
-from collections.abc import Mapping
 from typing import Literal
 
-import anthropic
 
 type LLMBackend = Literal["anthropic", "bedrock"]
 
@@ -159,79 +154,6 @@ def max_output_tokens() -> int:
     """The ``max_tokens`` cap for Bedrock requests. Raises ``ValueError`` for a value that is
     not a positive integer."""
     return _positive_setting(MAX_TOKENS_ENV_VAR, DEFAULT_MAX_TOKENS, "tokens")
-
-
-TRANSIENT_ERROR_TYPES = frozenset({
-    "ThrottlingException",          # 429: over the account's request or token quota
-    "ModelNotReadyException",       # 429: the model is not ready to serve yet
-    "ServiceUnavailableException",  # 503
-    "InternalServerException",      # 500
-    "ModelTimeoutException",        # 408: the model took too long to answer
-    "ModelStreamErrorException",    # an error while the response streamed
-    "ExpiredTokenException",        # 403: signed with credentials that expired in flight
-})
-"""Bedrock's names for the errors worth retrying. Most of them come with a status code that
-already says so; the names matter for an error reported inside an open stream, whose status
-is the stream's 200 (see :class:`BedrockStreamError`), and for ``ExpiredTokenException``, a
-403 that the next request, signed with refreshed credentials, does not repeat. For an error
-response, the name is read from the payload's ``error.type`` and from the
-``x-amzn-errortype`` response header (see :func:`aws_error_type`); a transient name in either
-one makes the error transient, because a front end can pair a generic payload type such as
-``permission_error`` with a specific header."""
-
-TRANSIENT_CREDENTIAL_ERROR_CODES = frozenset({
-    "Throttling",
-    "ThrottlingException",
-    "RequestLimitExceeded",
-    "ServiceUnavailable",
-    "InternalFailure",
-    "InternalError",
-    "IDPCommunicationError",
-})
-"""Error codes of an AWS API call made while credentials are fetched (an STS role
-assumption, for example) that can pass. botocore raises such a failure as a ``ClientError``,
-which is not a ``BotoCoreError``; a 429 or 5xx status counts as transient too."""
-
-AWS_ERROR_TYPE_HEADER = "x-amzn-errortype"
-"""The response header in which AWS front ends name the exception behind an error response,
-as ``<ExceptionName>`` or ``<ExceptionName>:<detail>``."""
-
-
-def aws_error_type(headers: Mapping[str, str]) -> str | None:
-    """The exception name in the ``x-amzn-errortype`` header of an error response, without
-    any ``:`` suffix, or ``None`` when the header is absent or empty."""
-    name = headers.get(AWS_ERROR_TYPE_HEADER, "").partition(":")[0].strip()
-    return name or None
-
-
-def is_transient_error_type(error_type: str | None) -> bool:
-    """Whether ``error_type``, the exception name of an error response, is a Bedrock
-    exception name in :data:`TRANSIENT_ERROR_TYPES`."""
-    return error_type in TRANSIENT_ERROR_TYPES
-
-
-class BedrockCredentialRefreshError(anthropic.RetryableError):
-    """Fetching the AWS credentials that sign a Bedrock request failed for a reason that can
-    pass, such as the container credentials endpoint timing out. The request was not sent.
-
-    A ``RetryableError``, so the SDK retries the request with its own backoff; once its
-    retries are spent, this reaches the caller and the run-wide retry policy takes over."""
-
-
-class BedrockCredentialsError(anthropic.AnthropicError):
-    """The AWS credentials that sign a Bedrock request could not be found or are malformed.
-    The request was not sent, and retrying does not help."""
-
-
-class BedrockStreamError(anthropic.AnthropicError):
-    """Bedrock ended an open response stream with an exception, such as
-    ``ModelStreamErrorException`` or ``ThrottlingException``. InvokeModel sends it as an
-    exception frame of the AWS event stream rather than as an ``error`` event, so the
-    exception name, :attr:`error_type`, is what tells a transient failure apart."""
-
-    def __init__(self, error_type: str | None, message: str) -> None:
-        super().__init__(f"Bedrock stream failed with {error_type or 'an exception'}: {message}")
-        self.error_type = error_type
 
 
 def _arn_resource(model_id: str) -> str | None:

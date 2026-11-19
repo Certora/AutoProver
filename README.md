@@ -182,7 +182,8 @@ tui-autoprove \
 ## Claude on Amazon Bedrock
 
 By default the pipeline calls Claude through the Anthropic API. With `AUTOPROVER_LLM_BACKEND=bedrock` it calls Claude on
-Amazon Bedrock instead, through Bedrock's InvokeModel API (`https://bedrock-runtime.<region>.amazonaws.com`).
+Amazon Bedrock instead, through Bedrock's InvokeModel API (`https://bedrock-runtime.<region>.amazonaws.com`), with
+the `ChatAnthropicBedrock` chat model of langchain-aws.
 Every agent that builds its model through composer follows this setting. AutoSetup's own LLM calls still go to the
 Anthropic API, so `ANTHROPIC_API_KEY` is required with either backend.
 
@@ -200,9 +201,9 @@ or `us`. A geographic profile also needs the region in `AWS_REGION` to be in tha
 
 **Credentials.** Requests are signed with AWS SigV4, using the default AWS credential chain: environment variables, the
 shared config and credentials files (profiles, SSO), the task role of an ECS or AWS Batch container, or an EC2
-instance profile. No Anthropic API key is used for these requests. `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` must
-be set together: if only one of them is set, the run stops when a model is built. The Anthropic SDK sends a Bedrock API
-key instead of signing when `AWS_BEARER_TOKEN_BEDROCK` is set. Do not set it together with the AWS key variables: the
+instance profile. No Anthropic API key is used for these requests. Set `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` together. If only one of them is set, Bedrock refuses the request signature. The Anthropic SDK
+sends a Bedrock API key instead of signing when `AWS_BEARER_TOKEN_BEDROCK` is set. Do not set it together with the AWS key variables: the
 SDK refuses both at once. When `ANTHROPIC_BEDROCK_BASE_URL` is set, requests go there instead of the regional endpoint.
 
 **Permissions.** The role needs the IAM actions `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream`.
@@ -215,9 +216,9 @@ see "Global cross-Region inference" in the Amazon Bedrock User Guide. The accoun
 models the run uses.
 
 **Model ids stay logical.** `--model`, budgets, logs, pricing and the usage records in `job_info.json` all use
-the Anthropic model ids (`claude-opus-5-5`). Only the request sent to Bedrock carries the inference profile id
-(`global.anthropic.claude-opus-5-5`), and the model name in a Bedrock response is replaced by the logical id. Do not
-pass a Bedrock id to `--model`. Bedrock names a few older models differently, for example
+the Anthropic model ids (`claude-opus-5-5`). Only the chat model carries the inference profile id
+(`global.anthropic.claude-opus-5-5`), which Bedrock takes in the request path. A Bedrock response names the model by
+its Anthropic id, as the Anthropic API does. Do not pass a Bedrock id to `--model`. Bedrock names a few older models differently, for example
 `anthropic.claude-haiku-4-5-20251001-v1:0` for `claude-haiku-4-5`; composer keeps a table of those.
 
 **max_tokens.** Bedrock reserves a request's `max_tokens` against the account's tokens-per-minute quota before the
@@ -227,8 +228,8 @@ If the quota is small, a lower value reserves less quota per request, but a turn
 
 **Throttling.** Bedrock throttles against a per-account quota that parallel requests share. The SDK retries a
 throttled request 8 times with its default waits. After that, the run-wide retry policy takes over, as on the
-Anthropic API. An error that Bedrock sends in the middle of a streamed response is retried the same way when its
-exception name is a transient one, such as `ThrottlingException`.
+Anthropic API. If Bedrock reports an error after a streamed response started, for example a
+`ThrottlingException`, the run step fails without a retry.
 
 **PDFs and other files.** Bedrock has no Files API. On Bedrock, a PDF design document (or any other binary file the
 pipeline gives the model) is sent inline as base64 in every request of the conversation that carries it, with its
