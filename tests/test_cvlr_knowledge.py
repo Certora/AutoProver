@@ -971,6 +971,16 @@ def test_the_author_is_sent_to_k15_before_asking_for_a_narrower_type():
     assert "cvlr_satisfy!" in recipe
 
 
+def test_k15_says_narrowing_does_not_reach_a_wide_integer_built_from_the_bits():
+    """The narrow type keeps the wide encoding, so a program's own `U256` arithmetic on a value's
+    bits keeps its cost. A unit narrowed on that program's valuation properties got no verdict from
+    it, and K16 used to name K15 as the lever after its redirect."""
+    recipe = _recipe("K15")
+    assert "What it does not reach: wide arithmetic on the type's bits" in recipe
+    assert "uint_types::U256::div_impl" in recipe
+    assert "K15's narrower type is the next lever" not in _recipe("K16")
+    assert "narrowing does not reach it" in _recipe("K8")
+
 
 def test_an_indeterminate_stack_access_pushes_k16():
     """`[3001]` on 256-bit arithmetic is cleared by redirecting the integer type, and summaries do

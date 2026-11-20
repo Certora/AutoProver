@@ -42,9 +42,10 @@ borrow calculation went from `[3001]` to a verdict, and with the elevation-group
 fixed it verified with no bounds on the amounts.
 
 **What the redirect does not fix.** The arithmetic is still 256-bit, so a decision built from many
-such operations can now time out instead. That is a K8 problem, and on the `fixed` crate's 128-bit
-type K15's narrower type is the next lever. Fix the `[3001]` first: until a rule gets a verdict
-there is nothing to narrow.
+such operations can now time out instead. That is a K8 problem. Narrowing a `fixed` type (K15)
+does not reach it: code that builds the wide type from a fixed-point value's bits still computes on
+the full encoding. For a property that only consumes such values, stand in for the function that
+computes them (K8); for one decided by them, skip it with the timed-out rule's statistics.
 
 **When the source is not a wide-integer library**, the Prover's own help applies: a loop over a
 stack array whose bound is not a constant, or a local whose address is taken and dereferenced

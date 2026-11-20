@@ -108,5 +108,7 @@ three rewrites of such a stand-in left its timeouts in place, and three units th
 theirs spent about 21 submissions on the same timeouts before skipping.
 
 **When the program's own fixed-point type is the function.** If the time is in the `fixed` crate's
-128-bit type and the property is decided by those computations, no stand-in serves it: fetch K15
-for the editor's `narrow_fixed` kind.
+128-bit type itself and the property is decided by those computations, no stand-in serves it: fetch
+K15 for the editor's `narrow_fixed` kind. If it is in a wide integer the program builds from that
+type's bits (a `U256`, a "big fraction"), narrowing does not reach it, and this recipe is still the
+one.
