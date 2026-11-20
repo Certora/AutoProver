@@ -20,6 +20,7 @@ from collections.abc import Callable, Collection, Container, Sequence
 from typing import AsyncIterator, Mapping, TypedDict, override
 
 from elftools.common.exceptions import ELFError
+from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from prover_output_utility import ProverOutputAPI
 from prover_output_utility.models import JobStatus
@@ -103,6 +104,7 @@ from composer.spec.cvlr.state import (
 from composer.spec.cvlr.tree import SharedTree, UnitEdits
 from composer.spec.cvlr.tuning import SummaryDirective, TuningFiles
 from composer.spec.gen_types import TypedTemplate
+from composer.spec.source.munge.tool_names import COMMIT_EDIT, REVERT_TO_EDIT
 from composer.spec.cvlr.vacuity import VacuityAnalyzer, core_finding
 from composer.spec.source.cex_capture import CexAnalysisStore
 from composer.spec.source.report_prover import fetch_unsat_cores
@@ -626,6 +628,42 @@ def _unverdicted(declared: Sequence[str], status: Mapping[str, StatusCodes]) -> 
     return sorted(set(declared) - status.keys())
 
 
+#: The author's tools whose result changes what a gate tool stages, submits or judges: the draft,
+#: the program's edits, the summaries, the prover settings, the markings and the skips.
+CHANGES_WHAT_IS_CHECKED = frozenset({
+    "put_harness",
+    COMMIT_EDIT,
+    REVERT_TO_EDIT,
+    "summarize_for_prover",
+    "adjust_prover_config",
+    "expect_rule_failure",
+    "expect_rule_passage",
+    "record_skip",
+    "unskip_property",
+})
+
+
+def batched_with_a_change(state: CvlrGenerationState, tool: str) -> str | None:
+    """The refusal for gate tool ``tool`` called in the same turn as a tool that changes what it
+    checks, or ``None``.
+
+    Every call in one turn runs against the state the turn started from, concurrently. Run anyway,
+    the gate would check the draft from before the change and report it as the current one.
+    """
+    messages = state["messages"]
+    if not messages or not isinstance(last := messages[-1], AIMessage):
+        return None
+    changing = sorted({call["name"] for call in last.tool_calls} & CHANGES_WHAT_IS_CHECKED)
+    if not changing:
+        return None
+    named = ", ".join(f"`{name}`" for name in changing)
+    return (
+        f"`{tool}` was not run: it was called in the same turn as {named}. The calls in one "
+        f"turn all start from the state before any of them, so `{tool}` would have checked the "
+        f"draft without that change. Call `{tool}` again in a turn of its own."
+    )
+
+
 @tool_display("Compiling the harness", "Compile")
 class CargoCheck(
     WithInjectedState[CvlrGenerationState],
@@ -644,6 +682,8 @@ class CargoCheck(
 
     @override
     async def run(self) -> Command | str:
+        if (refusal := batched_with_a_change(self.state, "cargo_check")) is not None:
+            return refusal
         draft = self.state["curr_spec"]
         if draft is None:
             return "No harness written yet — put a draft first."
@@ -780,6 +820,8 @@ class VerifyRules(
 
     @override
     async def run(self) -> Command | str:
+        if (refusal := batched_with_a_change(self.state, VERIFY_TOOL)) is not None:
+            return refusal
         draft = self.state["curr_spec"]
         if draft is None:
             return "No harness written yet — put a draft first."
@@ -991,6 +1033,8 @@ class ExplainVacuity(
 
     @override
     async def run(self) -> str:
+        if (refusal := batched_with_a_change(self.state, "explain_vacuity")) is not None:
+            return refusal
         draft = self.state["curr_spec"]
         if draft is None:
             return "No harness written yet — put a draft first."

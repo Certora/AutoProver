@@ -136,6 +136,27 @@ def parse_cloud_link(link: str) -> CloudJob:
     )
 
 
+#: Status reads in a row that may fail transiently before the poll gives up. A poll outlives
+#: the job, which can run for hours, so a dropped connection or a 5xx on one read is expected;
+#: raising it abandons a job that is still running. Six reads at the default interval is a
+#: minute of outage.
+_POLL_MAX_CONSECUTIVE_FAILURES = 6
+
+
+def _transient_poll_error(exc: Exception) -> bool:
+    """Whether a failed status read may succeed if repeated: the transport failed, the read
+    timed out, or the server answered 5xx or 429. Any other answer will not change."""
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return exc.status >= 500 or exc.status == 429
+    return isinstance(exc, (aiohttp.ClientConnectionError, TimeoutError))
+
+
+async def _read_job_data(session: aiohttp.ClientSession, url: str) -> dict:
+    async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+        resp.raise_for_status()
+        return await resp.json()
+
+
 async def _poll_job_inner(
     job: CloudJob,
     *,
@@ -145,10 +166,22 @@ async def _poll_job_inner(
     url = job.job_data_url
 
     async with aiohttp.ClientSession(headers=_NO_BROTLI_HEADERS) as session:
+        failures = 0
         while True:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                resp.raise_for_status()
-                data = await resp.json()
+            try:
+                data = await _read_job_data(session, url)
+            except Exception as exc:
+                failures += 1
+                if not _transient_poll_error(exc) or failures >= _POLL_MAX_CONSECUTIVE_FAILURES:
+                    raise
+                logger.warning(
+                    "Reading the status of cloud job %s failed (%d in a row): %r. "
+                    "Reading it again in %.0fs; the job is not resubmitted.",
+                    job.job_id[:8], failures, exc, interval,
+                )
+                await asyncio.sleep(interval)
+                continue
+            failures = 0
 
             status = data.get("job_status", "UNKNOWN")
 
