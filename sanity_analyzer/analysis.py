@@ -11,6 +11,7 @@ from composer.input.parsing import add_protocol_args
 from composer.input.types import ModelOptions, WorkflowOptions
 from composer.rag.db import SANITY_DEFAULT_CONNECTION, get_rag_db
 from composer.rag.models import get_model
+from composer.spec.core_analysis import format_core_analysis
 from composer.tools.search import cvl_manual_search
 from composer.templates.loader import load_jinja_template
 from composer.workflow.services import create_llm, get_async_memory
@@ -54,35 +55,7 @@ class SanityAnalysisResult(BaseModel):
 - Flag explanations with rationale for values""")
 
     def format(self) -> str:
-        lines = [
-            f"# Sanity Analysis Result",
-            f"",
-            f"**Issue Type:** {self.issue_type}",
-            f"",
-            f"## Summary",
-            f"",
-            self.short_summary,
-            f"",
-            f"## Root Cause",
-            f"",
-            self.root_cause,
-            f"",
-            f"## Detailed Analysis",
-            f"",
-            self.detailed_analysis,
-            f"",
-            self.solution,
-        ]
-        if self.mitigation_options:
-            lines += [f"", f"## Mitigation Options", f""]
-            for i, opt in enumerate(self.mitigation_options, 1):
-                if opt.config_changes:
-                    lines.append(f"**Option {i}:**")
-                    lines.append("```")
-                    for (key, value) in opt.config_changes:
-                        lines.append(f"{key} = {value}")
-                    lines.append("```")
-        return "\n".join(lines)
+        return format_core_analysis("Sanity Analysis Result", self)
 
 sanity_analysis_output_tool = result_tool_generator(
     "result",
