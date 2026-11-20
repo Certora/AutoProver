@@ -5,7 +5,7 @@ A run takes one suite: the file ``AUTOPROVER_USER_PROPERTIES`` names, relative t
 root, with the files it imports::
 
     {
-      "imports": ["common.properties.json"],
+      "imports": ["common.property-suite.json"],
       "groups": [{"name": "Accounting", "description": "Minting and burning shares."}],
       "properties": [
         {"id": "total_supply_matches_shares", "description": "totalSupply equals the sum of all shares.",
@@ -54,7 +54,7 @@ USER_PROPERTIES_ENV = "AUTOPROVER_USER_PROPERTIES"
 DEFAULT_GROUP = ComponentName("Properties")
 
 #: How a properties file's name ends. A tool that reads a repo's other suites finds them by it.
-PROPERTY_FILE_SUFFIX = ".properties.json"
+PROPERTY_FILE_SUFFIX = ".property-suite.json"
 
 
 class UserPropertyGroup(BaseModel):

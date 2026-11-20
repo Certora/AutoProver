@@ -96,7 +96,7 @@ This package ships one generator, `user-properties` (`composer/pipeline/user_pro
 takes the properties from JSON files a person writes, and calls no model.
 
 ```
-AUTOPROVER_USER_PROPERTIES=certora/suites/rounding.properties.json \
+AUTOPROVER_USER_PROPERTIES=certora/suites/rounding.property-suite.json \
   console-autoprove … --property-generator user-properties
 ```
 
@@ -105,7 +105,7 @@ AUTOPROVER_USER_PROPERTIES=certora/suites/rounding.properties.json \
 
 ```json
 {
-  "imports": ["common.properties.json"],
+  "imports": ["common.property-suite.json"],
   "groups": [{"name": "Rounding", "description": "How shares are rounded on mint and burn."}],
   "properties": [
     {"id": "burn_rounding_favors_vault", "description": "Burned shares are worth at least the assets paid out.",
@@ -134,8 +134,33 @@ them, and an aggregate suite can be a file with only `imports`. Loading a suite 
 * a group that two files of the suite describe differently (a group named without a description
   takes the description another file gives).
 
-Name every properties file `*.properties.json` (`PROPERTY_FILE_SUFFIX`). A tool that reads a
-repo's other suites finds them by that name.
+Name every properties file `*.property-suite.json` (`PROPERTY_FILE_SUFFIX`). A tool that reads a
+repo's other suites finds them by that name, so every file with the name must read as a properties
+file.
+
+### Tagging rules with properties
+
+A spec says which rules establish which properties with `@property` tags in the comment block
+directly above a rule or invariant (`composer/pipeline/property_tags.py`):
+
+```cvl
+/// @property burn_rounding_favors_vault, no_round_trip_profit
+rule burn_rounding_favors_vault_withdraw(env e, uint256 assets) { ... }
+```
+
+A tag names one or more property ids, separated by commas; several tags add up. A blank line
+between the comment and the rule parts them. The Prover drops comments, so a tag never changes
+what a spec checks.
+
+`validate-properties <project root> <suite>` checks a suite and the project's tags, and lists each
+property of the suite with the rules tagged with it. It reports, as errors, a suite that does not
+load, a `*.property-suite.json` file that does not read as a properties file, and a tag naming an
+id that no properties file in the project defines (a tag naming another suite's property is
+fine); as warnings, a tag that is not directly above a rule or invariant and a
+property of the suite that another file defines differently; and, as information, a property no
+rule is tagged with. It reads each spec with the standalone CVL parser, so it needs no conf and no
+build, but it needs the Certora CLI's jars and Java. `--skip <dir>` leaves a directory out of the
+search; hidden directories and dependency and build trees are always left out.
 
 ## The `property_generation` run mode
 

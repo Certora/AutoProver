@@ -86,19 +86,19 @@ def _prop(pid: str, group: str | None = None, description: str = "holds") -> dic
 
 
 def test_a_suite_is_its_properties_and_those_of_every_file_it_imports(tmp_path: Path) -> None:
-    _write(tmp_path, "common/base.properties.json", {
+    _write(tmp_path, "common/base.property-suite.json", {
         "groups": [{"name": "Accounting", "description": "Mint and burn."}],
         "properties": [_prop("supply", "Accounting")],
     })
-    _write(tmp_path, "common/shared.properties.json", {
-        "imports": ["base.properties.json"], "properties": [_prop("solvency", "Accounting")],
+    _write(tmp_path, "common/shared.property-suite.json", {
+        "imports": ["base.property-suite.json"], "properties": [_prop("solvency", "Accounting")],
     })
-    _write(tmp_path, "exits.properties.json", {
-        "imports": ["common/base.properties.json"], "properties": [_prop("exit")],
+    _write(tmp_path, "exits.property-suite.json", {
+        "imports": ["common/base.property-suite.json"], "properties": [_prop("exit")],
     })
     # The base file is reached along two paths: it counts once.
-    suite = UserPropertyFile.load_suite(_write(tmp_path, "all.properties.json", {
-        "imports": ["common/shared.properties.json", "exits.properties.json"],
+    suite = UserPropertyFile.load_suite(_write(tmp_path, "all.property-suite.json", {
+        "imports": ["common/shared.property-suite.json", "exits.property-suite.json"],
         "groups": [{"name": "Accounting"}],
         "properties": [_prop("own")],
     }))
@@ -110,25 +110,25 @@ def test_a_suite_is_its_properties_and_those_of_every_file_it_imports(tmp_path: 
 
 
 def test_a_cycle_of_imports_is_an_error(tmp_path: Path) -> None:
-    _write(tmp_path, "b.properties.json", {"imports": ["a.properties.json"], "properties": [_prop("b")]})
-    a = _write(tmp_path, "a.properties.json", {"imports": ["b.properties.json"], "properties": [_prop("a")]})
+    _write(tmp_path, "b.property-suite.json", {"imports": ["a.property-suite.json"], "properties": [_prop("b")]})
+    a = _write(tmp_path, "a.property-suite.json", {"imports": ["b.property-suite.json"], "properties": [_prop("a")]})
 
     with pytest.raises(ValueError, match="cycle"):
         UserPropertyFile.load_suite(a)
 
 
 def test_an_id_two_files_define_is_an_error(tmp_path: Path) -> None:
-    _write(tmp_path, "b.properties.json", {"properties": [_prop("same", description="other")]})
-    a = _write(tmp_path, "a.properties.json", {"imports": ["b.properties.json"], "properties": [_prop("same")]})
+    _write(tmp_path, "b.property-suite.json", {"properties": [_prop("same", description="other")]})
+    a = _write(tmp_path, "a.property-suite.json", {"imports": ["b.property-suite.json"], "properties": [_prop("same")]})
 
     with pytest.raises(ValueError, match="'same' is defined in"):
         UserPropertyFile.load_suite(a)
 
 
 def test_a_group_two_files_describe_differently_is_an_error(tmp_path: Path) -> None:
-    _write(tmp_path, "b.properties.json", {"groups": [{"name": "G", "description": "one"}], "properties": []})
-    a = _write(tmp_path, "a.properties.json", {
-        "imports": ["b.properties.json"], "groups": [{"name": "G", "description": "two"}], "properties": [],
+    _write(tmp_path, "b.property-suite.json", {"groups": [{"name": "G", "description": "one"}], "properties": []})
+    a = _write(tmp_path, "a.property-suite.json", {
+        "imports": ["b.property-suite.json"], "groups": [{"name": "G", "description": "two"}], "properties": [],
     })
 
     with pytest.raises(ValueError, match="group 'G' has one description"):
@@ -137,7 +137,7 @@ def test_a_group_two_files_describe_differently_is_an_error(tmp_path: Path) -> N
 
 def test_generate_reads_the_file_the_environment_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "certora").mkdir()
-    (tmp_path / "certora/properties.json").write_text(json.dumps(FILE))
+    (tmp_path / "certora/vault.property-suite.json").write_text(json.dumps(FILE))
     ctx = cast(Any, SimpleNamespace(
         run=SimpleNamespace(
             source=SimpleNamespace(project_root=str(tmp_path), contract_name="Vault",
@@ -151,7 +151,7 @@ def test_generate_reads_the_file_the_environment_names(tmp_path: Path, monkeypat
     with pytest.raises(ValueError, match=USER_PROPERTIES_ENV):
         asyncio.run(UserPropertiesGenerator().generate(ctx))
 
-    monkeypatch.setenv(USER_PROPERTIES_ENV, "certora/properties.json")
+    monkeypatch.setenv(USER_PROPERTIES_ENV, "certora/vault.property-suite.json")
     ps = asyncio.run(UserPropertiesGenerator().generate(ctx))
     assert ps.contract_name == "Vault" and ps.ecosystem == "evm"
     assert ps.keys() == {
