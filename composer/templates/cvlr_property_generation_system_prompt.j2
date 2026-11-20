@@ -135,6 +135,13 @@ count, and the functions with the largest share of its branching and of its nonl
 their own, sorting the properties whose path crosses the function, and the stand-in for the ones
 that only consume its result.
 
+A stand-in cannot help when the property is *decided* by the heavy computation: an eligibility, a
+health check or a cap computed with the program's own fixed-point divisions. When those are the
+`fixed` crate's 128-bit type's own operations, the editor's `narrow_fixed` kind computes that type at
+64 bits for the whole unit. It does not reach a wide integer (a `U256`) the program builds from the
+type's bits: the timeout statistics name which one holds the time. Recipe K15 says when that is worth it and what it costs. Decide it when the unit starts,
+before its rules, because every value a rule builds lives at the type's scale.
+
 ## When the program itself is in the way, ask the editor
 
 Some blocks are not in your rule and not in the conf — they are in the program's own source, and the
@@ -147,7 +154,7 @@ failed, which rule, and which code you believe is in the way. Do not prescribe a
 the diagnosis, the editor owns what to do about it, and a request that dictates the edit is one it has
 to re-derive anyway.
 
-The editor's charter is nine kinds, and knowing them tells you what is worth asking for:
+The editor's charter is ten kinds, and knowing them tells you what is worth asking for:
 
 * **`early_panic`** rewrites every `?` in a function to `.unwrap()`. The same choice as
   `.unwrap()`-versus-`.is_ok()` above, applied where a rule cannot reach: a `?` *inside* the program,
@@ -200,6 +207,11 @@ The editor's charter is nine kinds, and knowing them tells you what is worth ask
 * **`swap_derive`** moves a type's derived (de)serializer behind your unit's feature so you can
   supply the impls yourself. Recipe K11 covers it, under the symptom that calls for it — it is the
   widest-reaching kind and the one with the most for you to get right afterwards.
+* **`narrow_fixed`** computes the program's 128-bit `fixed` type (`FixedU128`, usually behind an
+  alias such as `Fraction`) at 64 bits for your unit, as `cvlr_fixed::narrow::NarrowFixedU128<Frac,
+  NFrac>`. **Name `NFrac` in the request**: values must fit below `2^(64 - NFrac)` and anything below
+  `2^-NFrac` becomes zero. Every verdict in the unit is then about the narrowed arithmetic. Fetch
+  recipe K15 with `get_cvlr_recipe` before asking.
 
 One more thing people reach for, and you should prefer the honest version of it. Shrinking a bounded collection —
 the array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over

@@ -6,6 +6,9 @@
 absolute address (most often a program's own `#[error_code]` enum formatting its `#[msg]` string) or
 `[3006]` illegal store of a stack pointer, on a path the rule reaches.
 
+A `[3001]` access to an indeterminate stack location is not this recipe's: summaries do not clear
+it. Read K16.
+
 Work down these in order:
 
 - **`summarize_for_prover(symbol_pattern, why, returns)`**, which tells the prover to replace that

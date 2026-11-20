@@ -60,6 +60,7 @@ from composer.cargo.manifest import (
     Comment,
     Dependency,
     Manifest,
+    ExtendArray,
     ManifestAddition,
     ManifestConflict,
     ManifestEditor,
@@ -74,6 +75,7 @@ from composer.spec.cvlr import forks
 from composer.spec.cvlr.tuning import ENV_FAMILIES, INLINING, SUMMARIES, compose_env
 from composer.spec.cvlr.reference import (
     ChainReference,
+    CrateRelease,
     CrateRequirement,
     HarnessShim,
     commit_patches,
@@ -461,10 +463,16 @@ class ScaffoldOutsideProject(RuntimeError):
     """A path in the plan is outside the project root."""
 
 
-def _dependency(*, inherit: bool, version: str) -> Mapping[str, str | bool]:
+def _dependency(
+    *, inherit: bool, crate: CrateRelease
+) -> Mapping[str, str | bool | Sequence[str]]:
     """A CVLR dependency entry. ``optional`` is what makes ``dep:`` usable in the feature, and
     what keeps CVLR out of a release build."""
-    pin: dict[str, str | bool] = {"workspace": True} if inherit else {"version": f"={version}"}
+    pin: dict[str, str | bool | Sequence[str]] = (
+        {"workspace": True} if inherit else {"version": f"={crate.version}"}
+    )
+    if crate.features:
+        pin["features"] = list(crate.features)
     return {**pin, "optional": True}
 
 
@@ -574,7 +582,9 @@ def select_generation(
 ) -> ChainReference | None:
     """The reference set in ``candidates`` for the platform generation ``package`` is on.
 
-    ``None`` when the package links none of their witnesses. ``candidates`` are newest first
+    ``None`` when the package links none of their witnesses. The set is specialized to the
+    workspace (:meth:`~composer.spec.cvlr.reference.ChainReference.for_target`): a conditional
+    crate is declared when the workspace resolves its trigger. ``candidates`` are newest first
     (:data:`~composer.spec.cvlr.reference.REFERENCE_SET`), and the first match wins, with one
     exception. A framework's generation matches only a package that declares the framework itself.
     A framework a dependency links is that dependency's business: the program's handlers take the
@@ -587,10 +597,11 @@ def select_generation(
         if isinstance(_read_platform(workspace, package, reference), _OnGeneration)
     ]
     manifest = read_manifest(package.root / "Cargo.toml")
-    return next(
+    chosen = next(
         (r for r in on if r.shim is None or manifest.declares(r.shim.requires)),
         next(iter(on), None),
     )
+    return None if chosen is None else chosen.for_target(lambda name: bool(workspace.resolved(name)))
 
 
 def _check_platform(
@@ -876,7 +887,7 @@ def _plan_feature_forwarding(
                 path,
                 AddEntries(
                     ("dependencies",),
-                    tuple((c.name, _dependency(inherit=False, version=c.version)) for c in missing),
+                    tuple((c.name, _dependency(inherit=False, crate=c)) for c in missing),
                 ),
                 f"the CVLR crates {dep.name}'s `{DEFAULT_FEATURE}` feature enables",
             )
@@ -938,6 +949,17 @@ def _plan_package_manifest(
         plan.add_satisfied(
             f"the `{DEFAULT_FEATURE}` feature already exists as {features[DEFAULT_FEATURE]!r}"
         )
+        if missing and len(missing) < len(wanted):
+            # A crate the reference set has added since this project was set up: declared below,
+            # and turned on here, or the `certora` build never compiles it.
+            plan.add_manifest_edit(
+                manifest_rel,
+                ExtendArray(
+                    ("features",), DEFAULT_FEATURE, tuple(f"dep:{c.name}" for c in missing)
+                ),
+                f"turn on the CVLR crates added since the project was set up "
+                f"({', '.join(c.name for c in missing)})",
+            )
         if len(missing) == len(wanted):
             plan.add_blocked(
                 Blocked(
@@ -976,7 +998,7 @@ def _plan_package_manifest(
             manifest_rel,
             AddEntries(
                 ("dependencies",),
-                tuple((c.name, _dependency(inherit=inherit, version=c.version)) for c in missing),
+                tuple((c.name, _dependency(inherit=inherit, crate=c)) for c in missing),
             ),
             "the CVLR dependencies a verification build compiles",
         )

@@ -136,6 +136,17 @@ recipes:
   file: recipes/cvlr-k11-state-the-analysis-cannot-size.md
   pushed_on:
   - error: 3005
+- id: K16
+  name: 'A stack array the analysis cannot index: `[3001]` in a wide-integer library'
+  triggers:
+  - A rule ends in `[3001]` access to an indeterminate stack location
+  - The `source:` of a pointer-analysis error is in the `uint` crate (`construct_uint!`) or another
+    `[u64; N]` bignum
+  - You are about to summarize, or ask for `inline_never` on, a caller of 256-bit arithmetic
+  channel: [EDIT, SKIP]
+  file: recipes/cvlr-k16-a-stack-array-the-analysis-cannot-index.md
+  pushed_on:
+  - error: 3001
 - id: K8
   name: 'A rule that times out: its shape first, then a bounded stand-in'
   triggers:
@@ -176,3 +187,15 @@ recipes:
   - status: SANITY_FAILED
   search_terms:
   - explain_vacuity
+- id: K15
+  name: 'A 128-bit fixed-point type the property is decided by: `narrow_fixed`'
+  triggers:
+  - The program keeps fractions in the `fixed` crate's 128-bit type (`FixedU128`, an alias such as
+    `Fraction`), and a property is decided by its multiplications and divisions
+  - A timed-out rule's statistics name `fixed`'s own `mul` or `div` as the dominant function, not a
+    wide integer of the program's own
+  channel: EDIT
+  file: recipes/cvlr-k15-a-narrower-fixed-point-type.md
+  search_terms:
+  - NarrowFixedU128
+  - narrow_lit

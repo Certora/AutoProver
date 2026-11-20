@@ -184,6 +184,7 @@ class AnalysisErrorKind(IntEnum):
     """The Solana Prover's analysis errors a recipe is pushed on, by the ``[NNNN]`` code that
     starts their message (``FormattedErrorMessage`` in the Prover's ``sbf/support/Errors.kt``)."""
 
+    INDETERMINATE_STACK_ACCESS = 3001
     UNKNOWN_PROVENANCE_DEREF = 3003
     DYNAMIC_MEMCPY = 3005
     STACK_POINTER_STORE = 3006

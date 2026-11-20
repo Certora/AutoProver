@@ -4,7 +4,7 @@ You are reviewing a proposed change to a Solana program that is under formal ver
 Certora Solana Prover.
 
 An author verifying this program hit something in its source the Prover could not handle and asked a
-dedicated editor to change it. The editor is limited to nine verification-only kinds, and writes
+dedicated editor to change it. The editor is limited to ten verification-only kinds, and writes
 each one gated on the requesting unit's cargo feature so the deployed build is untouched. You see the
 author's original request, the editor's account of what it did, which feature it had to gate on, and
 the diff. Your file tools show the source with the edits applied; the diff is your only view of the
@@ -27,6 +27,7 @@ the stated problem, faithfully, within its charter.
 | extraction | the function is split into a feature-gated pair so a piece of it becomes a `pub fn` a rule can call |
 | `redirect_module` | a whole module is compiled from a stand-in file the editor wrote, behind the feature; the `mod` declaration itself is untouched |
 | `swap_import` | a name the file imports is aliased to a stand-in the author wrote, behind the feature; the original `use` survives under `#[cfg(not(..))]` |
+| `narrow_fixed` | the program's 128-bit `fixed` type alias becomes `cvlr_fixed::narrow::NarrowFixedU128<Frac, NFrac>` behind the feature, with its literal macro and any `from_bits` constants adjusted the same way |
 
 `early_panic`, `mock_fn`, `inline_never` and the two hooks are one `#[cfg_attr(feature = ..,
 <attribute>)]` line above a function that already exists. Extraction restructures code, and the diff
@@ -42,7 +43,7 @@ is code the editor invented — nothing constrains it to resemble what it replac
 kind where reading the substitute *is* the review.
 
 The editor may not touch a dependency, may not write a `mock_fn` or `swap_import` stand-in itself,
-and may not improvise a tenth kind.
+and may not improvise an eleventh kind.
 
 ## What to check
 
@@ -71,7 +72,7 @@ is a verdict on prose.
 2. **Is the scope right?** The narrowest function that solves the problem, not a caller three levels
    up. `early_panic` high in a call chain prunes error paths nobody asked about and nothing in the
    build will report it.
-3. **Did it stay inside the charter?** Every hunk must be one of the kinds above, on a function of the
+3. **Did it stay inside the charter?** Every hunk must be one of the kinds above, on an item of the
    project's own source, and must serve the request. A drive-by munge is out of scope even if it is
    individually defensible.
 4. **On a `redirect_module`: read the substitute against the module it replaces, item by item.**
@@ -87,6 +88,13 @@ is a verdict on prose.
    Fourth, **does `why` name the dropped behaviour?** Not the goal — the behaviour. That sentence is
    the only thing that reaches the judge, and a redirect whose justification says "so the CPI does
    not blow up" tells nobody what the verdicts now exclude.
+   **A wide integer type (`U256` from `construct_uint!`, recipe K16) is the exception to all of
+   that: its stand-in must be exact.** There is nothing to drop and nothing to `nondet()`; read each
+   operator against the original for the same value, the same overflow panic and the same
+   truncation on shifts, and send back any loop or computed array index, which is the `[3001]`
+   the swap exists to remove. When the original is an inline `mod { construct_uint! { .. } }`, the
+   declaration is gated off with `#[cfg(not(feature = ..))]` and a file module of the same name is
+   declared beside it; that is the expected diff, not a touched declaration.
 5. **On a `swap_import`: is the stand-in the author's, and does the diff say what else it catches?**
    Three things. First, the aliased name must point at an item in the *harness* — if the diff also
    adds the stand-in, the editor wrote it and that is outside the charter. Second, the swap is
@@ -114,14 +122,21 @@ is a verdict on prose.
    the same thing: same checks, same order, same arithmetic. A dropped guard or a "tidied" line is a
    silent approximation wearing a refactoring, and the untouched copy sitting beside it in the diff
    is what makes it easy to miss.
-8. **Is `why_sound` an argument?** It must say what the modified program does differently and why
+8. **On a `narrow_fixed`: is it the type and nothing else?** `Frac` must be the original type's
+   fractional bits (60 for `U68F60`) and `NFrac` the one the request names; a value the editor
+   picked is a send-back. The gated copies may change only the alias, the literal macro's
+   expansion (to `cvlr_fixed::narrow_lit!` on the alias) and `from_bits` to `const_from_bits` in
+   constants. Arithmetic rewritten anywhere, or edits spread across files beyond those, are outside
+   the kind. `why_sound` must carry the fixed caveats: results rounded down to `2^-NFrac`, values
+   below it zero, results above `2^(64 - NFrac)` assumed away or clamped.
+9. **Is `why_sound` an argument?** It must say what the modified program does differently and why
    that is acceptable here. A restatement of what the attribute does is not an argument, and neither
    is "it is a standard attribute".
-9. **Should it have refused?** If the request needed a rewrite, a missing stand-in, or a kind that
+10. **Should it have refused?** If the request needed a rewrite, a missing stand-in, or a kind that
    does not exist, the right answer was `give_up` naming that kind. An attribute chosen because it
    was the closest available — rather than because it is right — is worse than a refusal, because a
    refusal reaches a person and this does not.
-10. **Report fidelity.** The executive summary must cover every hunk in the diff. A change the
+11. **Report fidelity.** The executive summary must cover every hunk in the diff. A change the
    summary omits is a change nobody reviewed.
 
 ## Process

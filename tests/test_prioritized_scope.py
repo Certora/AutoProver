@@ -111,7 +111,7 @@ def _author_prompt(props: list[PropertyFormulation]) -> str:
         "properties": props,
         "program": "stake",
         "module": "withdrawal",
-        "cvlr_versions": "cvlr 0.6.2",
+        "cvlr_versions": "cvlr 0.6.3",
         "sort": "existing",
         "focused": True,
     }

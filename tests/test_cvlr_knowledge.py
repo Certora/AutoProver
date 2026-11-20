@@ -652,7 +652,7 @@ def test_the_author_knows_the_charter_without_holding_the_tool():
     prompt = _flat(_author_system_prompt())
     assert "code_editor(request)" in prompt
     assert "You do not make it" in prompt
-    assert "charter is nine kinds" in prompt
+    assert "charter is ten kinds" in prompt
     assert "The editor can refuse, and a refusal is information" in prompt
     # early_panic must not be sold as the answer to the one thing it cannot do.
     assert "does **not** help an acceptance property" in prompt
@@ -685,7 +685,7 @@ def test_every_kind_the_editor_offers_is_named_to_the_author():
     prompt = _flat(_author_system_prompt())
     for kind in (
         "early_panic", "mock_fn", "inline_never", "hook_on_entry", "hook_on_exit",
-        "redirect_module", "swap_import",
+        "redirect_module", "swap_import", "narrow_fixed",
     ):
         assert kind in prompt, kind
     assert "an extraction" in prompt
@@ -948,3 +948,50 @@ def test_the_analysis_is_told_not_to_describe_a_computation_by_its_formula():
 
     text = _flat(load_jinja_template("solana/analysis_prompt.j2", has_doc=False))
     assert "Do not give the formula or its constants" in text
+
+
+def test_the_narrow_fixed_point_kind_carries_its_caveats_to_the_judge():
+    """`narrow_fixed` changes every result in the unit, by a bounded and known amount. The judge is
+    where that becomes a verdict, so the three consequences have to be stated there: rounding is
+    unprovable, small factors vanish, and large amounts are assumed away."""
+    prompt = _flat(_judge_system_prompt())
+    assert "narrow_fixed" in prompt
+    assert "A property about rounding, precision or dust cannot have a green verdict" in prompt
+    assert "A value below `2^-NFrac` is zero" in prompt
+    assert "cvlr_satisfy!" in prompt
+
+
+def test_the_author_is_sent_to_k15_before_asking_for_a_narrower_type():
+    """The recipe holds the choice of `NFrac` and the witness obligation; the editor refuses a
+    request that names no `NFrac`, so the author has to have read it first."""
+    assert "recipe K15" in _flat(_author_system_prompt())
+    recipe = _recipe("K15")
+    assert "NarrowFixedU128" in recipe
+    assert "Decide it when the unit starts" in recipe
+    assert "cvlr_satisfy!" in recipe
+
+
+def test_k15_says_narrowing_does_not_reach_a_wide_integer_built_from_the_bits():
+    """The narrow type keeps the wide encoding, so a program's own `U256` arithmetic on a value's
+    bits keeps its cost. A unit narrowed on that program's valuation properties got no verdict from
+    it, and K16 used to name K15 as the lever after its redirect."""
+    recipe = _recipe("K15")
+    assert "What it does not reach: wide arithmetic on the type's bits" in recipe
+    assert "uint_types::U256::div_impl" in recipe
+    assert "K15's narrower type is the next lever" not in _recipe("K16")
+    assert "narrowing does not reach it" in _recipe("K8")
+
+
+def test_an_indeterminate_stack_access_pushes_k16():
+    """`[3001]` on 256-bit arithmetic is cleared by redirecting the integer type, and summaries do
+    not clear it. Without the push, an author spent submissions on summaries and an `inline_never`
+    edit and skipped every property that went through the type."""
+    from composer.kb.kb_context import ErrorSymptom, recipes_pushed_on
+    from composer.prover.ptypes import AnalysisErrorKind
+
+    pushed = recipes_pushed_on({ErrorSymptom(error=AnalysisErrorKind.INDETERMINATE_STACK_ACCESS)})
+    assert [r.id for r in pushed] == ["K16"]
+    recipe = _recipe("K16")
+    assert "redirect_module" in recipe
+    assert "exactly the same values with the same panics" in recipe
+    assert "Read K16" in _recipe("K10")
