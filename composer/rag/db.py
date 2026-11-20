@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from typing import AsyncIterator, cast, Any, LiteralString, override, TYPE_CHECKING
+from collections.abc import Sequence
 from dataclasses import dataclass
 import asyncio
 import logging
@@ -52,14 +53,22 @@ DEFAULT_CONNECTION: str = f"postgresql://rag_user:rag_password@{_RAG_HOST}:{_RAG
 SANITY_DEFAULT_CONNECTION: str = f"postgresql://extended_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 FOUNDRY_DEFAULT_CONNECTION: str = f"postgresql://foundry_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
 CVLR_DEFAULT_CONNECTION: str = f"postgresql://cvlr_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
+CVLR_API_DEFAULT_CONNECTION: str = (
+    f"postgresql://cvlr_api_rag_user:rag_password@{_RAG_HOST}:{_RAG_PORT}/rag_db"
+)
 
 # Logical knowledge-base tag -> default DB connection, for corpora ingested by the generic importer
 # (`composer.scripts.rag_import`). The tag is the one the manifest carries (== a wheel's
 # `rag_db_default`), so the import target and the runtime search tools resolve by one name —
-# `composer.tools.rag_env` requires both halves before a tag is usable. Empty until the first such
-# corpus lands with the application that declares it; the CVL/Foundry builders use the constants
-# above instead.
-KNOWLEDGE_BASES: dict[str, str] = {}
+# `composer.tools.rag_env` requires both halves before a tag is usable. The CVL/Foundry builders
+# predate the importer and use the constants above instead.
+#
+# `cvlr_api_kb` is here for the importer alone: `composer.scripts.cvlr_api_docs` emits a manifest
+# carrying that tag. No wheel declares it, so it has no `rag_env` factory: a caller opens it by
+# connection and hands it to `composer.tools.cvlr_api_rag.get_tools`.
+KNOWLEDGE_BASES: dict[str, str] = {
+    "cvlr_api_kb": CVLR_API_DEFAULT_CONNECTION,
+}
 
 
 type _RagHeader = str | None
@@ -96,6 +105,14 @@ class ComposerRAGDB(ABC):
     @abstractmethod
     async def get_manual_section(self, headers: list[str]) -> str | None:
         """Retrieve full section content by exact headers."""
+        ...
+
+    @abstractmethod
+    async def manual_headers(self, prefix: Sequence[str]) -> list[list[str]]:
+        """The header path of every section at or below ``prefix``, each once, in no order.
+
+        The exact counterpart of :meth:`search_manual_keywords`, for a caller that knows the
+        header it wants rather than words in the section's text."""
         ...
 
     
@@ -430,6 +447,22 @@ class PostgreSQLRAGDatabase(ComposerRAGDB):
                 parts.append(await self._replace_manual_code_refs(cur, row[1], row[0]))
             return "\n".join(parts)
 
+    @override
+    async def manual_headers(self, prefix: Sequence[str]) -> list[list[str]]:
+        if len(prefix) > 6:
+            raise ValueError("a header path has at most 6 levels")
+        conditions = " AND ".join(f"h{i} = %s" for i in range(1, len(prefix) + 1)) or "TRUE"
+        async with self._get_connection() as conn:
+            cur = await conn.execute(
+                cast(
+                    LiteralString,
+                    f"SELECT DISTINCT h1, h2, h3, h4, h5, h6 FROM manual_sections WHERE {conditions}",
+                ),
+                tuple(prefix),
+            )
+            return [[h for h in row if h is not None] for row in await cur.fetchall()]
+
+
 class ChromaRAGDatabase(ComposerRAGDB):
     """ChromaDB-based RAG database (file-based, no PostgreSQL required)"""
 
@@ -728,6 +761,18 @@ class ChromaRAGDatabase(ComposerRAGDB):
 
         parts = sorted(filtered, key=lambda x: cast(int, x[1].get('part', 0)))
         return "\n".join(doc for doc, _ in parts)
+
+    @override
+    async def manual_headers(self, prefix: Sequence[str]) -> list[list[str]]:
+        if len(prefix) > 6:
+            raise ValueError("a header path has at most 6 levels")
+        conditions = " AND ".join(f"h{i} = ?" for i in range(1, len(prefix) + 1)) or "1"
+        async with self._conn() as conn:
+            cursor = await conn.execute(
+                f"SELECT DISTINCT h1, h2, h3, h4, h5, h6 FROM sections_fts WHERE {conditions}",
+                tuple(prefix),
+            )
+            return [[h for h in row if h] for row in await cursor.fetchall()]
 
 @asynccontextmanager
 async def rag_context(

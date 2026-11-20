@@ -24,3 +24,11 @@ for target in "$doc_dir"/docs/{cvl,solana,prover,user-guide}/ ; do
     sphinx-build -M singlehtml . tmp
     cp tmp/singlehtml/index.html "$host_dir/$(basename "$target").html"
 done
+
+# The revision every HTML file above was built from. The clone is deleted on exit, so this is the
+# HTML's only record of its origin; populate_cvlr_rag.sh prints it when it ingests the Solana
+# manual. Written last, so a failed build leaves the previous HTML under the previous stamp.
+printf 'Certora/Documentation %s (%s)\n' \
+    "$(git -C "$doc_dir" rev-parse HEAD)" \
+    "$(git -C "$doc_dir" log -1 --format=%cI)" \
+    > "$host_dir/PROVENANCE"
