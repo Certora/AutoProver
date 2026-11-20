@@ -651,11 +651,18 @@ pub fn rule_increment_adds_more(e: Env) {
     cvlr_assert!(returned > before + by);
 }
 
+// Vacuous in the way the wasm sanity check can see. The check runs after the
+// optimizer, so two direct bounds on one value (`by < 10 && by > 20`) are
+// resolved before it looks and the rule reports VERIFIED — measured on a real
+// job. A cycle of comparisons over three values reaches the solver.
 #[rule]
 pub fn rule_increment_of_nothing(e: Env) {
     let by: u64 = nondet();
-    cvlr_assume!(by < 10);
-    cvlr_assume!(by > 20);
+    let lo: u64 = nondet();
+    let hi: u64 = nondet();
+    cvlr_assume!(lo < by);
+    cvlr_assume!(by < hi);
+    cvlr_assume!(hi < lo);
     let returned = crate::Counter::increment(e, by);
     cvlr_assert!(returned == by);
 }
