@@ -1,8 +1,9 @@
 # AutoProve Property Generators
 
 A property generator replaces the pipeline's own system analysis and per-component
-property inference. It lives in another package. A run uses the native analysis and
-inference unless it names a generator:
+property inference. It usually lives in another package; one, `user-properties`, ships with
+this package (see below). A run uses the native analysis and inference unless it names a
+generator:
 
 ```
 console-autoprove … --property-generator <name>
@@ -88,6 +89,53 @@ raises, as for a plugin or a run mode.
 
 The driver does not cache the generator's result. A generator caches its own work under
 `ctx.run.ctx`, or re-runs on every run. Exceptions from `generate()` fail the run.
+
+## The `user-properties` generator
+
+This package ships one generator, `user-properties` (`composer/pipeline/user_properties.py`). It
+takes the properties from JSON files a person writes, and calls no model.
+
+```
+AUTOPROVER_USER_PROPERTIES=certora/suites/rounding.properties.json \
+  console-autoprove … --property-generator user-properties
+```
+
+`AUTOPROVER_USER_PROPERTIES` names the file, relative to the project root. The run takes the
+**suite** that file defines: its own properties and those of every file it imports.
+
+```json
+{
+  "imports": ["common.properties.json"],
+  "groups": [{"name": "Rounding", "description": "How shares are rounded on mint and burn."}],
+  "properties": [
+    {"id": "burn_rounding_favors_vault", "description": "Burned shares are worth at least the assets paid out.",
+     "sort": "safety_property", "group": "Rounding"}
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `imports` | Other properties files, as paths relative to this file. Each brings in all of its properties and groups, and those of the files it imports. Optional. |
+| `groups` | Each group's `name` and an optional `description`. Optional. |
+| `properties` | Each property's `id` (its title, unique in the suite), `description`, `sort` (`invariant`, `safety_property` or `attack_vector`; default `safety_property`) and optional `group`. |
+
+Each group becomes one component of the main contract, with the group's description. A property
+without a group goes to the component `Properties`. The system model holds the main contract and
+these components and nothing else: the components have no entry points, state or interactions,
+so a step that reads them (the native per-component prompts) has only the group's name and
+description to go on.
+
+A property is defined in one file. Suites that share properties import the file that defines
+them, and an aggregate suite can be a file with only `imports`. Loading a suite fails on:
+
+* a cycle of imports;
+* an id that two files of the suite define (a file reached along two import paths counts once);
+* a group that two files of the suite describe differently (a group named without a description
+  takes the description another file gives).
+
+Name every properties file `*.properties.json` (`PROPERTY_FILE_SUFFIX`). A tool that reads a
+repo's other suites finds them by that name.
 
 ## The `property_generation` run mode
 
