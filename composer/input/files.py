@@ -46,8 +46,8 @@ class ContentRenderer(Protocol):
         *, cache_level: CacheLevel = CacheLevel.NONE
     ) -> dict:
         """Carry the bytes in the request itself, for providers with no Files
-        API. The mirror of :meth:`file_block`; a provider implements one or the
-        other, matching what its uploader produces."""
+        API. The mirror of :meth:`file_block`; a provider implements at least
+        the one matching what its uploader produces."""
         ...
 
 # ---------------------------------------------------------------------------
@@ -462,7 +462,9 @@ class UploaderBase(ABC):
         - Text files (no NUL bytes in the first 8 KiB, and no known
           binary suffix) become ``InMemoryTextFile`` so the content
           stays visible in the prompt for transcript debuggability.
-        - Binary files go through the Files API as ``UploadedFile``.
+        - Binary files take this provider's binary shape
+          (:meth:`_binary_document`): an ``UploadedFile`` on the Files
+          API, or an ``InMemoryBytesFile`` for a provider without one.
 
         Returns ``None`` if ``path`` doesn't point at a regular file."""
 
@@ -482,8 +484,9 @@ class UploaderBase(ABC):
         self, basename: str, raw: bytes
     ) -> Document:
         """Upload in-memory ``raw`` bytes (e.g. an audit-restored binary
-        document) to the Files API, reusing a cached upload by CRC. The
-        bytes-sourced analogue of :meth:`upload_file_if_needed`."""
+        document) to the Files API, reusing a cached upload by CRC, or, for
+        a provider without a Files API, carry them inline. The bytes-sourced
+        analogue of :meth:`upload_file_if_needed`."""
         return await self._binary_document(
             await _file_data(basename=basename, data=raw)
         )
@@ -496,7 +499,8 @@ class UploaderBase(ABC):
     async def document_from(self, src: Uploadable) -> Document:
         """Rehydrate an ``Uploadable`` (e.g. an audit-restored handle) into a
         renderable ``Document``: text stays inline as ``InMemoryTextFile``;
-        binary goes through the Files API for the active provider."""
+        binary takes the active provider's binary shape (see
+        :meth:`upload_bytes_if_needed`)."""
         text = src.string_contents
         if text is not None:
             return InMemoryTextFile(basename=src.basename, string_contents=text, renderer=self.renderer)

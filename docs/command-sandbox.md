@@ -461,8 +461,9 @@ the sandbox is unavailable: refuse to run, loudly, rather than run untrusted nat
    `launcher` provider by default (override with `COMPOSER_SANDBOX_PROVIDER=none`). Validated:
    - **Part A (escape suite) — green** ([tests/test_sandbox_escape.py](../tests/test_sandbox_escape.py)):
      a `rustc`-compiled malicious program run through the real launcher has every vector *denied*
-     (secret env, `/proc/<ppid>/environ`, host file outside the workdir, external TCP, and
-     `169.254.169.254`), with an unconfined control confirming the leaks would otherwise happen.
+     (secret env, `/proc/<ppid>/environ`, host file outside the workdir, external TCP,
+     `169.254.169.254`, and the AWS credential sources listed in §10 A), with an unconfined control
+     confirming the leaks would otherwise happen.
    - **Part B (the legitimate path) — green when it was validated, and now lives with the
      consumer**: a real `cargo-build-sbf` of a Solana program under the launcher (offline, confined)
      produced the `.so` — this is what caught the relative-policy-path bug, so grants must be
@@ -506,6 +507,13 @@ consuming application.
   before the run; the harness (a) reads `std::env::var("ANTHROPIC_API_KEY")` and (b) tries to read
   it out-of-band from `/proc/<ppid>/environ`, writing whatever it finds to a workdir file. Assert
   the value is **absent** by both routes.
+- **Reach the job's AWS credentials** — AutoProver's own process may hold an AWS role (for
+  example to call Claude on Amazon Bedrock), so the confined program must not reach it. Plant fake
+  `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`,
+  `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` and `AWS_CONTAINER_AUTHORIZATION_TOKEN` in AutoProver's
+  env; the harness lists every `AWS_*` name it can see and connects to the ECS/Batch container
+  credential endpoint `169.254.170.2` and to the EC2 metadata endpoint over IPv6
+  (`[fd00:ec2::254]`). Assert **no** `AWS_*` name is visible and **both** connections fail.
 - **Read a host file outside the workdir** — the harness tries to open `/etc/passwd` and a file in
   the real project root *outside* the granted workdir. Assert **permission denied**.
 - **Reach the network** — the harness tries to connect to an external host **and** to

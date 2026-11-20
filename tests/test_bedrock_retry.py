@@ -1,0 +1,220 @@
+"""Claude on Bedrock: the ``max_tokens`` cap, and which failures are retried.
+
+Bedrock admits a request against the token quota by its input plus its ``max_tokens``, so
+Bedrock requests carry a capped ``max_tokens``; the Anthropic API path keeps the configured
+value. Bedrock errors are retried by their HTTP status, by the SDK and then by
+``AnthropicService.should_retry``, as on the Anthropic API.
+
+Everything runs offline against an ``httpx.MockTransport``. See composer/llm/bedrock.py and
+composer/llm/anthropic.py."""
+
+from typing import Any
+
+import anthropic
+import httpx
+import pytest
+from langchain_anthropic import ChatAnthropic
+from langchain_aws import ChatAnthropicBedrock
+
+from composer.llm.anthropic import AnthropicModelProvider, AnthropicService
+from composer.llm.bedrock import BACKEND_ENV_VAR, DEFAULT_MAX_TOKENS, MAX_TOKENS_ENV_VAR
+
+from tests.test_bedrock_backend import (
+    _EVENT_STREAM, _MODEL, _REGION, _Options, _build, _event_stream, _exception_frame,
+    _mock_bedrock, _stream_body, _stream_events, bedrock_env,
+)
+
+__all__ = ["bedrock_env"]  # the fixture, imported for the tests below
+
+_MAX_RETRIES = 2
+
+
+def _svc() -> AnthropicService:
+    return AnthropicService()
+
+
+@pytest.fixture
+def no_retry_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the SDK's retry loop, without its backoff delays."""
+    monkeypatch.setattr(
+        anthropic.AsyncAnthropicBedrock, "_calculate_retry_timeout",
+        lambda self, *args, **kwargs: 0.0,
+    )
+
+
+# --- max_tokens -----------------------------------------------------------------------
+
+
+def test_bedrock_caps_max_tokens_by_default(bedrock_env) -> None:
+    llm = _build()
+    assert isinstance(llm, ChatAnthropicBedrock)
+    assert llm.max_tokens == DEFAULT_MAX_TOKENS
+    assert llm._get_request_payload("hi")["max_tokens"] == DEFAULT_MAX_TOKENS
+
+
+def test_bedrock_max_tokens_cap_from_env(bedrock_env, monkeypatch) -> None:
+    monkeypatch.setenv(MAX_TOKENS_ENV_VAR, "20000")
+    assert _build().max_tokens == 20_000
+
+
+def test_bedrock_keeps_a_smaller_configured_max_tokens(bedrock_env) -> None:
+    assert _build(tokens=8_000).max_tokens == 8_000
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "lots"])
+def test_bedrock_max_tokens_cap_must_be_positive(bedrock_env, monkeypatch, value: str) -> None:
+    monkeypatch.setenv(MAX_TOKENS_ENV_VAR, value)
+    with pytest.raises(ValueError, match=f"{MAX_TOKENS_ENV_VAR}=.*positive number of tokens"):
+        _build()
+
+
+def test_anthropic_path_keeps_configured_max_tokens(monkeypatch) -> None:
+    monkeypatch.delenv(BACKEND_ENV_VAR, raising=False)
+    monkeypatch.setenv(MAX_TOKENS_ENV_VAR, "1000")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "not-used")
+    llm = _build()
+    assert type(llm) is ChatAnthropic
+    assert llm.max_tokens == 128_000
+
+
+def _build_budgeted(tokens: int = 128_000, interleaved_thinking: bool = False) -> Any:
+    # A model before 4.6, which thinks within a fixed budget.
+    return AnthropicModelProvider.create(
+        "claude-sonnet-4-5",
+        _Options(thinking_tokens=16_384, tokens=tokens, interleaved_thinking=interleaved_thinking),
+    ).builder_for()
+
+
+def test_bedrock_thinking_budget_stays_below_the_cap(bedrock_env) -> None:
+    payload = _build_budgeted()._get_request_payload("hi")
+    assert payload["max_tokens"] == DEFAULT_MAX_TOKENS
+    assert payload["thinking"] == {"type": "enabled", "budget_tokens": 16_384}
+
+
+def test_bedrock_thinking_budget_over_the_cap_fails_when_built(bedrock_env, monkeypatch) -> None:
+    monkeypatch.setenv(MAX_TOKENS_ENV_VAR, "16000")
+    with pytest.raises(ValueError, match=f"thinking budget of 16384.*{MAX_TOKENS_ENV_VAR}"):
+        _build_budgeted()
+
+
+def test_bedrock_interleaved_thinking_budget_may_exceed_the_cap(bedrock_env, monkeypatch) -> None:
+    # With interleaved thinking the budget spans a whole turn, so it may exceed max_tokens.
+    monkeypatch.setenv(MAX_TOKENS_ENV_VAR, "16000")
+    llm = _build_budgeted(interleaved_thinking=True)
+    payload = llm._get_request_payload("hi")
+    assert payload["max_tokens"] == 16_000
+    assert payload["thinking"] == {"type": "enabled", "budget_tokens": 16_384}
+    assert "interleaved-thinking-2025-05-14" in llm.betas
+
+
+# --- HTTP errors ------------------------------------------------------------------------
+
+
+def _error(status: int, error_type: str, message: str = "...") -> httpx.Response:
+    """An InvokeModel error response: the exception named in the ``x-amzn-errortype``
+    header, and a body with a ``message``."""
+    return httpx.Response(
+        status, headers={"x-amzn-errortype": error_type}, json={"message": message}
+    )
+
+
+async def _invoke_failing(
+    monkeypatch: pytest.MonkeyPatch, response: httpx.Response
+) -> tuple[Exception, int]:
+    """Send one request to a Bedrock endpoint that always answers ``response``; return the
+    exception the chat model raised and how many attempts the SDK made."""
+    rec = _mock_bedrock(monkeypatch, lambda _: response)
+    llm = ChatAnthropicBedrock(
+        region_name=_REGION, model=f"global.anthropic.{_MODEL}",
+        max_tokens_to_sample=1024,
+        max_retries=_MAX_RETRIES, streaming=True,
+    )
+    with pytest.raises(Exception) as info:
+        await llm.ainvoke("hi")
+    return info.value, len(rec.requests)
+
+
+# Bedrock's own error names, and the Anthropic ones the same statuses carry elsewhere.
+@pytest.mark.parametrize("status, error_type", [
+    (429, "ThrottlingException"),
+    (429, "ModelNotReadyException"),
+    (429, "rate_limit_error"),
+    (500, "InternalServerException"),
+    (503, "ServiceUnavailableException"),
+    (408, "ModelTimeoutException"),
+    (529, "overloaded_error"),
+])
+@pytest.mark.asyncio
+async def test_transient_bedrock_status_is_retried(
+    bedrock_env, monkeypatch, no_retry_sleep, status: int, error_type: str
+) -> None:
+    exc, attempts = await _invoke_failing(monkeypatch, _error(status, error_type))
+    assert isinstance(exc, anthropic.APIStatusError)
+    assert exc.status_code == status
+    assert attempts == _MAX_RETRIES + 1
+    assert _svc().should_retry(exc) is True
+
+
+@pytest.mark.parametrize("status, error_type, cls", [
+    (400, "ValidationException", anthropic.BadRequestError),
+    (400, "invalid_request_error", anthropic.BadRequestError),
+    (403, "AccessDeniedException", anthropic.PermissionDeniedError),
+    (404, "ResourceNotFoundException", anthropic.NotFoundError),
+    # A request over Bedrock's 20 MB cap fails as it is; nothing is dropped from it.
+    (413, "ValidationException", anthropic.APIStatusError),
+    (424, "ModelErrorException", anthropic.APIStatusError),
+])
+@pytest.mark.asyncio
+async def test_deterministic_bedrock_status_is_not_retried(
+    bedrock_env, monkeypatch, no_retry_sleep, status: int, error_type: str, cls: type
+) -> None:
+    message = f"{error_type} detail"
+    exc, attempts = await _invoke_failing(monkeypatch, _error(status, error_type, message))
+    assert type(exc) is cls
+    assert attempts == 1
+    assert _svc().should_retry(exc) is False
+    # Bedrock's own explanation reaches the caller.
+    assert message in str(exc)
+
+
+# --- errors inside a stream -----------------------------------------------------------
+
+
+def _stream_ending_with_exception(name: str) -> httpx.Response:
+    """A stream that Bedrock ends with an exception frame after the first event."""
+    body = _event_stream(_stream_events(_MODEL)[:1])
+    return httpx.Response(200, headers=_EVENT_STREAM, content=body + _exception_frame(name, "..."))
+
+
+# The SDK raises an exception frame inside a stream as a plain ValueError, which the run does
+# not retry, whatever the exception. How often Bedrock does this is to be seen live.
+@pytest.mark.parametrize("name", ["ThrottlingException", "ValidationException"])
+@pytest.mark.asyncio
+async def test_exception_inside_a_stream_is_not_retried(
+    bedrock_env, monkeypatch, name: str
+) -> None:
+    rec = _mock_bedrock(monkeypatch, lambda _: _stream_ending_with_exception(name))
+    with pytest.raises(ValueError, match=name) as info:
+        await _build().ainvoke("hi")
+    assert len(rec.requests) == 1
+    assert _svc().should_retry(info.value) is False
+
+
+@pytest.mark.parametrize("error_type, transient", [
+    ("overloaded_error", True),
+    ("invalid_request_error", False),
+])
+@pytest.mark.asyncio
+async def test_error_event_inside_a_stream(
+    bedrock_env, monkeypatch, error_type: str, transient: bool
+) -> None:
+    body = _event_stream([
+        *_stream_events(_MODEL)[:1],
+        {"type": "error", "error": {"type": error_type, "message": "..."}},
+    ])
+    rec = _mock_bedrock(monkeypatch, lambda _: httpx.Response(200, headers=_EVENT_STREAM, content=body))
+    with pytest.raises(anthropic.APIStatusError) as info:
+        await _build().ainvoke("hi")
+    assert info.value.status_code == 200
+    assert len(rec.requests) == 1
+    assert _svc().should_retry(info.value) is transient

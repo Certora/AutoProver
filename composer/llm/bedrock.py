@@ -1,0 +1,207 @@
+"""Backend selection for Claude, and the model-id mapping for Claude on Amazon Bedrock.
+
+Claude is reached either through the Anthropic API or through Amazon Bedrock's InvokeModel
+API on the ``bedrock-runtime`` endpoint, which takes the Anthropic Messages request body.
+``AUTOPROVER_LLM_BACKEND`` picks one per process.
+
+Model ids stay logical (``claude-opus-5-5``) everywhere outside the Bedrock chat model:
+CLI defaults, budgets, logs, pricing and usage records all key on them. Only the chat model
+carries the Bedrock id, which Bedrock puts in the request path. A Bedrock response names
+the model by its logical id, as the Anthropic API does.
+
+InvokeModel serves current Claude models only through a cross-Region inference profile,
+whose id is the Bedrock model id behind a routing prefix: ``global.`` lets Bedrock route a
+request to any commercial AWS region, a geography such as ``eu.`` keeps it inside that
+geography. ``AUTOPROVER_BEDROCK_INFERENCE_PROFILE`` picks the prefix
+(see :func:`inference_profile`).
+
+Bedrock has no Files API, so binary documents travel inline as base64 in every request
+that carries them, and Bedrock caps a request at 20 MB. A document that cannot be sent
+inline, being of a type a ``document`` block does not accept or over
+:data:`MAX_DOCUMENT_BYTES`, raises :class:`BedrockDocumentError` when it is rendered. A
+request over the cap fails with Bedrock's own error.
+
+Bedrock admits a request against the account's input-tokens-per-minute quota by its input
+tokens plus its ``max_tokens``, before the model has produced anything. A ``max_tokens``
+far above what a turn really produces therefore throttles a run before its real usage
+reaches the quota. ``AUTOPROVER_BEDROCK_MAX_TOKENS`` (default 128,000) caps ``max_tokens``
+on Bedrock requests, so an account with a small quota can reserve less per request; see
+:data:`DEFAULT_MAX_TOKENS`.
+
+Bedrock errors reach the run-wide retry policy as the Anthropic SDK raises them (see
+:meth:`composer.llm.anthropic.AnthropicService.should_retry`): throttling and server errors by
+their HTTP status, like on the Anthropic API.
+
+Kept free of langchain imports so the registry can use the id predicates cheaply. The chat
+model is langchain-aws's ``ChatAnthropicBedrock``, built in :mod:`composer.llm.anthropic`.
+"""
+
+import os
+from typing import Literal
+
+
+type LLMBackend = Literal["anthropic", "bedrock"]
+
+BACKEND_ENV_VAR = "AUTOPROVER_LLM_BACKEND"
+_DEFAULT_BACKEND: LLMBackend = "anthropic"
+_BACKENDS: tuple[LLMBackend, ...] = ("anthropic", "bedrock")
+
+# Searched in this order, matching how the AWS SDKs resolve a region from the environment.
+REGION_ENV_VARS = ("AWS_REGION", "AWS_DEFAULT_REGION")
+
+# Bedrock names a model ``<vendor>.<model>``, optionally behind a geography prefix for a
+# cross-region inference profile (``us.anthropic.<model>``). Claude's vendor segment:
+_BEDROCK_VENDOR = "anthropic"
+
+
+def llm_backend() -> LLMBackend:
+    """The backend ``AUTOPROVER_LLM_BACKEND`` selects; unset or empty means ``anthropic``.
+    The variable is read on every call, so a model uses the value in force when it is
+    built. Raises ``ValueError`` for any other value."""
+    raw = os.environ.get(BACKEND_ENV_VAR, "").strip().lower()
+    if not raw:
+        return _DEFAULT_BACKEND
+    match raw:
+        case "anthropic" | "bedrock":
+            return raw
+        case _:
+            raise ValueError(
+                f"{BACKEND_ENV_VAR}={os.environ[BACKEND_ENV_VAR]!r} is not a known LLM "
+                f"backend; expected one of: {', '.join(_BACKENDS)}"
+            )
+
+
+def bedrock_region() -> str:
+    """The AWS region Bedrock requests go to. Raises ``ValueError`` when none is set, so a
+    misconfigured job fails when its model is built, not on its first request."""
+    for var in REGION_ENV_VARS:
+        if region := os.environ.get(var, "").strip():
+            return region
+    raise ValueError(
+        f"{BACKEND_ENV_VAR}=bedrock needs an AWS region: set "
+        f"{' or '.join(REGION_ENV_VARS)}"
+    )
+
+
+INFERENCE_PROFILE_ENV_VAR = "AUTOPROVER_BEDROCK_INFERENCE_PROFILE"
+DEFAULT_INFERENCE_PROFILE = "global"
+"""The routing prefix when ``AUTOPROVER_BEDROCK_INFERENCE_PROFILE`` is unset. Every current
+Claude model has a ``global`` profile, and it costs about 10% less than a geographic one.
+Some models have no profile for some geographies (Fable 5 and 5.1 have no ``eu`` one)."""
+
+
+def inference_profile() -> str:
+    """The inference profile prefix of Bedrock requests (``global``, ``eu``, ``us``, ...).
+    Raises ``ValueError`` for a value that is not a single word of letters."""
+    raw = os.environ.get(INFERENCE_PROFILE_ENV_VAR, "").strip().lower()
+    if not raw:
+        return DEFAULT_INFERENCE_PROFILE
+    if not raw.isalpha():
+        raise ValueError(
+            f"{INFERENCE_PROFILE_ENV_VAR}={os.environ[INFERENCE_PROFILE_ENV_VAR]!r} is not an "
+            "inference profile prefix such as 'global' or 'eu'"
+        )
+    return raw
+
+
+INLINE_MEDIA_TYPES: frozenset[str] = frozenset({"application/pdf"})
+"""The media types a base64 ``document`` block accepts."""
+
+MAX_DOCUMENT_BYTES = 8_000_000
+"""The largest base64 size of one inline document in a Bedrock request. Every request of the
+conversation carries the document, so one near Bedrock's 20 MB request cap leaves no room
+for the rest of the conversation."""
+
+
+def base64_size(raw_size: int) -> int:
+    """The length of the base64 encoding of ``raw_size`` bytes, padding included."""
+    return 4 * ((raw_size + 2) // 3)
+
+
+class BedrockDocumentError(ValueError):
+    """A document cannot be sent inline to Claude on Bedrock: its type is one a ``document``
+    block does not accept, or it is over :data:`MAX_DOCUMENT_BYTES`."""
+
+
+def _positive_setting(var: str, default: int, unit: str) -> int:
+    raw = os.environ.get(var, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value <= 0:
+        raise ValueError(f"{var}={os.environ[var]!r} is not a positive number of {unit}")
+    return value
+
+
+MAX_TOKENS_ENV_VAR = "AUTOPROVER_BEDROCK_MAX_TOKENS"
+DEFAULT_MAX_TOKENS = 128_000
+"""The ``max_tokens`` cap on Bedrock requests when ``AUTOPROVER_BEDROCK_MAX_TOKENS`` is unset.
+
+A turn's output is its thinking plus its visible text and tool calls. On models before 4.6
+thinking takes a fixed budget, ``--thinking-tokens`` (16,384 by default), which has to stay
+below ``max_tokens``; on 4.6 and later thinking is adaptive and bounded only by
+``max_tokens``, so one turn of a property-writing agent can produce well over 100,000 tokens.
+The default matches composer's own 128,000 and the model limit, so by default no turn is cut
+off earlier on Bedrock than on the Anthropic API. Bedrock reserves ``max_tokens`` against the
+input-token quota when it admits a request; lowering this setting reserves less quota per
+request, at the price of turns that end with ``stop_reason`` ``max_tokens``."""
+
+
+def max_output_tokens() -> int:
+    """The ``max_tokens`` cap for Bedrock requests. Raises ``ValueError`` for a value that is
+    not a positive integer."""
+    return _positive_setting(MAX_TOKENS_ENV_VAR, DEFAULT_MAX_TOKENS, "tokens")
+
+
+def _arn_resource(model_id: str) -> str | None:
+    """The resource part of a Bedrock ARN (``arn:<partition>:bedrock:<region>:<account>:
+    <resource>``), or ``None`` if ``model_id`` is not one."""
+    parts = model_id.split(":", 5)
+    if len(parts) == 6 and parts[0] == "arn" and parts[2] == "bedrock":
+        return parts[5]
+    return None
+
+
+def _vendor_qualified_suffix(model_id: str) -> str | None:
+    """The model name after the ``anthropic`` vendor segment of a dotted Bedrock id
+    (``anthropic.claude-x`` or ``us.anthropic.claude-x``), or ``None`` if ``model_id`` has
+    no such segment. Claude's own ids contain no dot, so a dot only ever separates a
+    vendor or geography prefix."""
+    head, sep, rest = model_id.rpartition(f"{_BEDROCK_VENDOR}.")
+    if not sep or not rest:
+        return None
+    if head and not head.endswith("."):
+        # ``foo-anthropic.x``: the vendor segment must be a whole dotted component.
+        return None
+    return rest
+
+
+def is_bedrock_model_id(model_id: str) -> bool:
+    """Whether ``model_id`` is a Bedrock-native name (a Bedrock ARN, or a dotted
+    vendor-qualified id) rather than a logical one."""
+    return _arn_resource(model_id) is not None or _vendor_qualified_suffix(model_id) is not None
+
+
+_BEDROCK_MODEL_NAMES: dict[str, str] = {
+    "claude-haiku-4-5": "claude-haiku-4-5-20251001-v1:0",
+    "claude-haiku-4-5-20251001": "claude-haiku-4-5-20251001-v1:0",
+    "claude-opus-4-6": "claude-opus-4-6-v1",
+    "claude-opus-4-5": "claude-opus-4-5-20251101-v1:0",
+    "claude-opus-4-5-20251101": "claude-opus-4-5-20251101-v1:0",
+    "claude-sonnet-4-5": "claude-sonnet-4-5-20250929-v1:0",
+    "claude-sonnet-4-5-20250929": "claude-sonnet-4-5-20250929-v1:0",
+}
+"""The models whose Bedrock name is not their Anthropic id. Bedrock names Claude 4.6 Sonnet,
+4.7 and later, and the Claude 5 family by the Anthropic id itself."""
+
+
+def to_bedrock_model_id(logical: str, profile: str) -> str:
+    """The inference profile id for a logical Claude id: the Bedrock model name behind the
+    ``anthropic.`` vendor prefix and the ``profile`` routing prefix, such as
+    ``global.anthropic.claude-opus-5-5``."""
+    if is_bedrock_model_id(logical):
+        raise ValueError(f"{logical!r} is already a Bedrock model id, not a logical one")
+    return f"{profile}.{_BEDROCK_VENDOR}.{_BEDROCK_MODEL_NAMES.get(logical, logical)}"

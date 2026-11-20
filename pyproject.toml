@@ -56,6 +56,10 @@ dependencies = [
     # the report renderer's `markdown` jinja filter (also in the ragbuild group).
     "markdown-it-py>=3.0",
     "anthropic>=0.18.0",
+    # The Bedrock backend's chat model (requests go to InvokeModel on bedrock-runtime);
+    # the [anthropic] extra brings anthropic[bedrock], which signs them. 1.5 and later
+    # need a newer langchain-core than the pin above allows.
+    "langchain-aws[anthropic]>=1.4.6,<1.5",
     "openai>=1.50.0",
     "wcmatch>=8.5.0",
     "python-dotenv>=1.0.0",
