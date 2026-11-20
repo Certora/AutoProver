@@ -208,6 +208,9 @@ class RunOverlay:
     #: still applies.
     summaries: tuple[Path, ...] = ()
     purpose: ConfPurpose = CheckVerdicts()
+    #: The job group the job joins, so ``prover-cli --budget`` counts it with the others of a run.
+    #: ``None`` leaves the key unset.
+    group_id: str | None = None
 
 
 def solana_conf(tunable: TunableConf, run: RunOverlay) -> Conf:
@@ -217,6 +220,8 @@ def solana_conf(tunable: TunableConf, run: RunOverlay) -> Conf:
         "build_script": str(run.build_script),
         "msg": safe_msg(run.msg),
     }
+    if run.group_id is not None:
+        conf["group_id"] = run.group_id
     if run.summaries:
         conf["solana_summaries"] = [str(s) for s in run.summaries]
     match run.purpose:

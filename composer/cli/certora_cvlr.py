@@ -150,7 +150,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Assume every loop finishes within --loop-iter. Unsound: every verdict in the job "
         "then depends on it. Give the reason.",
     )
-    prove_.add_argument("--msg", help="The job's message on the Prover dashboard.")
+    prove_.add_argument(
+        "--msg",
+        help="The job's message on the Prover dashboard (default: the component, then the "
+        "package).",
+    )
+    prove_.add_argument(
+        "--group-id",
+        metavar="UUID",
+        help="Add the job to this job group, so `prover-cli --budget` counts it with the run's "
+        "other jobs.",
+    )
     prove_.add_argument(
         "--unsat-core",
         action="store_true",
@@ -285,6 +295,7 @@ async def _prove(args: argparse.Namespace) -> int:
         ),
         msg=args.msg,
         purpose=CollectUnsatCore() if args.unsat_core else CheckVerdicts(),
+        group_id=args.group_id,
     )
     try:
         outcome = await prove(

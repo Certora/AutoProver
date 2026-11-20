@@ -524,6 +524,15 @@ def test_the_env_files_are_left_for_the_build_manifest_to_supply():
     assert "solana_inlining" not in conf and "solana_summaries" not in conf
 
 
+def test_a_group_id_puts_the_job_in_that_group():
+    group = "8d9b7c1e-2f4a-4b6e-9c3d-1a2b3c4d5e6f"
+    assert _submission(group_id=group)["group_id"] == group
+
+
+def test_without_a_group_id_the_conf_names_none():
+    assert "group_id" not in _submission()
+
+
 def test_a_units_summary_file_is_named_when_the_run_passes_one():
     conf = _submission(summaries=(Path("envs/cvlr_summaries_vault.txt"),))
     assert conf["solana_summaries"] == ["envs/cvlr_summaries_vault.txt"]

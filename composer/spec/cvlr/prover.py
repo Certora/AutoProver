@@ -105,6 +105,8 @@ class Submission:
     #: unit. See :class:`~composer.spec.cvlr.conf.RunOverlay`.
     summaries: tuple[Path, ...] = ()
     purpose: ConfPurpose = CheckVerdicts()
+    #: See :class:`~composer.spec.cvlr.conf.RunOverlay`.
+    group_id: str | None = None
 
 
 def _sbf_build(session: CargoSession, submission: Submission) -> SbfBuild:
@@ -140,6 +142,7 @@ async def write_submission(session: CargoSession, submission: Submission, *, int
             msg=submission.msg,
             summaries=submission.summaries,
             purpose=submission.purpose,
+            group_id=submission.group_id,
         ),
     )
     conf_path = script.with_suffix(".conf")

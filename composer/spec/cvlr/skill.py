@@ -353,6 +353,8 @@ class ProveRequest:
     #: :class:`~composer.spec.cvlr.conf.CollectUnsatCore` reruns a rule reported vacuous with the
     #: vacuity check off, so that :func:`vacuity` can read the core of its proof.
     purpose: ConfPurpose = CheckVerdicts()
+    #: The job group the job joins (``prover-cli --budget`` counts a group's jobs).
+    group_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -419,8 +421,11 @@ async def prove(
         manifest_path=located.package_dir / "Cargo.toml",
         stem=module.stem
         + ("_unsat_core" if isinstance(request.purpose, CollectUnsatCore) else ""),
-        msg=request.msg or f"{located.package}: {module.module}",
+        # The module comes first: ``prover-cli --budget`` breaks a group's use down by the msg's
+        # first word.
+        msg=request.msg or f"{module.module} ({located.package})",
         purpose=request.purpose,
+        group_id=request.group_id,
         settings=request.settings,
         rules=request.rules,
         features=(DEFAULT_FEATURE, module.feature),

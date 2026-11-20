@@ -25,6 +25,7 @@ SUBCOMMANDS: dict[str, tuple[str, ...]] = {
         "--loop-iter",
         "--optimistic-loop",
         "--msg",
+        "--group-id",
         "--unsat-core",
     ),
     "wait": ("--for",),
