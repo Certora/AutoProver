@@ -14,5 +14,7 @@ values, so the constraint may accept or refuse any account. Two kinds of propert
 and cannot be stated: acceptance by validation that runs through a `seeds` constraint, which includes
 `init` on a PDA, and rejection *by the `seeds` constraint itself* ("a non-canonical vault is
 refused"). For either, `record_skip` naming the PDA summary as the reason, without spending a run to
-find it out. Rejection by the struct's other constraints — the signer, `mut`, `has_one` — is
+find it out. Do not try to build a success path through `try_accounts` on a struct with `init` or
+`seeds` either: no assumption on your side constrains what the summary returns, so no amount of
+setup makes that path reachable, and each attempt costs a job. Rejection by the struct's other constraints — the signer, `mut`, `has_one` — is
 unaffected: an input one of those refuses is refused whatever the derivation returned.

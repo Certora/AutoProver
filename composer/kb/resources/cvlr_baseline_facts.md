@@ -191,7 +191,8 @@ Two independent reasons, and the first is the one that matters:
   runtime rolls back every account mutation. So a panicking path cannot violate an invariant: there
   is no surviving state for the invariant to be false about. Pruning those paths is not a gap in the
   analysis, it is the analysis agreeing with the runtime. A reachable panic is an *availability*
-  concern, not a state-integrity one, and it is not a finding you can produce from a rule.
+  concern, not a state-integrity one: an assertion cannot report it, and only a reachability
+  probe (below) can.
 * **The switch is per-run, not per-rule.** Treating panics as assertion violations is a conf option,
   and this backend writes one conf per unit. Turning it on to state one panic-freedom property would
   make every *other* rule in the unit report its pruned panicking paths as violations. There is no
@@ -205,6 +206,30 @@ One thing this makes *more* important rather than less: if an unchecked operatio
 than panic, that is a genuine state-integrity bug and it is checkable — assert the post-state equals
 the mathematically correct value and the rule fails on the wrapping input. Whether a build wraps or
 panics is a profile setting (`overflow-checks`), so read it rather than assuming.
+
+**Anchor's `require!` panics in the verified build.** In Certora's fork of `anchor-lang`, which
+every Anchor program is verified against, `require!`, `require_eq!`, `require_neq!`,
+`require_keys_eq!`, `require_keys_neq!`, `require_gt!` and `require_gte!` call `panic!()` instead of
+returning `Err`. `err!`, `error!`, a handler's own `return Err(...)` and the account constraints
+`try_accounts` checks still return `Err`. So a path a `require!` refuses is pruned, not returned:
+- A rule of the form "a refused input returns `Err`" cannot observe a refusal made by `require!`. It
+  has no path to its assertion on the inputs `require!` refuses, so it is vacuous there, which is
+  no evidence the check exists.
+  State the refusal as "no success with that input": the handler returning `Ok` implies the
+  guarded condition held.
+- A rule of the form "this call always succeeds when ..." verifies even when an overflow or a
+  `require!` makes every such call panic, because those paths are pruned. It proves only "never
+  returns `Err`", and must say so.
+- The report says that verdicts are about the build with the forked Anchor.
+
+**Checking that a call can succeed: a reachability probe.** For a property that some call must be
+possible ("the owner can always withdraw the full balance"), pair the scoped rule above with a probe:
+the same pre-state assumptions, the call, then `cvlr_satisfy!(result.is_ok())`. A reached `satisfy`
+shows one input on which the call succeeds; an unreachable one shows that every such input panics or
+fails. To find the cause, write a second probe that differs in one input or one assumption (with and
+without an optional account, below and above a bound): the input whose probe stops reaching its
+`satisfy` names the panicking operation. An unreachable probe is a finding about availability:
+report it with the inputs the probe used, not as an attack.
 
 ## When the Prover cannot finish: nonlinear arithmetic
 
