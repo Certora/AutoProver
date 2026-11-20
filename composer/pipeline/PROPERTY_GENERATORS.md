@@ -162,6 +162,10 @@ rule is tagged with. It reads each spec with the standalone CVL parser, so it ne
 build, but it needs the Certora CLI's jars and Java. `--skip <dir>` leaves a directory out of the
 search; hidden directories and dependency and build trees are always left out.
 
+Each problem has a `kind` and, where it has one, a hint on how to fix it. A tool that reads tags
+its own way can check them the same way with `tag_problems`, which takes the tags per rule, the
+stray tags, the suite's ids and the project's properties files.
+
 ## The `property_generation` run mode
 
 `--run-mode property_generation` stops once `property_set.json` is written, as
