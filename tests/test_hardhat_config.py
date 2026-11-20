@@ -1,5 +1,6 @@
 """Unit tests for HardhatManager config extraction."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -106,3 +107,146 @@ def test_evm_version_emitted_in_certora_dict(manager: HardhatManager) -> None:
     assert config.to_certora_dict()["solc_evm_version"] == "paris"
     no_evm = manager._extract_config_from_json(EXPLICIT_CONFIG, "javascript")
     assert "solc_evm_version" not in no_evm.to_certora_dict()
+
+
+# When the config cannot be resolved through Node.js, the compiler settings come
+# from the build-info files of the project's own `hardhat compile`.
+
+
+def _write_build_info(
+    build_info_dir: Path,
+    name: str,
+    solc_version: str,
+    settings: dict,
+    n_sources: int = 1,
+    fmt: str = "hh-sol-build-info-1",
+    **extra: object,
+) -> None:
+    build_info_dir.mkdir(parents=True, exist_ok=True)
+    (build_info_dir / f"{name}.json").write_text(json.dumps({
+        "_format": fmt,
+        **extra,
+        "solcVersion": solc_version,
+        "input": {
+            "language": "Solidity",
+            "sources": {f"contracts/C{i}.sol": {"content": ""} for i in range(n_sources)},
+            "settings": {**settings, "outputSelection": {"*": {"*": ["abi"]}}},
+        },
+        "output": {},
+    }))
+
+
+@pytest.fixture
+def no_node(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(HardhatManager, "_extract_config_via_node", lambda self, config_file: None)
+
+
+def _hardhat_config(project: Path) -> Path:
+    config_file = project / "hardhat.config.ts"
+    config_file.write_text("export default {};\n")
+    return config_file
+
+
+def test_build_info_used_without_node(manager: HardhatManager, tmp_path: Path, no_node: None) -> None:
+    # The pinned solc, not the newest one the pragmas allow.
+    _write_build_info(
+        tmp_path / "artifacts" / "build-info", "a", "0.8.19",
+        {"optimizer": {"enabled": True, "runs": 100}, "viaIR": True, "evmVersion": "paris"},
+    )
+    config = manager.parse_config(_hardhat_config(tmp_path))
+    assert config.solc_version == "0.8.19"
+    assert config.optimizer is True
+    assert config.optimizer_runs == 100
+    assert config.via_ir is True
+    assert config.evm_version == "paris"
+
+
+def test_build_info_multiple_versions_leave_solc_unset(
+    manager: HardhatManager, tmp_path: Path, no_node: None
+) -> None:
+    build_info_dir = tmp_path / "artifacts" / "build-info"
+    _write_build_info(build_info_dir, "a", "0.8.19", {})
+    _write_build_info(build_info_dir, "b", "0.7.6", {})
+    assert manager.parse_config(_hardhat_config(tmp_path)).solc_version is None
+
+
+def test_build_info_largest_job_sets_the_settings(
+    manager: HardhatManager, tmp_path: Path, no_node: None
+) -> None:
+    build_info_dir = tmp_path / "artifacts" / "build-info"
+    _write_build_info(build_info_dir, "a", "0.8.19", {"evmVersion": "london"}, n_sources=1)
+    _write_build_info(build_info_dir, "b", "0.8.19", {"evmVersion": "paris"}, n_sources=5)
+    config = manager.parse_config(_hardhat_config(tmp_path))
+    assert config.solc_version == "0.8.19"
+    assert config.evm_version == "paris"
+
+
+def test_build_info_hardhat3_format(manager: HardhatManager, tmp_path: Path, no_node: None) -> None:
+    build_info_dir = tmp_path / "artifacts" / "build-info"
+    _write_build_info(build_info_dir, "a", "0.8.28", {"viaIR": True}, fmt="hh3-sol-build-info-1")
+    (build_info_dir / "a.output.json").write_text(json.dumps({
+        "_format": "hh3-sol-build-info-output-1", "id": "a", "output": {},
+    }))
+    config = manager.parse_config(_hardhat_config(tmp_path))
+    assert config.solc_version == "0.8.28"
+    assert config.via_ir is True
+
+
+def test_build_info_skips_files_of_another_format(
+    manager: HardhatManager, tmp_path: Path, no_node: None
+) -> None:
+    build_info_dir = tmp_path / "artifacts" / "build-info"
+    _write_build_info(build_info_dir, "a", "0.8.28", {})
+    _write_build_info(build_info_dir, "b", "0.7.6", {}, n_sources=9, fmt="not-a-build-info")
+    _write_build_info(build_info_dir, "c", "0.7.6", {}, n_sources=9, fmt="hh3-sol-build-info-1",
+                      compilerType="solx")
+    (build_info_dir / "broken.json").write_text("{not json")
+    assert manager.parse_config(_hardhat_config(tmp_path)).solc_version == "0.8.28"
+
+
+def test_build_info_output_is_not_parsed(manager: HardhatManager, tmp_path: Path, no_node: None) -> None:
+    build_info_dir = tmp_path / "artifacts" / "build-info"
+    build_info_dir.mkdir(parents=True)
+    head = json.dumps({
+        "_format": "hh-sol-build-info-1",
+        "solcVersion": "0.8.19",
+        "input": {"language": "Solidity", "sources": {}, "settings": {"viaIR": True}},
+    })
+    (build_info_dir / "a.json").write_text(head[:-1] + ', "output": {not json')
+    config = manager.parse_config(_hardhat_config(tmp_path))
+    assert config.solc_version == "0.8.19"
+    assert config.via_ir is True
+
+
+def test_build_info_non_object_is_skipped(manager: HardhatManager, tmp_path: Path, no_node: None) -> None:
+    build_info_dir = tmp_path / "artifacts" / "build-info"
+    _write_build_info(build_info_dir, "a", "0.8.28", {})
+    (build_info_dir / "b.json").write_text(json.dumps(["hh-sol-build-info-1", "0.7.6"]))
+    assert manager.parse_config(_hardhat_config(tmp_path)).solc_version == "0.8.28"
+
+
+@pytest.mark.parametrize("solc_version, settings", [
+    ("0.8.19/../../evil", {}),
+    ("0.8.19; rm -rf /", {}),
+    ("0.8", {}),
+    ("0.8.19", {"evmVersion": "paris --via-ir"}),
+    ("0.8.19", {"evmVersion": 7}),
+    ("0.8.19", {"viaIR": "true"}),
+    ("0.8.19", {"optimizer": {"enabled": 1}}),
+    ("0.8.19", {"optimizer": {"enabled": True, "runs": "200"}}),
+    ("0.8.19", {"optimizer": {"enabled": True, "runs": True}}),
+    ("0.8.19", {"optimizer": "on"}),
+])
+def test_build_info_with_malformed_values_is_skipped(
+    manager: HardhatManager, tmp_path: Path, no_node: None, solc_version: str, settings: dict
+) -> None:
+    build_info_dir = tmp_path / "artifacts" / "build-info"
+    _write_build_info(build_info_dir, "a", "0.8.28", {})
+    _write_build_info(build_info_dir, "b", solc_version, settings, n_sources=9)
+    assert manager.parse_config(_hardhat_config(tmp_path)).solc_version == "0.8.28"
+
+
+def test_defaults_without_node_or_build_info(manager: HardhatManager, tmp_path: Path, no_node: None) -> None:
+    config = manager.parse_config(_hardhat_config(tmp_path))
+    assert config.solc_version is None
+    assert config.via_ir is False
