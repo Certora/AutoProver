@@ -74,6 +74,7 @@ from composer.spec.source.report.schema import (
     ReportBackend, SourceEditRecord, VerificationArtifactRecord,
 )
 from composer.spec.source.report import build as report_build
+from composer.pipeline.run_failure import failure_report, run_failure
 from composer.spec.source.task_ids import (
     PROPERTY_GENERATION_TASK_ID, SYSTEM_ANALYSIS_TASK_ID, REPORT_TASK_ID,
 )
@@ -968,10 +969,17 @@ async def run_pipeline_inner[P: enum.Enum, FormT: BackendResult, H, A: ArtifactI
             task_info=TaskInfo(REPORT_TASK_ID, label="Report Extraction", phase=backend.core_phases["report"])
         )
         backend.artifact_store.write_report(report)
-    except Exception:
+    except Exception as exc:
         if report_build.RERAISE_REPORT_FAILURES:
             raise
         _log.warning("report phase failed (continuing)", exc_info=True)
+        # Continuing, because the run's verified deliverables are already on disk. The stand-in
+        # report says the run could not report its results, so a reader of report.json does not
+        # take a missing report for a run still in progress.
+        backend.artifact_store.write_report(failure_report(
+            contract_name=source.contract_name, backend=formalizer.backend_tag,
+            run_mode=run.run_mode.value, failure=run_failure(exc),
+        ))
 
     return _tally(outcomes + lost_at_extraction, run.run_mode, len(deprioritized))
 

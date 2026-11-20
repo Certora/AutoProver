@@ -39,8 +39,8 @@ from composer.spec.source.report.grouping import (
 )
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
-    AutoProverReport, ConfCoverage, CoverageReport, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
-    GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Outcome,
+    AutoProverReport, ConfCoverage, ConfRunRecord, ConfStatusCounts, CoverageReport, EvaluationSummary, PropertyCounts, RuleOutcomeCounts, SpecStatusCounts, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
+    GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Mutant, MutationReport, Outcome,
     PropertyCoverage, PropertyGroup, RuleFeedback, RuleVerdict, SeverityTier, SkippedClaim,
     SpecCoverageScore, DeprioritizedProperty, Prioritization, PursuedProperty,
 )
@@ -1337,16 +1337,27 @@ def _evaluate_report() -> AutoProverReport:
             rules_unchecked_before_completion=["users_own_rule"],
             methods_excluded={"revert_char": ["withdraw(uint256)"]},
             completion_conf="certora/confs/c-evaluate-completion.conf", complete=True,
+            status="orphaned",
+            runs=[ConfRunRecord(
+                conf="certora/confs/c.conf", status="ran",
+                prover_links=["https://prover.certora.com/output/1/a", "https://prover.certora.com/output/1/b"],
+            )],
         )],
         "coverage_scores": [SpecCoverageScore(
             name="static_coverage", score=0.625, views={"scene": 0.5, "main_contract": 0.75},
         )],
+        "evaluation_summary": EvaluationSummary(
+            specs=SpecStatusCounts(orphaned=1),
+            confs=ConfStatusCounts(in_scope=1, ran=1),
+            rules=RuleOutcomeCounts(good=1),
+            properties=PropertyCounts(total=2, attempted=1, faithfulness_exact=1),
+        ),
     })
 
 
-def test_schema_3_4_round_trips():
+def test_evaluate_statuses_and_summary_round_trip():
     report = _evaluate_report()
-    assert report.schema_version == "3.4"
+    assert report.schema_version == "3.7"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
@@ -1354,6 +1365,45 @@ def test_schema_3_4_round_trips():
     assert [r.name for r in reloaded.rules if r.ref not in referenced] == ["users_own_rule"]
     assert reloaded.properties[1].coverage is not None
     assert reloaded.properties[1].coverage.added_by_evaluator
+    assert len(reloaded.conf_coverage[0].runs[0].prover_links) == 2
+    assert reloaded.conf_coverage[0].status == "orphaned"
+    assert reloaded.conf_coverage[0].runs[0].status == "ran"
+    assert reloaded.evaluation_summary is not None
+    assert reloaded.evaluation_summary.confs == ConfStatusCounts(in_scope=1, ran=1)
+
+
+def test_conf_coverage_states_its_statuses() -> None:
+    with pytest.raises(PydanticValidationError):
+        ConfCoverage.model_validate({"spec": "s.spec", "confs": ["c.conf"], "complete": False})
+    with pytest.raises(PydanticValidationError):
+        ConfRunRecord.model_validate({"conf": "c.conf"})
+
+
+def test_conf_coverage_without_runs_loads() -> None:
+    # Reports written before schema 3.5 have no `runs`.
+    cov = ConfCoverage.model_validate(
+        {"spec": "s.spec", "status": "complete", "confs": ["c.conf"], "complete": False}
+    )
+    assert cov.runs == []
+
+
+def test_a_mutant_keeps_its_prover_links() -> None:
+    mutant = Mutant(
+        target_property="p", mutant_class="syntactic", old_str="a", new_str="b",
+        scenario="s", rationale="r", accepted=True, status="killed", killed_by=["rule"],
+        prover_links=["https://prover.certora.com/output/1/a"],
+    )
+    report = _evaluate_report().model_copy(
+        update={"mutation": MutationReport(mutants=[mutant], killed=1)}
+    )
+    reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
+    assert reloaded.mutation is not None
+    assert reloaded.mutation.mutants[0].prover_links == ["https://prover.certora.com/output/1/a"]
+    # A mutant that was not run has none.
+    assert Mutant.model_validate(
+        {"target_property": "p", "mutant_class": "syntactic", "old_str": "a", "new_str": "b",
+         "scenario": "s", "rationale": "r"}
+    ).prover_links == []
 
 
 def test_schema_3_3_prioritization_round_trips():
@@ -1390,9 +1440,9 @@ def test_pre_3_3_deprioritized_loads_without_critical_match():
 
 @pytest.mark.parametrize("version", ["3.0", "3.1"])
 def test_older_reports_still_load_and_render(version):
-    # Written before the 3.2 fields existed: none of them is present in the JSON.
+    # Written before the 3.2 fields existed, so neither those nor 3.5's run_failure is in the JSON.
     data = _mini_report().model_dump(mode="json")
-    for key in ("rule_feedback", "conf_coverage", "coverage_scores"):
+    for key in ("rule_feedback", "conf_coverage", "coverage_scores", "run_failure"):
         del data[key]
     for prop in data["properties"]:
         del prop["coverage"]

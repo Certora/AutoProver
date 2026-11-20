@@ -31,6 +31,7 @@ from composer.spec.source.live_explorer import setup_live_edits
 from composer.spec.source.munge.edit_store import EditStore
 from composer.spec.source.munge.edit_oracle import mk_oracle
 from composer.spec.source.artifacts import ProverArtifactStore
+from composer.spec.gen_types import AP_REPORT_DIR
 from composer.spec.agent_index import AgentIndex, AgentIndexConfig, agent_index_config_from_env
 from composer.core.user import get_uid
 from composer.spec.cvl_research import DEFAULT_CVL_AGENT_INDEX_NS
@@ -157,6 +158,8 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 thread_id=thread_id,
                 task_handler=handler,
                 ecosystem=EVM,
+                report_dir=AP_REPORT_DIR,
+                report_backend="prover",
                 at_exit=exit_logger,
                 run_mode=run_mode,
                 workflow="autoprove"
@@ -209,4 +212,5 @@ async def autoprove_executor(args: AutoProveArgs, summary: RunSummary) -> AsyncI
                 CexAnalysisStore(store=staged.conns.store, namespace=("cex_analyses", thread_id)),
             )
             return await cont(source_env, backend)
+
     yield callback

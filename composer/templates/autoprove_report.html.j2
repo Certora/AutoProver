@@ -280,6 +280,7 @@ footer.report-foot {
     font-size: 13px;
 }
 .warnings ul { margin: 4px 0 0 18px; padding: 0; }
+.warnings .refusal { white-space: pre-wrap; }
 a.badge { text-decoration: none; }
 section.gaps details { margin: 10px 0 18px; }
 section.gaps summary { cursor: pointer; font-size: 13px; color: var(--muted-fg); }
@@ -324,11 +325,13 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
 
 <header class="report-head">
   <h1>{{ terms.title }} — {{ contract_name }}</h1>
+  {%- if not run_failure %}
   <div class="subtitle">
     {{ coverage.total_properties }} properties &middot;
     {{ coverage.total_rules }} {{ terms.unit_plural }} &middot;
     {{ coverage.total_groups }} high-level properties
   </div>
+  {%- endif %}
   <dl class="meta-grid">
     <dt>Contract</dt><dd>{{ contract_name }}</dd>
     <dt>Run timestamp</dt><dd>{{ run_timestamp_utc or "—" }}</dd>
@@ -344,6 +347,7 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
     </dd>
     {%- endif %}
   </dl>
+  {%- if not run_failure %}
   <div class="counts-label">{{ terms.outcomes_label }}:</div>
   <div class="counts">
     {%- for c in rule_counts %}<span class="count-chip"><span class="badge badge-{{ c.kind }}">{{ c.label }}</span><strong>{{ c.n }}</strong></span>{% endfor %}
@@ -354,7 +358,22 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
     {%- for c in group_counts %}<span class="count-chip"><span class="badge badge-{{ c.kind }}">{{ c.label }}</span><strong>{{ c.n }}</strong></span>{% endfor %}
     {%- if not group_counts %}<span class="muted">—</span>{% endif %}
   </div>
+  {%- endif %}
 </header>
+
+{%- if run_failure %}
+<div class="warnings"><strong>The run failed before it could report its results.</strong>
+  {%- if run_failure.kind == "refused" %}
+  <p class="refusal">{{ run_failure.message }}</p>
+  {%- elif run_failure.kind == "interrupted" %}
+  <p>It was stopped before it finished.</p>
+  {%- elif run_failure.kind == "out_of_budget" %}
+  <p>It ran out of its {{ run_failure.budget }} budget before it finished.</p>
+  {%- else %}
+  <p>It hit an internal error.</p>
+  {%- endif %}
+</div>
+{%- else %}
 
 {%- if coverage.warnings %}
 <div class="warnings"><strong>Coverage warnings:</strong>
@@ -620,6 +639,7 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
   {{ coverage.curtailed_component_count }} component(s) were cut short by the run budget (see the appendix).
   {%- endif %}
 </footer>
+{%- endif %}
 
 </div>
 </body>

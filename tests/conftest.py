@@ -41,6 +41,7 @@ from composer.llm.bedrock import (
     MAX_TOKENS_ENV_VAR,
 )
 from composer.prover.core import ProverOptions, ProverReport
+from composer.spec.cvlr.reference import ChainReference, CrateRelease, GitCommit
 from composer.spec.source.prover import get_prover_tool, in_situ_project, LLM
 
 if TYPE_CHECKING:
@@ -568,3 +569,26 @@ def wire_prompt(instruction: str, system: str | None = None) -> dict[str, Any]:
 def wire_workspace_prep(**overrides: Any) -> dict[str, Any]:
     """A ``WorkspacePrep`` plan that asks for nothing, plus ``overrides``."""
     return {"files": {}, "toolchain_request": {}, **overrides}
+
+
+#: The commit ``cvlr-solana`` 0.5.1 was released from, on ``Certora/cvlr-solana``'s main branch.
+CVLR_SOLANA_0_5_1_COMMIT = GitCommit(
+    repo="https://github.com/Certora/cvlr-solana.git",
+    rev="2e53877a4d9ffb10aff5dc21829fd073f00333a6",
+)
+
+
+def read_from_commit(reference: ChainReference, commit: GitCommit) -> ChainReference:
+    """``reference`` with its chain crate and specializations unpublished, read from ``commit``.
+
+    For the tests of the git-commit path, which should not depend on whether any release the
+    shipping reference sets pin is unpublished at the moment.
+    """
+    assert isinstance(reference.binding, CrateRelease)
+    return dataclasses.replace(
+        reference,
+        binding=dataclasses.replace(reference.binding, commit=commit),
+        specializations=tuple(
+            dataclasses.replace(c, commit=commit) for c in reference.specializations
+        ),
+    )

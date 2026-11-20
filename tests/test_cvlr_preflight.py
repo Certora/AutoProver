@@ -14,7 +14,8 @@ own, so the selection has to come from cargo's view of who owns ``main_source``.
 fails here.
 
 Marked ``expensive``: it resolves and compiles a real dependency graph off the network. It skips,
-naming what is missing, when cargo is absent.
+naming what is missing, when cargo or the host Rust toolchain is absent, and the compile skips
+when the Solana platform tools are.
 """
 
 import shutil
@@ -22,9 +23,12 @@ from pathlib import Path
 
 import pytest
 
+from composer.cargo.rustup import ToolchainMissing, require_toolchain
+from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.sandbox.config import SandboxConfig
+from composer.spec.cvlr.conf import HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.preflight import gate_workspace, prepare_workspace, select_package
-from composer.spec.cvlr.reference import SOLANA
+from composer.spec.cvlr.reference import SOLANA_V2
 
 pytestmark = [pytest.mark.expensive, pytest.mark.asyncio]
 
@@ -44,6 +48,7 @@ edition = "2021"
 crate-type = ["cdylib", "lib"]
 
 [dependencies]
+solana-program = "2"
 """
 
 PROGRAM = """\
@@ -52,11 +57,17 @@ pub fn deposit(amount: u64) -> u64 {
 }
 """
 
+_UNCONFINED = SandboxConfig(provider="none")
+
 
 @pytest.fixture
 def project(tmp_path: Path) -> Path:
     if shutil.which("cargo") is None:
         pytest.skip("cargo is not on PATH")
+    try:
+        require_toolchain(HOST_RUST_TOOLCHAIN)
+    except ToolchainMissing as exc:
+        pytest.skip(str(exc))
     (tmp_path / "Cargo.toml").write_text(WORKSPACE_MANIFEST)
     for name in ("vault", "other"):
         source = tmp_path / "programs" / name / "src"
@@ -66,7 +77,17 @@ def project(tmp_path: Path) -> Path:
     return tmp_path
 
 
-async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_in(project):
+@pytest.fixture
+def platform_tools() -> None:
+    try:
+        sbf_check(PLATFORM_TOOLS_VERSION)
+    except PlatformToolsMissing as exc:
+        pytest.skip(str(exc))
+
+
+async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_in(
+    project, platform_tools
+):
     """Select a package, scaffold it, and compile it, in the order a run does.
 
     The compile is the check that the feature wiring, the manifest edits, and the pinned crate
@@ -74,18 +95,22 @@ async def test_a_bare_cargo_workspace_becomes_one_that_compiles_with_a_harness_i
     """
     main_source = project / "programs" / "vault" / "src" / "lib.rs"
 
-    selected = await select_package(project, None, main_source=main_source)
+    selected = await select_package(
+        project, None, candidates=(SOLANA_V2,), main_source=main_source
+    )
     assert selected.name == "vault"
     assert selected.package_dir == Path("programs/vault")
 
-    pre = await prepare_workspace(selected.workspace_root, reference=SOLANA, package=selected.name)
+    pre = await prepare_workspace(
+        selected.workspace_root, reference=SOLANA_V2, sandbox=_UNCONFINED, package=selected.name
+    )
     assert pre.scaffold.blocked == (), pre.scaffold.blocked
     assert pre.artifact_stem == "vault"
     # Resolved from the scaffolded graph: before it, this project had no CVLR dependency at all.
     assert {crate.name for crate in pre.sources.crates} >= {"cvlr", "cvlr-solana"}
     assert (main_source.parent / "certora" / "specs" / "mod.rs").is_file()
 
-    await gate_workspace(pre, sandbox=SandboxConfig(provider="none"))
+    await gate_workspace(pre, sandbox=_UNCONFINED)
 
 
 async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_edited_harness(
@@ -94,10 +119,12 @@ async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_
     """The harness files are AutoProver's. A second run puts an edited one back and changes
     nothing else, so the manifests it already extended are not extended again."""
     main_source = project / "programs" / "vault" / "src" / "lib.rs"
-    selected = await select_package(project, None, main_source=main_source)
+    selected = await select_package(
+        project, None, candidates=(SOLANA_V2,), main_source=main_source
+    )
 
     first = await prepare_workspace(
-        selected.workspace_root, reference=SOLANA, package=selected.name
+        selected.workspace_root, reference=SOLANA_V2, sandbox=_UNCONFINED, package=selected.name
     )
     assert first.applied != ()
     specs = main_source.parent / "certora" / "specs" / "mod.rs"
@@ -105,7 +132,7 @@ async def test_pointing_it_at_a_project_it_already_scaffolded_replaces_only_the_
     specs.write_text(f"{scaffolded}\n// an author's work\n")
 
     again = await prepare_workspace(
-        selected.workspace_root, reference=SOLANA, package=selected.name
+        selected.workspace_root, reference=SOLANA_V2, sandbox=_UNCONFINED, package=selected.name
     )
 
     assert again.applied == (specs.relative_to(selected.workspace_root),)

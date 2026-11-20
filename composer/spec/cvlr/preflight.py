@@ -9,26 +9,35 @@ run's CPU budget (``PipelineRun.cpu_runner``), the same split as
 :mod:`composer.rustapp.adapter`. One function that did both could not be placed on either side
 of that line.
 
+Solana only for now. :data:`~composer.spec.cvlr.reference.SOROBAN` has a reference set, but the
+compile gate is the Solana platform tools' SBF check.
+
 Three outcomes are refusals, all :class:`~composer.spec.cvlr.scaffold.Blocked`: a package that
 builds no loadable object, a project on a CVLR release other than the one this build is pinned to,
 and a CVLR pin that does not match the platform generation the project is already on.
 """
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
+from composer.cargo.rustup import ToolchainMissing
+from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.cargo.session import CargoSession, CompileFailed, Compiled, WarmFailed
+from composer.pipeline.refusal import RunRefusal
 from composer.sandbox.config import SandboxConfig
-from composer.spec.cvlr.conf import DEFAULT_FEATURE
+from composer.sandbox.recipes import prepare_sandbox_cargo_home
+from composer.spec.cvlr.conf import DEFAULT_FEATURE, HOST_RUST_TOOLCHAIN, PLATFORM_TOOLS_VERSION
 from composer.spec.cvlr.crates import CvlrSources, Divergence
 from composer.spec.cvlr.scaffold import (
     ScaffoldBlocked,
     ScaffoldPlan,
     apply,
     plan_scaffold,
+    select_generation,
 )
 from composer.spec.cvlr.reference import ChainReference
 from composer.spec.cvlr.tree import ProjectSource
@@ -36,7 +45,7 @@ from composer.spec.cvlr.tree import ProjectSource
 _log = logging.getLogger(__name__)
 
 
-class PreflightFailed(RuntimeError):
+class PreflightFailed(RunRefusal):
     """The project cannot be prepared for verification, so the run stops.
 
     Separate from :class:`composer.rustapp.adapter.PreflightFailed`, which says the same thing
@@ -118,37 +127,70 @@ class SelectedPackage:
     #: The package directory relative to the workspace root, the same relation as
     #: :attr:`CvlrPreflight.package_dir`. Both come from one workspace read.
     package_dir: Path
+    #: The reference set for the platform generation the package is on
+    #: (:func:`~composer.spec.cvlr.scaffold.select_generation`).
+    reference: ChainReference
 
 
 async def select_package(
-    project_root: Path, package: str | None = None, *, main_source: Path | None = None
+    project_root: Path,
+    package: str | None = None,
+    *,
+    candidates: Sequence[ChainReference],
+    main_source: Path | None = None,
+    cargo_home: Path | None = None,
 ) -> SelectedPackage:
-    """Resolve ``package`` against the workspace at ``project_root``.
+    """Resolve ``package`` against the workspace at ``project_root``, and the reference set in
+    ``candidates`` for the platform generation it is on.
 
     An explicit name wins. Otherwise the member that owns the main program's source file wins,
     which is cargo's own view of which member a path belongs to. A workspace with several
     library crates, which :func:`_pick_package` refuses on its own, needs no second flag.
     When neither a name nor a source file is available, the single-library rule applies,
     including its refusal.
+
+    ``cargo_home`` is where the read fetches the graph to (:meth:`Workspace.read`). It should not
+    be under ``project_root``: this reads the project as shipped, before the run has a copy.
     """
-    workspace = await _workspace_at(project_root)
+    workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     owner = workspace.owning(main_source) if main_source is not None else None
     member = (
         owner
         if package is None and owner is not None and owner.lib is not None
         else _pick_package(workspace, package)
     )
+    reference = select_generation(workspace, member, candidates)
+    if reference is None:
+        linked = workspace.linked_into(member)
+        # An ordered set: the refusal names the witnesses in candidate order.
+        witnesses = dict.fromkeys(w.name for r in candidates for w in r.platform.witnesses)
+        builds = [
+            f"{name} {', '.join(c.version for c in copies)}"
+            for name in witnesses
+            if (copies := [c for c in linked if c.name == name])
+        ]
+        supported = "; ".join(f"{r.platform.label} ({r.line()})" for r in candidates)
+        raise PreflightFailed(
+            f"{member.name} is on no platform generation this build supports. It builds "
+            f"{', '.join(builds) or 'none of the platform crates that identify one'}. Supported: "
+            f"{supported}."
+        )
     return SelectedPackage(
         workspace_root=workspace.root,
         name=member.name,
         package_dir=member.root.resolve().relative_to(workspace.root.resolve()),
+        reference=reference,
     )
 
 
-async def _workspace_at(root: Path, *, features: tuple[CargoFeature, ...] = ()) -> Workspace:
+async def _workspace_at(
+    root: Path, *, features: tuple[CargoFeature, ...] = (), cargo_home: Path | None
+) -> Workspace:
     try:
-        workspace = await Workspace.read(root, features=features)
-    except CargoUnavailable as exc:
+        workspace = await Workspace.read(
+            root, features=features, toolchain=HOST_RUST_TOOLCHAIN, cargo_home=cargo_home
+        )
+    except (CargoUnavailable, ToolchainMissing) as exc:
         raise PreflightFailed(str(exc)) from exc
     if not isinstance(workspace, Workspace):
         raise PreflightFailed(
@@ -158,18 +200,28 @@ async def _workspace_at(root: Path, *, features: tuple[CargoFeature, ...] = ()) 
 
 
 async def prepare_workspace(
-    project_root: Path, *, reference: ChainReference, package: str | None = None
+    project_root: Path,
+    *,
+    reference: ChainReference,
+    sandbox: SandboxConfig,
+    package: str | None = None,
 ) -> CvlrPreflight:
     """Scaffold ``project_root`` and report what a run needs to know about it.
 
     Writes into the project it is given. For a pipeline run that is the copy the run owns. The
     harness files under ``src/certora/`` are replaced by AutoProver's. The project's manifests
-    and sources are only added to.
+    are only added to. A framework program's sources are rewritten to build with ``std``, and
+    without the framework's allocator and panic handler, under the feature.
 
     ``reference`` is the set rather than a chain name because every function this calls takes the
     set.
     """
-    workspace = await _workspace_at(project_root)
+    # The cargo home the gate's warm fills (:attr:`composer.cargo.session.CargoSession.cargo_home`),
+    # so these reads reuse the registry crates it fetched. Git sources are fetched again: these
+    # reads use the host cargo, and the platform-tools cargo does not see the host cargo's git
+    # checkouts (:func:`composer.cargo.sbf.platform_tools_cargos`).
+    cargo_home = prepare_sandbox_cargo_home(project_root) if sandbox.enabled else None
+    workspace = await _workspace_at(project_root, cargo_home=cargo_home)
     member = _pick_package(workspace, package)
 
     plan = plan_scaffold(workspace, member, reference)
@@ -184,10 +236,15 @@ async def prepare_workspace(
     # optional, so a default-feature read still reports them absent
     # (:meth:`composer.cargo.metadata.Workspace.read`). Features resolve against the package
     # cargo considers current.
-    resolved_in = await _workspace_at(member.root, features=(DEFAULT_FEATURE,))
+    resolved_in = await _workspace_at(
+        member.root, features=(DEFAULT_FEATURE,), cargo_home=cargo_home
+    )
     fresh = resolved_in.member(member.name) or member
     if fresh.lib is None:
-        raise PreflightFailed(f"{fresh.name} has no library target to build")
+        raise PreflightFailed(
+            f"{fresh.name} has no library target to build. Point the run at the program's crate, "
+            "which needs a [lib] target."
+        )
 
     sources = CvlrSources.of(resolved_in)
     # The backstop behind the scaffold's gate. That gate reads the manifests and the pre-scaffold
@@ -222,11 +279,21 @@ async def gate_workspace(
 ) -> None:
     """Check that the scaffolded project compiles with the harness in, or fail the run.
 
-    Host-target ``cargo check`` only. What this has to catch is a scaffold that does not compile.
-    The SBF build is a later gate, and running it here would cost more than the failure it would
-    be catching.
+    ``cargo check`` for the SBF target (:func:`~composer.cargo.sbf.sbf_check`). The full build
+    runs at a later gate.
+
+    Solana only: a Soroban target would need a check for its own target.
     """
-    session = CargoSession(workdir=pre.workspace_root, sandbox=sandbox)
+    try:
+        check_with = sbf_check(PLATFORM_TOOLS_VERSION)
+    except PlatformToolsMissing as exc:
+        raise PreflightFailed(str(exc)) from exc
+    session = CargoSession(
+        workdir=pre.workspace_root,
+        sandbox=sandbox,
+        toolchain=HOST_RUST_TOOLCHAIN,
+        check_with=check_with,
+    )
     warmed = await session.warm()
     if isinstance(warmed, WarmFailed):
         raise PreflightFailed(

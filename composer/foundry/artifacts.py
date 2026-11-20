@@ -20,7 +20,7 @@ from composer.spec.artifacts import ArtifactStore
 from composer.spec.context import SourceCode
 from composer.authoring.state import SkippedProperty
 from composer.spec.gen_types import (
-    FOUNDRY_DELIVERABLE_DIR, FOUNDRY_INTERNAL_DIR, under_project,
+    FOUNDRY_DELIVERABLE_DIR, FOUNDRY_INTERNAL_DIR, FOUNDRY_REPORT_DIR, under_project,
 )
 from composer.spec.types import PropertyFormulation
 from composer.spec.source.report.schema import AutoProverReport
@@ -87,7 +87,7 @@ class FoundryArtifactStore(ArtifactStore[FoundryTestArtifact, GeneratedFoundryTe
             "property_tests",
             deliverable_dir=FOUNDRY_DELIVERABLE_DIR,
             internal_dir=FOUNDRY_INTERNAL_DIR,
-            report_dir=FOUNDRY_DELIVERABLE_DIR / "reports"
+            report_dir=FOUNDRY_REPORT_DIR
         )
 
     @override

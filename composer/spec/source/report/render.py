@@ -34,8 +34,8 @@ from composer.templates.loader import load_jinja_template
 from composer.spec.source.report.schema import (
     AutoProverReport, ComponentName, ConfCoverage, CoverageReport, CoverageStatus, CurtailedComponent,
     FeedbackSeverity, Finding, FormalizedProperty, GaveUpComponent, GroupStatus, Outcome,
-    PropertyGroup, PropertyKey, ReportBackend, RuleFeedback, RuleRef, RuleVerdict, SkippedClaim,
-    SourceEditRecord, SpecCoverageScore,
+    PropertyGroup, PropertyKey, ReportBackend, RuleFeedback, RuleRef, RuleVerdict, RunFailure,
+    SkippedClaim, SourceEditRecord, SpecCoverageScore,
 )
 
 
@@ -287,6 +287,7 @@ class ReportTemplateParams(TypedDict):
     coverage_scores: list[ScoreView]
     curtailed: list[CurtailedView]
     source_edits: list[SourceEditRecord]
+    run_failure: RunFailure | None
 
 
 _REPORT_TEMPLATE = TypedTemplate[ReportTemplateParams]("autoprove_report.html.j2")
@@ -565,6 +566,7 @@ def _build_context(report: AutoProverReport) -> ReportTemplateParams:
         "coverage_scores": [_score_view(sc) for sc in report.coverage_scores],
         "curtailed": [_curtailed_view(c) for c in report.curtailed_components],
         "source_edits": report.source_edits,
+        "run_failure": report.run_failure,
     }
 
 

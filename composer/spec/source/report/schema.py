@@ -247,6 +247,9 @@ class Mutant(BaseModel):
         default_factory=list,
         description="Rules mapped to the property that flipped to VIOLATED on the mutant.")
     run_note: str = Field(default="", description="Why inconclusive/no_signal, when so.")
+    prover_links: list[str] = Field(
+        default_factory=list,
+        description="One link per Prover job that ran the mutant. Empty when it was not run.")
 
 
 class MutationReport(BaseModel):
@@ -507,12 +510,45 @@ class RuleFeedback(BaseModel):
     suggested_fix: str | None = None
 
 
+type ConfRunStatus = Literal["ran", "build_failed", "run_failed"]
+
+
+class ConfRunRecord(BaseModel):
+    """One conf's Prover run: the jobs it ran as, or why it returned no results."""
+    conf: str = Field(description="Project-relative path of the conf.")
+    status: ConfRunStatus = Field(
+        description="ran = the run returned results; build_failed = the conf did not build, so it "
+        "was not run; run_failed = the conf built, and its Prover run returned no results.",
+    )
+    prover_links: list[str] = Field(
+        default_factory=list,
+        description="One link per Prover job the run made; several when the conf splits its rules "
+        "into per-rule jobs (`split_rules`). Empty when no job was made.",
+    )
+    error: str | None = Field(
+        default=None, description="Why the run returned no results, when it did not.",
+    )
+
+
+type SpecCoverageStatus = Literal["complete", "incomplete", "orphaned", "unknown"]
+
+
 class ConfCoverage(BaseModel):
     """Whether the confs that verify one spec, taken together, check every rule of it on every
     method. A gap is closed by a completing run, and this records what was missing before it."""
     spec: str = Field(description="Project-relative path of the spec.")
+    status: SpecCoverageStatus = Field(
+        description="What the confs select, not how their runs went (see `runs`). complete = every "
+        "rule on every method and method combination; incomplete = every rule, but some rule not on "
+        "every method or combination; orphaned = some rule no conf selects; unknown = a conf "
+        "selecting this spec did not build, so which rules and methods it covers is unclear.",
+    )
     confs: list[str] = Field(
         default_factory=list, description="Project-relative paths of the confs that verify the spec.",
+    )
+    runs: list[ConfRunRecord] = Field(
+        default_factory=list,
+        description="The Prover run of each conf in `confs` that was run, in the same order.",
     )
     rules_unchecked_before_completion: list[RuleName] = Field(
         default_factory=list,
@@ -530,6 +566,50 @@ class ConfCoverage(BaseModel):
     complete: bool = Field(
         description="Every rule was checked on every method once the completing run (if any) finished.",
     )
+
+
+class SpecStatusCounts(BaseModel):
+    """How many specs have each `ConfCoverage.status`."""
+    complete: int = 0
+    incomplete: int = 0
+    orphaned: int = 0
+    unknown: int = 0
+
+
+class ConfStatusCounts(BaseModel):
+    """How many confs in the main contract's scope have each `ConfRunRecord.status`."""
+    in_scope: int = 0
+    ran: int = 0
+    build_failed: int = 0
+    run_failed: int = 0
+
+
+class RuleOutcomeCounts(BaseModel):
+    """How many of the report's rules have each `Outcome`."""
+    good: int = 0
+    bad: int = 0
+    timeout: int = 0
+    error: int = 0
+    unknown: int = 0
+
+
+class PropertyCounts(BaseModel):
+    """The two property axes: how many properties a rule attempts, and how faithfully the
+    attempted ones are encoded."""
+    total: int = 0
+    attempted: int = 0
+    faithfulness_exact: int = 0
+    faithfulness_partial: int = 0
+    faithfulness_wrong: int = 0
+
+
+class EvaluationSummary(BaseModel):
+    """The counts an evaluate run's report is summarized by, stated once so every rendering of the
+    report (page, Markdown, compact JSON) shows the same numbers."""
+    specs: SpecStatusCounts = Field(default_factory=SpecStatusCounts)
+    confs: ConfStatusCounts = Field(default_factory=ConfStatusCounts)
+    rules: RuleOutcomeCounts = Field(default_factory=RuleOutcomeCounts)
+    properties: PropertyCounts = Field(default_factory=PropertyCounts)
 
 
 class SpecCoverageScore(BaseModel):
@@ -571,9 +651,41 @@ class Prioritization(BaseModel):
     pursued: list[PursuedProperty]
 
 
+class Refused(BaseModel):
+    """The run stopped on a problem with what it was given — a project this build cannot verify,
+    say. ``message`` is written for the person who started the run, and is what they need to act
+    on."""
+    kind: Literal["refused"] = "refused"
+    message: str
+
+
+class Interrupted(BaseModel):
+    """The run was stopped from outside — cancelled, or interrupted from the keyboard — before it
+    finished."""
+    kind: Literal["interrupted"] = "interrupted"
+
+
+class OutOfBudget(BaseModel):
+    """The run spent the time or token budget it was started with before it finished."""
+    kind: Literal["out_of_budget"] = "out_of_budget"
+    budget: Literal["time", "token"]
+
+
+class InternalError(BaseModel):
+    """The run failed on a fault of its own. Deliberately carries no exception text: that is for
+    whoever debugs the run, from its logs, and not for the reader of the report."""
+    kind: Literal["internal_error"] = "internal_error"
+
+
+type RunFailure = Refused | Interrupted | OutOfBudget | InternalError
+"""Why a run produced no report of its own. A report carrying one stands in for the report the run
+did not write: it names the contract, backend and run mode, and has no properties, rules or
+groups."""
+
+
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4"] = "3.4"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7"] = "3.7"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written
@@ -627,3 +739,11 @@ class AutoProverReport(BaseModel):
     scene: SceneAssessment | None = None
     #: Mutation testing of the specs (evaluate run, when mutation ran). None otherwise.
     mutation: MutationReport | None = None
+    #: The counts of an evaluate run's specs, confs, rules and properties. None for any other run
+    #: mode.
+    evaluation_summary: EvaluationSummary | None = None
+    #: Set only on the report written in place of one the run did not produce — because it ended
+    #: before its report phase, or because building its report failed. That report carries the
+    #: run's identity and nothing else. ``None`` on every report a run built, and on reports written
+    #: before schema 3.5.
+    run_failure: RunFailure | None = Field(default=None, discriminator="kind")
