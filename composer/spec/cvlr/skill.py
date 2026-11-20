@@ -1,9 +1,11 @@
-"""The mechanical steps of the ``certora-autoprover-solana`` skill, for ``certora-cvlr``.
+"""The mechanical steps of the CVLR skills, for ``certora-cvlr``.
 
-The skill (``docs/cvlr-skill-plan.md``) has the user's own coding agent write the properties and the
-rules. What is mechanical, and quietly wrong when done by hand, comes from here: the same preflight,
-scaffold and module declarations the pipeline runs, on the user's own working tree rather than a
-run's copy.
+The skills — ``certora-autoprover-solana`` and its Soroban sibling (``docs/cvlr-skill-plan.md``) —
+have the user's own coding agent write the properties and the rules. What is mechanical, and quietly
+wrong when done by hand, comes from here: the same preflight, scaffold and module declarations the
+pipeline runs, on the user's own working tree rather than a run's copy. The chain is detected from
+the project, never declared: the platform generation the package resolves decides it
+(:func:`~composer.spec.cvlr.reference.chain_of`).
 
 Builds are unconfined unless ``COMPOSER_SANDBOX_PROVIDER`` names a provider. The pipeline confines
 by default because it compiles a project nobody at the keyboard chose to build; here the user's
@@ -31,9 +33,11 @@ from composer.cargo.sbf import (
 )
 from composer.cargo.symbols import RUSTFILT_VERSION
 from composer.cargo.session import CompileVerdict
+from composer.cargo.wasm import WASM_TARGET, WasmIdentity
 from composer.kb.kb_context import (
     CVLR_BUNDLE,
     CVLR_RECIPES,
+    CVLR_SOROBAN_FACTS,
     CvlrRecipe,
     recipe_bodies,
     recipe_index_document,
@@ -48,33 +52,45 @@ from composer.prover.core import (
     ProverReport,
     SubmittedJob,
     collect_prover_results,
+    make_prover_options,
 )
 from composer.prover.ptypes import RuleResult
 from composer.prover.results import read_and_format_run_result
 from composer.sandbox.config import SandboxConfig
-from composer.spec.cvlr.author import render_author_system, render_judge_system
+from composer.spec.cvlr.author import (
+    render_author_system,
+    render_judge_system,
+    render_soroban_author_system,
+    render_soroban_judge_system,
+)
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
     HOST_RUST_TOOLCHAIN,
     PLATFORM_TOOLS_VERSION,
+    SOROBAN_RUST_TOOLCHAIN,
     CheckVerdicts,
     CollectUnsatCore,
     ConfPurpose,
     TunableConf,
+    soroban_tunable_conf,
     tunable_conf,
 )
-from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE
+from composer.spec.cvlr.guidance import SOLANA_CVLR_GUIDANCE, SOROBAN_CVLR_GUIDANCE
 from composer.spec.cvlr.harness import SHARED_INVARIANTS, HarnessModule, declare_modules
 from composer.spec.cvlr.preflight import (
     CvlrPreflight,
+    PreflightFailed,
+    chain_session,
     check_package,
     gate_workspace,
     prepare_workspace,
-    sbf_session,
     select_package,
+    wasm_identity_of,
 )
-from composer.spec.cvlr.reference import HarnessShim, generations
-from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in_elf
+from composer.spec.cvlr.reference import ChainReference, HarnessShim, chain_of, generations
+from composer.spec.cvlr.soroban_imports import ContractImport, build_imports
+from composer.spec.cvlr.soroban_tokens import modelled
+from composer.spec.cvlr.manifest import ManifestCorrupt, ManifestMissing, rule_names_in
 from composer.spec.cvlr.prover import (
     BuildRejected,
     Prepared,
@@ -97,8 +113,14 @@ from composer.templates.loader import load_jinja_template
 #: internal directory the scaffold already has git ignore.
 REFERENCE_DIR = CVLR_INTERNAL_DIR / "reference"
 
-#: The chain whose reference sets a skill project is checked against.
-_CHAIN = "solana"
+#: The chains a skill project may be on. Which one a project is on is detected, not declared: the
+#: platform generation its package resolves names the chain (:func:`~composer.spec.cvlr.reference.chain_of`).
+_CHAINS = ("solana", "soroban")
+
+
+def _candidates() -> list[ChainReference]:
+    """Every chain's reference sets, in :data:`_CHAINS` order, for one package selection."""
+    return [reference for chain in _CHAINS for reference in generations(chain)]
 
 #: The unit that proves :data:`~composer.spec.cvlr.harness.SHARED_INVARIANTS`: its base cases and
 #: steps. Not in the shared module, which every component's build compiles, so that a component's
@@ -136,6 +158,8 @@ def component_modules(names: Sequence[str]) -> list[HarnessModule]:
 @dataclass(frozen=True)
 class SetupResult:
     preflight: CvlrPreflight
+    #: The chain the package was detected to be on.
+    chain: str
     #: The package directory, absolute.
     package_root: Path
     modules: list[HarnessModule]
@@ -174,23 +198,39 @@ async def setup(
     components: Sequence[str],
     sandbox: SandboxConfig,
     check: bool = True,
+    token_model: bool = False,
 ) -> SetupResult:
     """Scaffold ``project_root`` for CVLR, declare the shared module and one module per component,
     write the reference text, and compile the result unless ``check`` is off.
 
     ``components`` replaces the modules an earlier setup declared; a module file already written is
-    kept. Raises :class:`~composer.spec.cvlr.preflight.PreflightFailed` when the project is refused,
-    and :class:`ComponentNameRejected` before anything is written."""
+    kept. ``token_model`` is Soroban's in-process SEP-41 token model
+    (:mod:`~composer.spec.cvlr.soroban_tokens`); a Solana program is refused with it, rather than
+    the flag being dropped silently. Raises
+    :class:`~composer.spec.cvlr.preflight.PreflightFailed` when the project is refused, and
+    :class:`ComponentNameRejected` before anything is written."""
     modules = [HarnessModule(INVARIANT_RULES), *component_modules(components)]
     with tempfile.TemporaryDirectory(prefix="cvlr-select-") as select_home:
         selected = await select_package(
             project_root,
             package,
-            candidates=generations(_CHAIN),
+            candidates=_candidates(),
             cargo_home=Path(select_home) if sandbox.enabled else None,
         )
+    chain = chain_of(selected.reference)
+    if token_model and chain != "soroban":
+        raise PreflightFailed(
+            f"--token-model points a Soroban contract's SEP-41 token clients at an in-process "
+            f"model; {selected.name} is on {selected.reference.platform.label}, which has no such "
+            "model."
+        )
     pre = await prepare_workspace(
-        project_root, reference=selected.reference, sandbox=sandbox, package=selected.name
+        project_root,
+        reference=selected.reference,
+        sandbox=sandbox,
+        package=selected.name,
+        chain=chain,
+        token_model=token_model,
     )
     package_root = pre.workspace_root / pre.package_dir
     specs_dir = package_root / SPECS_DIR
@@ -200,15 +240,23 @@ async def setup(
     reference_dir = project_root / REFERENCE_DIR
     write_reference(
         reference_dir,
+        chain=chain,
         package=pre.package,
         cvlr_versions=", ".join(f"{c.name} {c.version}" for c in pre.sources.crates),
         caveats=selected.reference.caveats,
         shim=selected.reference.shim,
+        token_model=tuple(
+            f"`{site.name}` in `{site.path.relative_to(package_root).as_posix()}`"
+            for site in modelled(package_root, package_root / HARNESS_DIR)
+        )
+        if chain == "soroban"
+        else (),
     )
     if check:
-        await gate_workspace(pre, sandbox=sandbox)
+        await gate_workspace(pre, sandbox=sandbox, chain=chain)
     return SetupResult(
         preflight=pre,
+        chain=chain,
         package_root=package_root,
         modules=modules,
         created=created,
@@ -219,15 +267,48 @@ async def setup(
 
 
 def reference_documents(
-    *, package: str, cvlr_versions: str, caveats: Sequence[str], shim: HarnessShim | None
+    *,
+    package: str,
+    cvlr_versions: str,
+    caveats: Sequence[str],
+    shim: HarnessShim | None,
+    chain: str = "solana",
+    token_model: Sequence[str] = (),
 ) -> dict[Path, str]:
     """The reference text for a project on ``cvlr_versions``, by path under the reference
-    directory."""
+    directory.
+
+    The Soroban set has no recipes directory: the pipeline's own Soroban author is handed none
+    (:func:`~composer.spec.cvlr.author.soroban_prompts` binds no knowledge bundle), and an index
+    written for the Solana Prover's failure modes would misdirect more than it helps.
+    ``token_model`` is the Soroban author's list of modelled token-client sites, empty when the
+    scaffold pointed none at the model."""
+    readme = load_jinja_template(
+        "cvlr/skill_reference.j2", package=package, cvlr_versions=cvlr_versions, chain=chain
+    )
+    if chain == "soroban":
+        return {
+            Path("README.md"): readme,
+            Path("cvlr.md"): CVLR_SOROBAN_FACTS.loader(),
+            Path("properties.md"): SOROBAN_CVLR_GUIDANCE,
+            Path("author.md"): render_soroban_author_system(
+                {
+                    "module": "<module>",
+                    "cvlr_versions": cvlr_versions,
+                    "caveats": list(caveats),
+                    "conf": soroban_tunable_conf(TunableConf()),
+                    "token_model": list(token_model),
+                }
+            ),
+            Path("judge.md"): render_soroban_judge_system(
+                {"cvlr_versions": cvlr_versions, "caveats": list(caveats)}
+            ),
+            Path("invariants.md"): load_jinja_template("soroban/cvlr_invariant_guidance.j2"),
+            Path("vacuity.md"): load_jinja_template("soroban/cvlr_vacuity_guidance.j2"),
+        }
     (facts,) = CVLR_BUNDLE.specs
     docs = {
-        Path("README.md"): load_jinja_template(
-            "cvlr/skill_reference.j2", package=package, cvlr_versions=cvlr_versions
-        ),
+        Path("README.md"): readme,
         Path("cvlr.md"): facts.loader(),
         Path("properties.md"): SOLANA_CVLR_GUIDANCE,
         Path("author.md"): render_author_system(
@@ -262,13 +343,20 @@ def write_reference(
     cvlr_versions: str,
     caveats: Sequence[str],
     shim: HarnessShim | None,
+    chain: str = "solana",
+    token_model: Sequence[str] = (),
 ) -> None:
     """Replace ``directory`` with :func:`reference_documents`, so nothing from an older version
     is left beside them."""
     if directory.exists():
         shutil.rmtree(directory)
     documents = reference_documents(
-        package=package, cvlr_versions=cvlr_versions, caveats=caveats, shim=shim
+        package=package,
+        cvlr_versions=cvlr_versions,
+        caveats=caveats,
+        shim=shim,
+        chain=chain,
+        token_model=token_model,
     )
     for relative, text in documents.items():
         path = directory / relative
@@ -293,6 +381,12 @@ class _Located:
     #: Relative to :attr:`workspace_root`.
     package_dir: Path
     module: HarnessModule
+    chain: str
+    #: Set on Soroban: where the wasm build puts its artifact. ``None`` on Solana, whose build
+    #: reports its own (:class:`~composer.spec.cvlr.prover.Submission`).
+    wasm: WasmIdentity | None = None
+    #: The workspace contracts the package imports with ``contractimport!``. Empty on Solana.
+    contract_imports: tuple[ContractImport, ...] = ()
 
     @property
     def package_root(self) -> Path:
@@ -303,14 +397,24 @@ async def _locate(
     project_root: Path, package: str | None, component: str, sandbox: SandboxConfig
 ) -> _Located:
     with tempfile.TemporaryDirectory(prefix="cvlr-select-") as select_home:
+        cargo_home = Path(select_home) if sandbox.enabled else None
         selected = await select_package(
-            project_root,
-            package,
-            candidates=generations(_CHAIN),
-            cargo_home=Path(select_home) if sandbox.enabled else None,
+            project_root, package, candidates=_candidates(), cargo_home=cargo_home
+        )
+        chain = chain_of(selected.reference)
+        wasm, imports = (
+            await wasm_identity_of(project_root, selected.name, cargo_home=cargo_home)
+            if chain == "soroban"
+            else (None, ())
         )
     located = _Located(
-        selected.name, selected.workspace_root, selected.package_dir, HarnessModule(component)
+        selected.name,
+        selected.workspace_root,
+        selected.package_dir,
+        HarnessModule(component),
+        chain=chain,
+        wasm=wasm,
+        contract_imports=imports,
     )
     manifest = located.package_root / "Cargo.toml"
     if located.module.feature not in ManifestEditor.read(manifest).manifest.features or not (
@@ -326,7 +430,8 @@ async def _locate(
 async def check(
     project_root: Path, component: str, *, package: str | None, sandbox: SandboxConfig
 ) -> CompileVerdict:
-    """``cargo check`` one component's rules for the SBF target, without building them.
+    """``cargo check`` one component's rules as the chain checks — the SBF target on Solana, the
+    host with the Soroban toolchain on Soroban — without building them.
 
     Raises :class:`NotSetUp` and :class:`~composer.spec.cvlr.preflight.PreflightFailed`."""
     located = await _locate(project_root, package, component, sandbox)
@@ -335,6 +440,9 @@ async def check(
         located.package_dir,
         sandbox=sandbox,
         features=(DEFAULT_FEATURE, located.module.feature),
+        chain=located.chain,
+        imports=located.contract_imports,
+        target_directory=located.wasm.target_directory if located.wasm is not None else None,
     )
 
 
@@ -370,16 +478,31 @@ class NoRules:
 type ProveOutcome = JobStarted | BuildRejected | NoRules | SubmissionFailed
 
 
+def prover_options_for(chain: str) -> ProverOptions:
+    """The cloud prover options for one chain's jobs: its CLI on submission, its trace shape on
+    results."""
+    return make_prover_options(cloud=True, app="soroban" if chain == "soroban" else "solana")
+
+
+def _no_rules_hint(chain: str) -> str:
+    if chain == "soroban":
+        return (
+            "A rule is a function carrying `cvlr_soroban_derive`'s `#[rule]`; `cvlr`'s own "
+            "`#[rule]` and `cvlr_rules!` record rules in a section the Soroban Prover does not read."
+        )
+    return "A rule is a `#[rule]` function or a `cvlr_rules!` invocation."
+
+
 async def prove(
     project_root: Path,
     request: ProveRequest,
     *,
     package: str | None,
     sandbox: SandboxConfig,
-    prover_opts: ProverOptions,
     on_waiting: Callable[[], None] = lambda: None,
 ) -> ProveOutcome:
-    """Build one component's rules and submit them, returning once the job is accepted.
+    """Build one component's rules and submit them to the chain's prover, returning once the job is
+    accepted.
 
     Another ``prove`` of the same workspace waits for this one to be accepted, since from the build
     until then nothing else may build the crate (:func:`~composer.spec.cvlr.prover.prepare_submission`).
@@ -391,11 +514,21 @@ async def prove(
     package_root = located.package_root
     layer_path = package_root / SUMMARY_LAYERS_DIR / f"{module.module}.txt"
     layer = layer_path.read_text() if layer_path.is_file() else ""
-    envs = package_root / ENVS_DIR
-    composite = envs / SUMMARIES.unit_composite(module.module)
-    composite.write_text(extend_composite((envs / SUMMARIES.composite).read_text(), layer))
+    if located.chain == "soroban":
+        # soroban_conf would refuse the layer at submission; saying so here names the file.
+        if layer:
+            raise PreflightFailed(
+                f"the Soroban Prover reads no summaries, so {layer_path} cannot apply; remove it, "
+                "and state what it excused as an assumption or a skip instead"
+            )
+        summaries: tuple[Path, ...] = ()
+    else:
+        envs = package_root / ENVS_DIR
+        composite = envs / SUMMARIES.unit_composite(module.module)
+        composite.write_text(extend_composite((envs / SUMMARIES.composite).read_text(), layer))
+        summaries = (composite.relative_to(workspace_root),)
 
-    session = await sbf_session(workspace_root, sandbox=sandbox)
+    session = await chain_session(workspace_root, sandbox=sandbox, chain=located.chain)
     submission = Submission(
         manifest_path=located.package_dir / "Cargo.toml",
         stem=module.stem
@@ -405,32 +538,42 @@ async def prove(
         settings=request.settings,
         rules=request.rules,
         features=(DEFAULT_FEATURE, module.feature),
-        summaries=(composite.relative_to(workspace_root),),
+        summaries=summaries,
+        wasm=located.wasm,
     )
     lock_path = workspace_root / CVLR_INTERNAL_DIR / "build.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w") as lock, tempfile.TemporaryDirectory(prefix="cvlr-submit-") as into:
         await _lock(lock.fileno(), on_waiting)
+        if located.contract_imports:
+            assert located.wasm is not None
+            failure = await build_imports(
+                session, located.contract_imports, target_directory=located.wasm.target_directory
+            )
+            if failure is not None:
+                raise PreflightFailed(failure)
         build = await build_for_submission(session, submission)
         if not isinstance(build.verdict, Built):
             return BuildRejected(build)
         try:
-            listed = rule_names_in_elf(build.verdict.manifest.artifact)
+            listed = rule_names_in(build.verdict.manifest.artifact)
         except ManifestMissing:
-            return NoRules("The built program has no `.cvlr_rules` section, so it lists no rules.")
+            return NoRules(
+                "The built artifact has no rule-manifest section, so it lists no rules. "
+                + _no_rules_hint(located.chain)
+            )
         except ManifestCorrupt:
-            return NoRules("The built program's `.cvlr_rules` section could not be read.")
+            return NoRules("The built artifact's rule-manifest section could not be read.")
         rules = selected_rules(request.rules, listed)
         if not rules:
             return NoRules(
                 f"The build of {module.module} lists no rules the selection names. It lists: "
-                f"{', '.join(sorted(listed)) or 'none'}. A rule is a `#[rule]` function or a "
-                "`cvlr_rules!` invocation."
+                f"{', '.join(sorted(listed)) or 'none'}. " + _no_rules_hint(located.chain)
             )
         chosen = replace(submission, rules=SelectRules(rules))
         conf = await write_submission(session, chosen, into=Path(into))
         started = await start_submission(
-            Prepared(session, build, conf), prover_opts=prover_opts
+            Prepared(session, build, conf), prover_opts=prover_options_for(located.chain)
         )
     if isinstance(started, SubmissionFailed):
         return started
@@ -440,7 +583,9 @@ async def prove(
         summaries=layer_path if layer else None,
         inert_summaries=await inert_summaries_note(
             layer_patterns(layer), build.verdict.manifest.artifact
-        ),
+        )
+        if located.chain == "solana"
+        else None,
     )
 
 
@@ -584,11 +729,13 @@ async def _run(*argv: str) -> str | None:
     return stdout.decode().strip() if proc.returncode == 0 else None
 
 
-async def check_toolchain() -> list[ToolCheck]:
-    """What ``setup``, ``check`` and ``prove`` build with, at the versions this AutoProver uses.
+async def check_toolchain(chain: str = "solana") -> list[ToolCheck]:
+    """What ``setup``, ``check`` and ``prove`` build with for ``chain``, at the versions this
+    AutoProver uses.
 
-    The install commands are the ones the Solana images run (:mod:`composer.scripts.solana_toolchain`),
-    and a missing ``rustup`` or C compiler is the user's to install."""
+    The install commands are the ones the chain's images run
+    (:mod:`composer.scripts.solana_toolchain`, :mod:`composer.scripts.soroban_toolchain`), and a
+    missing ``rustup`` or C compiler is the user's to install."""
     checks: list[ToolCheck] = []
     if shutil.which("rustup") is None:
         checks.append(
@@ -596,9 +743,13 @@ async def check_toolchain() -> list[ToolCheck]:
         )
         return checks
     toolchains = await _run("rustup", "toolchain", "list") or ""
+
+    def toolchain_present(version: str) -> bool:
+        return any(line.startswith(f"{version}-") for line in toolchains.splitlines())
+
     checks.append(
         Present("host Rust toolchain", HOST_RUST_TOOLCHAIN)
-        if any(line.startswith(f"{HOST_RUST_TOOLCHAIN}-") for line in toolchains.splitlines())
+        if toolchain_present(HOST_RUST_TOOLCHAIN)
         else Missing(
             "host Rust toolchain",
             f"rustup toolchain install {HOST_RUST_TOOLCHAIN} --profile minimal",
@@ -614,6 +765,15 @@ async def check_toolchain() -> list[ToolCheck]:
             "(build-essential, or the Xcode command line tools).",
         )
     )
+    if chain == "soroban":
+        checks += await _soroban_checks(toolchain_present(SOROBAN_RUST_TOOLCHAIN))
+    else:
+        checks += await _solana_checks()
+    return checks
+
+
+async def _solana_checks() -> list[ToolCheck]:
+    checks: list[ToolCheck] = []
     sbf = await _run("cargo", SBF_SUBCOMMAND, "--version")
     checks.append(
         Present(f"cargo {SBF_SUBCOMMAND}", sbf)
@@ -649,3 +809,36 @@ async def check_toolchain() -> list[ToolCheck]:
         )
     )
     return checks
+
+
+async def _soroban_checks(toolchain_installed: bool) -> list[ToolCheck]:
+    """The Soroban toolchain (:data:`~composer.spec.cvlr.conf.SOROBAN_RUST_TOOLCHAIN`) with the
+    :data:`~composer.cargo.wasm.WASM_TARGET` standard library — what every check and build of the
+    contract uses. The host toolchain the caller already checked reads the cargo metadata.
+
+    No ``cargo certora-sbf``, platform tools or ``rustfilt``: the wasm target is an ordinary rustup
+    component, and a Soroban submission carries no summaries for ``rustfilt`` to serve."""
+    label = "Soroban Rust toolchain"
+    if not toolchain_installed:
+        return [
+            Missing(
+                label,
+                f"rustup toolchain install {SOROBAN_RUST_TOOLCHAIN} --profile minimal "
+                f"--target {WASM_TARGET}",
+            )
+        ]
+    targets = (
+        await _run(
+            "rustup", "target", "list", "--installed", "--toolchain", SOROBAN_RUST_TOOLCHAIN
+        )
+        or ""
+    )
+    if WASM_TARGET not in targets.splitlines():
+        return [
+            Present(label, SOROBAN_RUST_TOOLCHAIN),
+            Missing(
+                f"{WASM_TARGET} target",
+                f"rustup target add {WASM_TARGET} --toolchain {SOROBAN_RUST_TOOLCHAIN}",
+            ),
+        ]
+    return [Present(label, f"{SOROBAN_RUST_TOOLCHAIN} with {WASM_TARGET}")]

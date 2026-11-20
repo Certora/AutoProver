@@ -21,6 +21,7 @@ from pathlib import Path
 
 from composer.cargo.features import CargoFeature
 from composer.cargo.metadata import CargoUnavailable, CratePackage, Workspace
+from composer.cargo.wasm import WasmIdentity
 from composer.cargo.rustup import ToolchainMissing
 from composer.cargo.sbf import PlatformToolsMissing, sbf_check
 from composer.cargo.session import (
@@ -353,11 +354,49 @@ async def check_package(
     *,
     sandbox: SandboxConfig,
     features: tuple[CargoFeature, ...],
+    chain: str = "solana",
+    imports: tuple[ContractImport, ...] = (),
+    target_directory: Path | None = None,
 ) -> CompileVerdict:
-    """``cargo check`` the package at ``package_dir`` for the SBF target with ``features``.
+    """``cargo check`` the package at ``package_dir`` as ``chain`` checks, with ``features``.
 
-    Raises :class:`PreflightFailed` as :func:`sbf_session` does."""
-    return await _check(await sbf_session(workspace_root, sandbox=sandbox), package_dir, features)
+    ``imports`` are built first (Soroban): a package whose ``contractimport!`` file is absent does
+    not even parse, so without them the check reports a missing file rather than the rules' own
+    errors. ``target_directory`` is required with ``imports``, as :func:`build_imports` takes it.
+
+    Raises :class:`PreflightFailed` as :func:`chain_session` does, and when an import fails to
+    build."""
+    session = await chain_session(workspace_root, sandbox=sandbox, chain=chain)
+    if imports:
+        assert target_directory is not None, "imports need the workspace's target directory"
+        failure = await build_imports(session, imports, target_directory=target_directory)
+        if failure is not None:
+            raise PreflightFailed(failure)
+    return await _check(session, package_dir, features)
+
+
+async def wasm_identity_of(
+    project_root: Path, package: str, *, cargo_home: Path | None = None
+) -> tuple[WasmIdentity, tuple[ContractImport, ...]]:
+    """Where ``package``'s wasm build puts its artifact, and the workspace contracts it imports.
+
+    What a Soroban submission needs beyond :func:`select_package`'s answer: the library target's
+    stem and the workspace's target directory, read from the same workspace. Raises
+    :class:`PreflightFailed` when the package has no library target."""
+    workspace = await _workspace_at(project_root, cargo_home=cargo_home)
+    member = _pick_package(workspace, package)
+    if member.lib is None:
+        raise PreflightFailed(
+            f"{member.name} has no library target to build. Point the run at the contract's "
+            "crate, which needs a [lib] target."
+        )
+    identity = WasmIdentity(
+        workspace_root=workspace.root,
+        package_dir=member.root.resolve().relative_to(workspace.root.resolve()),
+        target_directory=workspace.target_directory,
+        artifact_stem=member.lib.artifact_stem,
+    )
+    return identity, contract_imports(workspace, member)
 
 
 async def _check(

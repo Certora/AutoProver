@@ -790,3 +790,15 @@ def generations(chain: str) -> tuple[ChainReference, ...]:
             f"no CVLR reference set for chain {chain!r} (have: {sorted(REFERENCE_SET)}). CVLR is "
             f"the Rust-side language, so EVM has none; a new Rust chain needs an entry here."
         ) from None
+
+
+def chain_of(reference: ChainReference) -> str:
+    """The chain whose :data:`REFERENCE_SET` entry ``reference`` is.
+
+    For a caller that selected a generation out of several chains' candidates and needs to know
+    which chain it landed on. Raises on a reference no chain registers, which is a registration
+    bug just as :func:`generations` says."""
+    for chain, references in REFERENCE_SET.items():
+        if reference in references:
+            return chain
+    raise ValueError(f"{reference.line()} is in no chain's reference set")

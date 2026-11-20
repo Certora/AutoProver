@@ -211,3 +211,29 @@ added later. The first `SKILL.md` draft can then run setup against a real projec
 are built. The skill repository's pin points at a tagged commit on `feature/solana` until the
 commands reach master. Items I and S3 apply to the CVL skill as well; that repository belongs to
 its maintainers, so the pattern is offered to them once it has worked here.
+
+## The Soroban skill
+
+The same division of labor serves `certora-autoprover-soroban`, and most of it is the same code.
+`certora-cvlr` detects the chain from the platform generation the package resolves (`chain_of` in
+`composer/spec/cvlr/reference.py`), so `setup`, `check` and `prove` are one command for both skills;
+`toolchain`, `wait` and `cex` take `--chain`, because they have no project to read it from. What
+differs on Soroban:
+
+- **The build and the conf.** `check` is a host `cargo check` under the pinned Soroban toolchain;
+  `prove` builds `wasm32v1-none` and submits through `certoraSorobanProver` with
+  `SOROBAN_BASE_CONF`, whose `rule_sanity: advanced` is the vacuity check until the wasm Prover
+  reads the `cvlr_vacuity_check!()` marker (the TODO in `composer/spec/cvlr/conf.py`).
+- **No summaries.** `SorobanProverAttributes` reads no tuning files, so a
+  `src/certora/summaries/<module>.txt` is refused with the reason rather than dropped.
+- **The reference text.** `cvlr.md` is `cvlr_soroban_baseline_facts.md`; `properties.md` is
+  `SOROBAN_CVLR_GUIDANCE`; `author.md` and `judge.md` render the pipeline's own Soroban prompts;
+  `invariants.md` and `vacuity.md` are the Soroban guidance templates under
+  `composer/templates/soroban/`. No recipes directory: the pipeline's Soroban author is handed no
+  knowledge bundle, and the Solana index would misdirect.
+- **`setup --token-model`** forwards the pipeline's `--token-model`: the in-process SEP-41 model,
+  off by default for the reasons `composer/spec/cvlr/entry.py` gives, and refused on a Solana
+  program.
+- **The interface module** gains `SOROBAN_REFERENCE_FILES` and `SOROBAN_AUTHOR_SECTIONS`; the
+  Soroban author prompt has no "State invariants" section, so the skill's Phase 5 points at
+  `invariants.md` instead.

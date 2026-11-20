@@ -281,6 +281,14 @@ _CVLR_SPECS = (
     ),
 )
 
+#: The Solana facts' Soroban peer. In no bundle: the pipeline's Soroban author is handed no
+#: knowledge bundle (:func:`composer.spec.cvlr.author.soroban_prompts`), so this serves the skill's
+#: reference text alone until a Soroban corpus exists.
+CVLR_SOROBAN_FACTS = ContextSpec(
+    title="CVLR and the Certora Soroban Prover",
+    loader=_resource_file_loader("cvlr_soroban_baseline_facts.md"),
+)
+
 #: For the agents that hold ``get_cvlr_recipe``: the author and the judge.
 CVLR_BUNDLE = KnowledgeBundle[CvlrChannel, CvlrRecipe](label="CVLR", recipes=CVLR_RECIPES, specs=_CVLR_SPECS)
 

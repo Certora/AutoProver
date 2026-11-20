@@ -1,7 +1,11 @@
-"""``certora-cvlr``: the mechanical steps of the Solana skill, one subcommand each.
+"""``certora-cvlr``: the mechanical steps of the Solana and Soroban skills, one subcommand each.
 
 Output is plain text for the agent running the skill. Exit status is 0 on success, 1 when the
 project is refused, with the reason on stderr, and 2 on a usage error.
+
+``setup``, ``check`` and ``prove`` detect the chain from the project. ``wait`` and ``cex`` have only
+a job link, so they take ``--chain``, which picks the chain's trace rendering and, on ``wait``,
+whether the printed recipes exist (the Soroban reference ships none).
 """
 
 # ruff: noqa: E402
@@ -72,16 +76,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="certora-cvlr", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
 
-    commands.add_parser(
+    toolchain = commands.add_parser(
         "toolchain",
-        help="Check the Rust and Solana tools the other commands build with, and print the command "
+        help="Check the Rust and chain tools the other commands build with, and print the command "
         "that installs each one that is missing.",
+    )
+    toolchain.add_argument(
+        "--chain",
+        choices=("solana", "soroban"),
+        default="solana",
+        help="Whose tools to check (default %(default)s). The other commands detect the chain from "
+        "the project; this one has no project to read.",
     )
 
     set_up = commands.add_parser(
         "setup",
-        help="Scaffold a Solana program for CVLR rules, declare its rule modules, and write the "
-        "CVLR reference text.",
+        help="Scaffold a Solana program or Soroban contract for CVLR rules, declare its rule "
+        "modules, and write the CVLR reference text.",
     )
     set_up.add_argument("project_root", type=Path, help="The Cargo workspace or package.")
     set_up.add_argument(
@@ -102,11 +113,17 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Do not compile the scaffolded package.",
     )
+    set_up.add_argument(
+        "--token-model",
+        action="store_true",
+        help="Soroban only: point the contract's SEP-41 token clients at an in-process model under "
+        "the `certora` feature, so a rule can read the balances a transfer moves. Off by default.",
+    )
 
     check_ = commands.add_parser(
         "check",
-        help="Type-check one component's rules for the SBF target, without building or "
-        "submitting. Seconds; run it after every edit.",
+        help="Type-check one component's rules for the chain's verification target, without "
+        "building or submitting. Seconds; run it after every edit.",
     )
     check_.add_argument("project_root", type=Path, help="The project setup was run on.")
     check_.add_argument("--package", help="As for setup.")
@@ -119,7 +136,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     prove_ = commands.add_parser(
         "prove",
-        help="Build one component's rules and submit them to the Certora Solana Prover. Prints the "
+        help="Build one component's rules and submit them to the chain's Certora Prover. Prints the "
         "job link once the job is accepted; `wait` reads the verdicts.",
     )
     prove_.add_argument("project_root", type=Path, help="The project setup was run on.")
@@ -171,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help="How long to wait before printing RUNNING (default %(default)s).",
     )
+    _chain_flag(wait_)
 
     vacuity_ = commands.add_parser(
         "vacuity",
@@ -185,7 +203,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     cex.add_argument("link", help="The job link prove printed.")
     cex.add_argument("--rule", required=True, help="The rule reported VIOLATED.")
+    _chain_flag(cex)
     return parser
+
+
+def _chain_flag(subparser: argparse.ArgumentParser) -> None:
+    subparser.add_argument(
+        "--chain",
+        choices=("solana", "soroban"),
+        default="solana",
+        help="The chain the job's project is on (default %(default)s): a command with only a job "
+        "link cannot detect it, and it decides how traces are rendered.",
+    )
 
 
 def _report_setup(result: SetupResult) -> str:
@@ -211,8 +240,8 @@ def _sandbox() -> SandboxConfig:
     return SandboxConfig.from_env(extra_ro=(PLATFORM_TOOLS_ROOT,))
 
 
-async def _toolchain() -> int:
-    checks = await check_toolchain()
+async def _toolchain(args: argparse.Namespace) -> int:
+    checks = await check_toolchain(args.chain)
     for c in checks:
         match c:
             case Present(item=item, detail=detail):
@@ -232,6 +261,7 @@ async def _setup(args: argparse.Namespace) -> int:
             components=args.component,
             sandbox=_sandbox(),
             check=args.check,
+            token_model=args.token_model,
         )
     except (PreflightFailed, ScaffoldStale, ComponentNameRejected) as exc:
         print(f"certora-cvlr setup: {exc}", file=sys.stderr)
@@ -265,8 +295,8 @@ def _rule_selection(args: argparse.Namespace) -> RuleSelection:
     return InheritRules()
 
 
-def _prover_options() -> ProverOptions:
-    return make_prover_options(cloud=True, app="solana")
+def _prover_options(chain: str) -> ProverOptions:
+    return make_prover_options(cloud=True, app="soroban" if chain == "soroban" else "solana")
 
 
 async def _prove(args: argparse.Namespace) -> int:
@@ -291,7 +321,6 @@ async def _prove(args: argparse.Namespace) -> int:
             request,
             package=args.package,
             sandbox=_sandbox(),
-            prover_opts=_prover_options(),
             on_waiting=lambda: print(
                 "waiting for another prove of this workspace to be accepted", file=sys.stderr
             ),
@@ -329,7 +358,7 @@ def _diagnostics(verdict: SbfVerdict) -> str:
 
 
 async def _wait(args: argparse.Namespace) -> int:
-    outcome = await wait(args.link, seconds=args.seconds, prover_opts=_prover_options())
+    outcome = await wait(args.link, seconds=args.seconds, prover_opts=_prover_options(args.chain))
     match outcome:
         case Running(status=status):
             print(f"RUNNING {status}")
@@ -354,11 +383,13 @@ async def _wait(args: argparse.Namespace) -> int:
                 case AlertReport() as alerts:
                     if (note := externals_note(external_warnings(alerts).messages)) is not None:
                         print(f"\n{note}")
-            _print_recipes(recipes_for(outcome))
+            if args.chain == "solana":
+                _print_recipes(recipes_for(outcome))
             return 0
         case JobFailed() | ResultsUnavailable() | RunFailed():
             print(f"FAILED\n{outcome.render()}")
-            _print_recipes(recipes_for(outcome))
+            if args.chain == "solana":
+                _print_recipes(recipes_for(outcome))
             return 1
 
 
@@ -388,7 +419,7 @@ async def _vacuity(args: argparse.Namespace) -> int:
 
 async def _cex(args: argparse.Namespace) -> int:
     try:
-        found = await violations(args.link, args.rule, prover_opts=_prover_options())
+        found = await violations(args.link, args.rule, prover_opts=_prover_options(args.chain))
     except CloudJobError as exc:
         print(f"certora-cvlr cex: the job has no results to read: {exc}", file=sys.stderr)
         return 1
@@ -419,7 +450,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     match args.command:
         case "toolchain":
-            return asyncio.run(_toolchain())
+            return asyncio.run(_toolchain(args))
         case "setup":
             return asyncio.run(_setup(args))
         case "check":

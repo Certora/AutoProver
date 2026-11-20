@@ -1,21 +1,24 @@
-"""What the ``certora-autoprover-solana`` skill depends on in this package.
+"""What the ``certora-autoprover-solana`` and ``certora-autoprover-soroban`` skills depend on in
+this package.
 
-The skill (``Certora/autoprover-skill``, ``plugins/certora-autoprover-solana``) pins a commit of
-this repository and names these commands, flags and files in its own text. Nothing in this
-repository reads that text, so a rename here would pass CI and break the skill at its next pin
-bump. The tests marked ``skill_interface`` check the code against this module instead.
+The skills (``Certora/autoprover-skill``, ``plugins/certora-autoprover-solana`` and
+``plugins/certora-autoprover-soroban``) each pin a commit of this repository and name these
+commands, flags and files in their own text. Nothing in this repository reads that text, so a
+rename here would pass CI and break a skill at its next pin bump. The tests marked
+``skill_interface`` check the code against this module instead.
 
 The names are written out rather than imported from the code they describe: an edit that changes
-one of them has to change this file too, where a reviewer sees that the skill is affected.
+one of them has to change this file too, where a reviewer sees that the skills are affected.
 """
 
 #: The console script.
 COMMAND = "certora-cvlr"
 
-#: Each subcommand the skill runs, with the flags it passes.
+#: Each subcommand the skills run, with the flags they pass. ``--token-model`` and the ``--chain``
+#: flags are the Soroban skill's; everything else both skills pass.
 SUBCOMMANDS: dict[str, tuple[str, ...]] = {
-    "toolchain": (),
-    "setup": ("--package", "--component", "--no-check"),
+    "toolchain": ("--chain",),
+    "setup": ("--package", "--component", "--no-check", "--token-model"),
     "check": ("--package", "--component"),
     "prove": (
         "--package",
@@ -27,9 +30,9 @@ SUBCOMMANDS: dict[str, tuple[str, ...]] = {
         "--msg",
         "--unsat-core",
     ),
-    "wait": ("--for",),
+    "wait": ("--for", "--chain"),
     "vacuity": ("--rule",),
-    "cex": ("--rule",),
+    "cex": ("--rule", "--chain"),
 }
 
 #: What ``wait`` prints first: the job is still running, or it finished and the verdicts follow,
@@ -39,7 +42,7 @@ WAIT_STATES = ("RUNNING", "FINISHED", "FAILED")
 #: Where setup writes the reference text, relative to the project root.
 REFERENCE_DIR = ".certora_internal/cvlr/reference"
 
-#: The reference files the skill reads, relative to :data:`REFERENCE_DIR`.
+#: The reference files the Solana skill reads, relative to :data:`REFERENCE_DIR`.
 REFERENCE_FILES = (
     "README.md",
     "cvlr.md",
@@ -51,11 +54,32 @@ REFERENCE_FILES = (
     "recipes/index.md",
 )
 
-#: Sections of ``author.md`` the skill sends the agent to by heading.
+#: The reference files the Soroban skill reads. No recipes: the Soroban reference ships none, as
+#: :func:`composer.spec.cvlr.skill.reference_documents` says.
+SOROBAN_REFERENCE_FILES = (
+    "README.md",
+    "cvlr.md",
+    "properties.md",
+    "author.md",
+    "judge.md",
+    "invariants.md",
+    "vacuity.md",
+)
+
+#: Sections of ``author.md`` the Solana skill sends the agent to by heading.
 AUTHOR_SECTIONS = (
     "## State invariants: a base case and one step per writer",
     "## Reaching a handler on an Anchor program",
     "## The loop ladder: when a loop will not finish",
+    "## When a rule should fail",
+)
+
+#: Sections of the Soroban ``author.md`` the Soroban skill sends the agent to by heading. The
+#: invariant method has no author section on Soroban; it is the reference's ``invariants.md``.
+SOROBAN_AUTHOR_SECTIONS = (
+    "## Storage, and what a rule may say about it",
+    "## Authorization",
+    "## Loops are bounded, and the bound is not assumed away",
     "## When a rule should fail",
 )
 

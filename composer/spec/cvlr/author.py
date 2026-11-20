@@ -670,6 +670,16 @@ _SorobanPropertyGenTemplate = TypedTemplate[SorobanCvlrPropertyGenParams](
 )
 
 
+def render_soroban_author_system(params: SorobanCvlrAuthorSystemParams) -> str:
+    """:func:`render_author_system`'s Soroban peer, for the skill's reference text."""
+    return _SorobanPropertyGenSysTemplate.bind(params).render_to(load_jinja_template)
+
+
+def render_soroban_judge_system(params: CvlrVersionParams) -> str:
+    """:func:`render_judge_system`'s Soroban peer, for the skill's reference text."""
+    return _SorobanJudgeSystemTemplate.bind(params).render_to(load_jinja_template)
+
+
 def _no_context(prompt: PromptInput) -> PromptInput:
     return prompt
 

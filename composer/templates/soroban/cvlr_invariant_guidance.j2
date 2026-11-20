@@ -1,0 +1,176 @@
+<background>
+A counterexample that starts from a state the contract could never be in means the harness is
+missing a constraint that the code maintains. The contract's storage entries stand in some
+relationship, and nothing in the harness says so. A rule starts from arbitrary storage unless an
+assumption rules a state out. So it can start from a pool whose recorded deposits exceed what its
+reserve entry holds, or from a position with debt and no collateral.
+
+The fix is to state that relationship as an invariant and prove it. Most of this document is about
+*choosing* what to state. The method is: list the writers, a base case per function that creates the
+state, and one step rule per writer. How to write the steps, and what to do when an invariant cannot
+be stated, are at the end of this document.
+
+## What makes a good candidate
+
+The line between this kind of invariant and a safety property is not well defined; it is arguably a
+safety property that a pool's recorded deposits never exceed its reserve. There is no definite rule
+of thumb, but these are the key indicators:
+
+1. It is "obvious" to an informed reader of the code.
+2. It is more structural than mathematical. For example, a balance entry for an address exists only
+   if the contract is initialized. Or, a pool marked closed has no outstanding shares.
+3. It is, with high probability, fundamental to *other* security properties.
+
+This list is not exhaustive, and a candidate need not satisfy all or even any of them. The
+deposits-and-reserve invariant above clearly involves math, so it appears to fail indicator 2. But
+it meets indicator 3, and it is a good invariant.
+
+## Where to look
+
+Look at the contract's storage keys (the `#[contracttype]` enum or constants it keys storage with)
+and the functions that `set` entries under them. Look at the initialization flow — what `__constructor`
+or the `initialize` function establishes, and which functions require it to have run. Look also at
+the flags and status fields the functions check before doing anything.
+</background>
+
+<guidance>
+## What an invariant can be about here
+
+State lives in the contract's instance, persistent and temporary storage, and a rule reads it the
+way the contract does, through `Env`. An invariant is therefore a `bool` function over an `Env` —
+by preference reading through the contract's own getters, else through its own storage keys:
+
+* **Entries under specific keys.** The admin entry, the supply, a config struct's fields.
+* **Entries one call reads and writes together.** A holder's balance and the total supply, when
+  every writer touches both.
+
+A relationship quantified over *every* entry of a kind has no rule, because no read sees them all.
+"The supply is the sum of every holder's balance" is an example. Restate it as what each operation
+does to the entries it touches: a transfer moves one balance down by exactly what it moves the other
+up, and the supply not at all. That is a property of each operation, checked once per writer, not an
+invariant. An invariant over "a holder's balance" is stated at one arbitrary address — a nondet
+`Address` parameter — which proves it for every address, with no loop.
+
+## Four ways a candidate goes wrong
+
+Check your candidate against these before you spend a prover run on it.
+
+1. **Not structural.** What you have is a safety or security property rather than a relationship
+   the code maintains. Consider whether it can be restated as a simpler, structural relationship.
+    Bad example: "no user can withdraw more collateral than they deposited"
+      (a safety property; it is about what an actor may do, not about how the entries stand)
+    Good example: "every position entry with a non-zero `debt` has a non-zero `collateral`"
+      (the same concern, restated as a relationship the code maintains)
+2. **Not inductive.** The statement cannot be proven by induction, usually because it names a
+   specific function or a sequence of them. Reformulate it so it holds whichever function ran.
+    Bad example: "after `close_pool` runs, the pool has no outstanding shares"
+      (names a function; this is a postcondition of that function)
+    Good example: "a pool marked closed has no outstanding shares"
+      (holds in every reachable state, whichever function ran)
+3. **Unlikely to hold.** This implementation probably does not maintain the relationship. Re-read
+   the source before formalizing it. Look especially for states the contract produces on purpose
+   and then fences off. If a contract writes a state that breaks the relationship, flags it, and
+   lets the functions refuse it from then on, the invariant must carry the flag.
+4. **Not formal.** The statement is too vague to formalize. Make it precise enough to be a boolean
+   function over storage entries.
+    Bad example: "the accounting is consistent"
+    Good example: "the `TotalShares` entry equals `UserShares + QueuedShares`"
+
+The bars are not symmetric. Drop a candidate on any real doubt about its inductiveness or its
+formalizability. Do *not* drop one merely because it looks mathematical.
+
+## Naming a function is the usual mistake
+
+An inductive invariant holds whichever function ran, in whatever order. If you find yourself naming
+a specific function in the statement, you are describing a postcondition, not an invariant. That is
+the most common way a candidate fails, and it is what failure mode 2 above looks like in practice.
+
+## Guard on initialization where the contract does
+
+Arbitrary storage includes the uninitialized state, and most invariants only hold once the
+constructor or `initialize` has run. State the guard the way the contract itself detects
+initialization — an admin entry that exists, an `Initialized` flag — and make the invariant
+conditional on it: `!initialized(e) || <the relationship>`. The base case is then the initializer
+(from arbitrary inputs and arbitrary prior storage, assert the invariant afterwards), and every
+writer's step carries the guard through.
+
+## Writing the steps
+
+Write the invariant once, as a function that returns `bool` over the environment. Then generate the
+steps with a local `macro_rules!`, so that each step shows only the operation it runs. Use
+`cvlr_soroban_derive::rule` inside the macro, as everywhere: `cvlr`'s own rule attribute and the
+`cvlr_rules!` / `cvlr_invariant_rules!` macros record rules in a section the Soroban Prover does not
+read, so steps generated through them check nothing.
+
+```rust
+use cvlr_soroban_derive::rule;
+
+/// Writers of `QueuedShares` and `TotalShares`: `queue_withdrawal`, `redeem_queued`, `deposit`,
+/// `withdraw`.
+pub fn queued_within_supply(e: &Env) -> bool {
+    Pool::queued_shares(e) <= Pool::total_shares(e)
+}
+
+macro_rules! preserves_queued_within_supply {
+    ($rule:ident, |$e:ident| $op:block) => {
+        #[rule]
+        pub fn $rule($e: Env) {
+            cvlr_assume!(queued_within_supply(&$e));
+            $op
+            cvlr_assert!(queued_within_supply(&$e));
+        }
+    };
+}
+
+preserves_queued_within_supply!(queued_within_supply_queue_withdrawal, |e| {
+    let holder = nondet_address();
+    let shares: i128 = cvlr::nondet::nondet();
+    clog!(shares);
+    Pool::queue_withdrawal(e.clone(), holder, shares);
+});
+// ... one invocation per writer in the list above
+```
+
+Those names are illustrative. The keys, the getters and the writers all come from the contract you
+are given. The `e: Env` parameter is the arbitrary pre-state — storage starts unconstrained, so no
+havoc helper is needed. Each step is a rule of its own with its own verdict, so a failure names the
+operation that breaks the invariant.
+
+**A step that fails is not yet a finding.** The pre-state ranges over every state that satisfies the
+invariant, and that includes states the contract never produces. Read the counterexample. If no
+operation could have produced its pre-state, the invariant is too weak to be inductive. Strengthen
+it by adding the conjunct that rules that state out, and the new conjunct then needs its own steps.
+This is how an invariant becomes inductive, and it is usually how a reviewer learns what the
+contract actually maintains.
+
+## Invariants that depend on each other
+
+Invariant i1 depends on i2 when proving i1 preserved requires assuming i2 in the pre-state. Without
+i2, the prover would consider states where i1 is spuriously violated. There are two ways to handle
+it.
+
+* **Conjoin them** into one invariant, when i2 exists only to make i1 inductive.
+* **Prove i2 on its own**, with its own base case and steps, and assume it in i1's steps, when i2
+  means something by itself or other rules need it too.
+
+The two routes prove the same thing. Assuming i2 in i1's steps and i1 in i2's is exactly proving
+`i1 && i2` inductive, so invariants that are all proved may assume one another.
+
+## When a counterexample starts from a state the contract cannot be in
+
+Add whatever excludes that state, trying these remedies in order.
+
+1. **An invariant**, proved as in "Writing the steps" and assumed in the failing rule. This is the
+   default move, not the last one, because an invariant is proved against the code, while an
+   assumption is only assumed.
+2. **A justification rule**, when the relationship cannot be stated as an invariant. That happens
+   when no step can preserve it on its own, or when it relates entries that no single writer touches
+   together. The justification rule is a rule of its own that proves the assumption is valid where
+   it arises: for example, that the only operation producing the value always produces it in range.
+   Then assume the relationship in the failing rule with `cvlr_assume!`, and name the justification
+   rule in a comment beside it.
+3. **A bare `cvlr_assume!`** with nothing behind it. This is the last resort, and it leaves the
+   property proved only under an assumption that nothing checks. If you use one, say three things in
+   a comment beside it and in the rule's commentary: what you assumed, why the contract cannot reach
+   a state that violates it, and what the property therefore no longer covers.
+</guidance>

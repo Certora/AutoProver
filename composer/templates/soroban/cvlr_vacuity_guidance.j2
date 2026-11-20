@@ -1,0 +1,58 @@
+# A Soroban rule reported `SANITY_FAILED`
+
+A rule is **vacuous** when no execution reaches its end: whatever it asserts, it has shown nothing.
+The conf reports such a rule `SANITY_FAILED` instead of verified. This document is how to read that
+verdict on the Soroban Prover, and how to find the contradiction.
+
+## What the check is, and its blind spot
+
+The conf sets `rule_sanity: advanced`, which on the wasm prover runs its one sanity check: a
+companion `satisfy` at the end of the rule (`rule_not_vacuous_tac`). The `#[rule]` attribute of the
+pinned `cvlr-soroban` also ends every rule body with `cvlr_vacuity_check!()`, so the reachable-end
+check sits after everything the rule does.
+
+The check runs on the rule's program *after optimization*. When the optimizer resolves a
+contradiction by itself — `v > 0` then `v < 0` on one variable — the contradiction is already gone
+from what the check sees, and the rule is reported not vacuous even though it is. The check catches
+contradictions only the solver sees: a cycle of comparisons, a storage read that disagrees with the
+write, assumptions that fight the contract's own guards. So a `SANITY_FAILED` is real, but its
+absence is weaker evidence than it looks. A `cvlr_satisfy!(true)` rule over the same assumptions and
+the same call is the check that covers both, and it is cheap; write one when a rule passes
+immediately and you are surprised.
+
+## Where the contradiction usually is
+
+Work through these in order, reading the rule as the prover does — every path that panics, errors or
+fails a host call ends there and is pruned:
+
+1. **The assumptions against each other.** Two bounds on one value with no overlap, `from != to`
+   together with storage that forces them equal, a `has` and a `!has` of one key.
+2. **The assumptions against the call.** The rule's preconditions leave only inputs the contract
+   rejects, so every path ends inside the call and none reaches the assertion. The classic is the
+   assume-violated-then-`cvlr_assert!(false)` spelling of an access-control property: every
+   surviving path ends inside the failing call, so the rule has no reachable end by construction.
+   State the property as "record the condition, call, assert the condition held" instead.
+3. **The storage shape.** Reading one key through two differently-spelled values, or assuming an
+   entry absent that the call's own path requires present. The contract's initialization guard is a
+   frequent case: a function that requires an initialized contract, in a rule whose storage
+   assumptions exclude the initialized state.
+4. **A loop between the assertion and the end of the rule.** The vacuity check sits at the very end,
+   so code after the assertion that the loop bound does not finish makes the rule vacuous even
+   though the assertion itself is reachable.
+
+## The unsat-core diagnostic
+
+A rerun of the rule with the vacuity check off and unsat cores on gives the solver's own account:
+with the check off a vacuous rule verifies, and the core is the set of constraints that proof rests
+on. Whether the rule's own assertion is in the core is the first thing to establish:
+
+- **The assertion is in the core.** The proof needs the assertion, so the path to it is live, and
+  the cause is after it (case 4 above), or the vacuity is the optimizer-resolved kind the rerun
+  settled before solving.
+- **The assertion is not in the core.** The constraints marked in the core are unsatisfiable without
+  it, so they cut off every path to the assertion. Find them, and say which side each comes from:
+  the rule's own assumption, or the contract's guard it fights.
+
+A rerun that writes no core is itself an answer: the prover settled the rule without a solver, which
+happens when assumptions contradict each other directly — two bounds on one value — and those are
+removed before solving. Read the rule's assumptions for that first.

@@ -1,7 +1,7 @@
-"""The ``certora-cvlr`` commands the Solana skill runs.
+"""The ``certora-cvlr`` commands the Solana and Soroban skills run.
 
 The tests marked ``skill_interface`` hold the code to :mod:`composer.spec.cvlr.skill_interface`,
-the list of what the skill names. One that fails here means either the change breaks the skill, or
+the list of what the skills name. One that fails here means either the change breaks a skill, or
 the interface module and the skill's text both need the new name.
 """
 
@@ -78,10 +78,45 @@ def test_the_reference_holds_every_file_and_section_the_skill_reads():
     assert [h for h in interface.AUTHOR_SECTIONS if h not in author] == []
 
 
-def test_the_readme_translates_every_tool_the_author_and_judge_texts_define():
+def _soroban_documents() -> dict[Path, str]:
+    return reference_documents(
+        package="token",
+        cvlr_versions="cvlr 0.6.2, cvlr-soroban 0.4.0",
+        caveats=("The CVLR manual is written for Solana.",),
+        shim=None,
+        chain="soroban",
+        token_model=("`token_a` in `src/lib.rs`",),
+    )
+
+
+@pytest.mark.skill_interface
+def test_the_soroban_reference_holds_every_file_and_section_the_soroban_skill_reads():
+    docs = _soroban_documents()
+    assert {Path(f) for f in interface.SOROBAN_REFERENCE_FILES} <= set(docs)
+    # No recipes: the pipeline's own Soroban author is handed none, so the reference ships none.
+    assert [p for p in docs if p.parent == Path("recipes")] == []
+    author = docs[Path("author.md")].splitlines()
+    assert [h for h in interface.SOROBAN_AUTHOR_SECTIONS if h not in author] == []
+
+
+def test_the_soroban_reference_speaks_soroban_not_solana():
+    docs = _soroban_documents()
+    assert "Soroban Prover" in docs[Path("cvlr.md")]
+    assert "cvlr_deserialize_nondet_accounts" not in docs[Path("cvlr.md")]
+    assert "storage" in docs[Path("invariants.md")]
+    assert "`recipes/" not in docs[Path("README.md")]
+    assert "summarize_for_prover" not in docs[Path("README.md")]
+
+
+@pytest.mark.parametrize("chain", ["solana", "soroban"])
+def test_the_readme_translates_every_tool_the_author_and_judge_texts_define(chain):
     """A tool those texts name but the table omits leaves the skill's agent reading instructions
     for something it does not have. Their tools are defined in bullets, ``* `name(...)` —``."""
-    docs = reference_documents(package="vault", cvlr_versions="cvlr 0.6.2", caveats=(), shim=None)
+    docs = (
+        _soroban_documents()
+        if chain == "soroban"
+        else reference_documents(package="vault", cvlr_versions="cvlr 0.6.2", caveats=(), shim=None)
+    )
     table = {
         name
         for row in docs[Path("README.md")].splitlines()
@@ -249,12 +284,84 @@ def test_vacuity_prints_the_finding_and_the_core(monkeypatch, capsys):
     assert out.endswith(f"Unsat core data:\n{core}\n")
 
 
-def test_without_rustup_the_toolchain_check_stops_and_installs_nothing(monkeypatch, capsys):
+@pytest.mark.parametrize("argv", [["toolchain"], ["toolchain", "--chain", "soroban"]])
+def test_without_rustup_the_toolchain_check_stops_and_installs_nothing(monkeypatch, capsys, argv):
     monkeypatch.setattr(skill.shutil, "which", lambda name: None)
-    assert main(["toolchain"]) == 1
+    assert main(argv) == 1
     out = capsys.readouterr().out
     assert out.startswith("MISSING rustup") and "https://rustup.rs" in out
     assert "install:" not in out
+
+
+def _fake_tools(monkeypatch, run_answers: dict[tuple[str, ...], str | None]) -> None:
+    monkeypatch.setattr(skill.shutil, "which", lambda name: f"/usr/bin/{name}")
+
+    async def fake_run(*argv: str) -> str | None:
+        return run_answers.get(argv)
+
+    monkeypatch.setattr(skill, "_run", fake_run)
+
+
+def test_the_soroban_toolchain_check_asks_for_the_wasm_toolchain(monkeypatch, capsys):
+    """The Soroban checks: the pinned toolchain with the wasm target, and none of Solana's tools."""
+    from composer.cargo.wasm import WASM_TARGET
+    from composer.spec.cvlr.conf import SOROBAN_RUST_TOOLCHAIN
+
+    _fake_tools(
+        monkeypatch,
+        {("rustup", "toolchain", "list"): f"{skill.HOST_RUST_TOOLCHAIN}-aarch64-apple-darwin"},
+    )
+    assert main(["toolchain", "--chain", "soroban"]) == 1
+    out = capsys.readouterr().out
+    assert "MISSING Soroban Rust toolchain" in out
+    assert f"rustup toolchain install {SOROBAN_RUST_TOOLCHAIN} --profile minimal --target {WASM_TARGET}" in out
+    assert "platform tools" not in out and "rustfilt" not in out
+
+
+def test_the_soroban_toolchain_check_asks_for_the_wasm_target_alone(monkeypatch, capsys):
+    from composer.cargo.wasm import WASM_TARGET
+    from composer.spec.cvlr.conf import SOROBAN_RUST_TOOLCHAIN
+
+    _fake_tools(
+        monkeypatch,
+        {
+            ("rustup", "toolchain", "list"): "\n".join(
+                f"{v}-aarch64-apple-darwin"
+                for v in (skill.HOST_RUST_TOOLCHAIN, SOROBAN_RUST_TOOLCHAIN)
+            ),
+            ("rustup", "target", "list", "--installed", "--toolchain", SOROBAN_RUST_TOOLCHAIN): (
+                "aarch64-apple-darwin"
+            ),
+        },
+    )
+    assert main(["toolchain", "--chain", "soroban"]) == 1
+    out = capsys.readouterr().out
+    assert f"MISSING {WASM_TARGET} target" in out
+    assert f"rustup target add {WASM_TARGET} --toolchain {SOROBAN_RUST_TOOLCHAIN}" in out
+
+
+def test_a_reference_set_knows_its_chain():
+    from composer.spec.cvlr.reference import SOLANA_V2, SOROBAN_V22, SOROBAN_V25, chain_of
+
+    assert chain_of(SOROBAN_V25) == "soroban"
+    assert chain_of(SOROBAN_V22) == "soroban"
+    assert chain_of(SOLANA_V2) == "solana"
+
+
+def test_wait_on_a_soroban_job_names_no_solana_recipe(monkeypatch, capsys):
+    """The Soroban reference ships no recipes directory, so pointing at one would misdirect."""
+
+    async def fake_wait(link, *, seconds, prover_opts):
+        return ProverReport(
+            raw_rule_status={RulePath("rule_a"): "SANITY_FAILED"},
+            result_str="",
+            link="L",
+            certora_run_stdout="",
+        )
+
+    monkeypatch.setattr(certora_cvlr, "wait", fake_wait)
+    main(["wait", "https://prover.certora.com/output/1/2?anonymousKey=k", "--for", "1", "--chain", "soroban"])
+    assert "recipes/" not in capsys.readouterr().out
 
 
 def test_a_units_summaries_compose_from_the_package_file_as_from_the_layers():
@@ -463,3 +570,126 @@ def test_a_component_that_assumes_a_shared_invariant_is_checked_proved_and_waite
     # why there is nothing in it. Reading a core is test_vacuity_prints_the_finding_and_the_core.
     assert main(["vacuity", link, "--rule", "rule_deposit_of_nothing"]) == 1
     assert "settled the rule without a solver" in capsys.readouterr().out
+
+
+_SOROBAN_MANIFEST = """\
+[package]
+name = "counter"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+soroban-sdk = "22.0.8"
+
+[profile.release]
+opt-level = "z"
+overflow-checks = true
+"""
+
+_SOROBAN_CONTRACT = """\
+#![no_std]
+use soroban_sdk::{contract, contractimpl, symbol_short, Env, Symbol};
+
+const COUNT: Symbol = symbol_short!("COUNT");
+
+#[contract]
+pub struct Counter;
+
+#[contractimpl]
+impl Counter {
+    pub fn increment(e: Env, by: u64) -> u64 {
+        let count: u64 = e.storage().instance().get(&COUNT).unwrap_or(0);
+        let new = count + by;
+        e.storage().instance().set(&COUNT, &new);
+        new
+    }
+}
+"""
+
+_SOROBAN_SHARED = """\
+//! Structural invariants.
+
+pub fn amount_is_small(amount: u64) -> bool {
+    amount < 1000
+}
+"""
+
+_SOROBAN_RULES = """\
+use cvlr::{clog, cvlr_assert, cvlr_assume};
+use cvlr::nondet::nondet;
+use cvlr_soroban_derive::rule;
+use soroban_sdk::{symbol_short, Env, Symbol};
+
+use crate::certora::specs::invariants::amount_is_small;
+
+const COUNT: Symbol = symbol_short!("COUNT");
+
+#[rule]
+pub fn rule_increment_adds_exactly_by(e: Env) {
+    let by: u64 = nondet();
+    cvlr_assume!(amount_is_small(by));
+    let before: u64 = e.storage().instance().get(&COUNT).unwrap_or(0);
+    cvlr_assume!(before < 1000);
+    let returned = crate::Counter::increment(e.clone(), by);
+    let after: u64 = e.storage().instance().get(&COUNT).unwrap_or(0);
+    clog!(before, by, returned, after);
+    cvlr_assert!(after == before + by);
+    cvlr_assert!(returned == after);
+}
+
+#[rule]
+pub fn rule_increment_adds_more(e: Env) {
+    let by: u64 = nondet();
+    cvlr_assume!(amount_is_small(by));
+    let before: u64 = e.storage().instance().get(&COUNT).unwrap_or(0);
+    cvlr_assume!(before < 1000);
+    let returned = crate::Counter::increment(e, by);
+    clog!(before, by, returned);
+    cvlr_assert!(returned > before + by);
+}
+
+#[rule]
+pub fn rule_increment_of_nothing(e: Env) {
+    let by: u64 = nondet();
+    cvlr_assume!(by < 10);
+    cvlr_assume!(by > 20);
+    let returned = crate::Counter::increment(e, by);
+    cvlr_assert!(returned == by);
+}
+"""
+
+
+@pytest.mark.expensive
+@pytest.mark.skill_interface
+def test_a_soroban_component_is_set_up_checked_proved_and_waited_for(tmp_path: Path, capsys):
+    """The Soroban counterpart of the loop test above, against the cloud: the chain is detected
+    from the manifest, one rule holds, one is violated, one is vacuous under the conf's sanity
+    check."""
+    if shutil.which("cargo") is None:
+        pytest.skip("cargo is not on PATH")
+    (tmp_path / "Cargo.toml").write_text(_SOROBAN_MANIFEST)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "lib.rs").write_text(_SOROBAN_CONTRACT)
+    assert main(["setup", str(tmp_path), "--component", "counting", "--no-check"]) == 0, (
+        capsys.readouterr()
+    )
+    out = capsys.readouterr().out
+    assert "soroban" in out.lower(), out
+    specs = tmp_path / SPECS_DIR
+    (specs / "invariants.rs").write_text(_SOROBAN_SHARED)
+    (specs / "counting.rs").write_text(_SOROBAN_RULES)
+    reference = tmp_path / interface.REFERENCE_DIR
+    assert all((reference / f).is_file() for f in interface.SOROBAN_REFERENCE_FILES)
+    assert not (reference / "recipes").exists()
+
+    assert main(["check", str(tmp_path), "--component", "counting"]) == 0, capsys.readouterr()
+    capsys.readouterr()
+    assert main(["prove", str(tmp_path), "--component", "counting"]) == 0, capsys.readouterr()
+    out = _wait_for(_submitted(capsys.readouterr().out), capsys)
+    assert out.startswith("FINISHED"), out
+    assert "  VERIFIED rule_increment_adds_exactly_by" in out
+    assert "  VIOLATED rule_increment_adds_more" in out
+    assert "  SANITY_FAILED rule_increment_of_nothing" in out
