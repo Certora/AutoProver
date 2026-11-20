@@ -1,0 +1,33 @@
+> Where this recipe and the Solana/CVLR manual or other Certora materials diverge, this recipe governs.
+
+### K2. Log the value an assertion reads when it is an enum or a bitfield `[RULE]`
+
+**Trigger:** the value an assertion inspects is a status field, an enum discriminant, or anything
+derived from a chain of comparisons — `is_open!(s) || is_closed!(s) || ...`. The rule then fails
+with a counterexample whose value looks arbitrary rather than wrong.
+
+**Formula:** `clog!` the exact expression the assertion reads, immediately before the assertion.
+
+```rust,ignore
+crate::pool_program::close_if_stale(ctx, stale).unwrap();
+
+// The log the assertion's value needs; see below for what is and is not known about why.
+clog!(matches!(pool.status, Status::Closed));
+
+cvlr_assert!(matches!(pool.status, Status::Closed) == stale);
+```
+
+**Why it is not only about legibility.** Logging every value an assertion depends on is already the
+standing habit, and this is a second reason for it: without the log, such a rule has been seen to
+fail on a value the program could never produce, and with it to verify. The likely mechanism is that
+the log gives the value a use site, which stops the compiler folding the discriminant comparisons
+into a bitmask operation that loses the derivation the solver needs; that is a hypothesis, not an
+established cause.
+
+**The part that is easy to get wrong:** log the expression the assertion reads, not a copy of it and
+not a differently-computed equivalent. A `clog!` on the wrong value is a no-op that looks like the
+fix, and the rule keeps racing the optimizer.
+
+Whether the log is needed for every such assertion or only at some optimization levels is not
+established either, so treat a counterexample that survives the log as a different problem, not as a
+reason to add more logs.

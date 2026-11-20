@@ -1,0 +1,66 @@
+> Where this recipe and the Solana/CVLR manual or other Certora materials diverge, this recipe governs.
+
+### K3. Sysvars: let the handler read them, and tie the account to the syscall `[RULE]`
+
+**Trigger:** a handler reads `Clock` or `Rent`, through the syscall (`Clock::get()`,
+`Rent::get()`) or from a sysvar account (`Clock::from_account_info(info)?`), and you are about to
+work around it: split the handler so the sysvar arrives as a parameter, mock the read, or skip a
+property because the read "is external".
+
+**Formula:** none of those, on a program built against `solana-program` 2.2 or the split SDK 3
+crates. There `Clock::get()`, `Rent::get()` and `from_account_info` are all analyzed: the sysvar
+types live in `solana-sysvar`, which the Prover inlines. Drive the handler as it is. When a rule
+needs the account and the syscall to agree, say so with one assumption:
+
+```rust,ignore
+let accounts = Box::new(cvlr_deserialize_nondet_accounts());
+let clock_info = &accounts[2];
+cvlr_assume!(*clock_info.key == sysvar::clock::id());
+let from_account = Clock::from_account_info(clock_info).unwrap();
+cvlr_assume!(from_account.epoch == Clock::get().unwrap().epoch);
+
+crate::processor::Processor::process_withdraw(&accounts, amount).unwrap();
+// ... the rule's assertions ...
+core::mem::forget(accounts);
+```
+
+`from_account_info` performs the address check itself, so a property about which account is the
+sysvar ("the clock must be the canonical Clock sysvar") is a property of the program, stated by
+the contrapositive: call the handler with `.unwrap()` and assert the key.
+
+**On the split SDK 3 crates** (`solana-account-info` 3, no `solana-program`) the same holds, spelled
+differently:
+
+- `from_account_info` is on `solana_sysvar::SysvarSerialize` (the `bincode` feature of
+  `solana-sysvar`), not on `Sysvar`. Import that trait to call it.
+- The sysvar's address is `Clock::id()`, from `solana_sysvar_id::SysvarId`.
+
+Current programs usually read sysvars only through the syscalls (`Clock::get()`, `Rent::get()`). A
+handler that reads them that way needs no account at all.
+
+Stake history is different. `StakeHistorySysvar` reads through the generic `sol_get_sysvar`, and
+the Prover models that call only for the clock and rent ids: for any other sysvar it returns an
+unconstrained status and writes nothing into the output buffer. A value read that way is not the
+runtime's, so a property that depends on a stake-history entry is a skip naming that read.
+
+**What still needs care: `Rent::minimum_balance` computes in `f64`.** The float builtins are
+summarized as unconstrained, so two calls with the same length can return different values. Do not
+assert that a stored reserve *equals* a fresh `minimum_balance`. Where the program stores the
+reserve it computed (a stake account's `meta.rent_exempt_reserve`), state the property over the
+stored value, which is what solvency is defined against anyway. If a property genuinely needs the
+schedule, an integer stand-in for `minimum_balance` is acceptable: it models the runtime's
+configuration, not the program's logic. Say so in the rule's commentary.
+
+A program that recomputes the reserve from `Rent` at each instruction, rather than storing it, has no
+stored value to state the property over. Stake on SDK 3 is one: `meta.rent_exempt_reserve` is
+deprecated there and ignored. Then the integer stand-in is the way to state it, not a fallback.
+
+**On `solana-program` 1.18** the sysvars are still inside `solana_program`, which the Prover does
+not inline apart from a short list. `Clock::get()`, `Rent::get()` and `Rent::minimum_balance` are on
+it; `from_account_info` is not. A call that is not inlined is external: it returns an unconstrained
+value and writes nothing, so `from_account_info` never returns a usable sysvar. The Prover's report
+names it among the external functions. When it does, skip the property, naming
+`Sysvar::from_account_info` as external, and stop. Do not rewrite the handler around it.
+
+**What this rests on:** Prover probes against the stake program on both SDK lines, and the Stake
+Pool and P-Token specifications, which read both sysvars this way.

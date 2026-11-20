@@ -1,0 +1,168 @@
+channels:
+  RULE: The fix is in the rule, in the harness module, which the author writes with `put_harness`.
+  SUMMARY: The fix is a `summarize_for_prover` directive. Unsound by construction, so it is for code
+    the properties do not depend on, and it invalidates the prover stamp.
+  EDIT: The fix is in the program's own source. The author describes the problem to `code_editor`
+    and does not edit the program itself.
+  CONF: 'The fix is a prover setting. The author controls only two: the loop bound and
+    `optimistic_loop`, and the second changes what a verdict means. Any other setting is a
+    `record_skip` naming the setting and the evidence for it.'
+  SKIP: There is no fix within the author's tools. `record_skip` with a reason a reviewer can act on
+    is worth more than a rule that looks like the property and is not.
+recipes:
+- id: K1
+  name: Satisfy rules, and the one they must not replace
+  triggers:
+  - A harness whose setup you are not yet sure the prover can execute at all
+  - A branch or post-state you want shown to be reachable at least once
+  - An acceptance property ("the handler accepts X") you are tempted to state as a satisfy rule
+  channel: [RULE, SKIP]
+  file: recipes/cvlr-k1-satisfy-for-reachability.md
+  search_terms:
+  - cvlr_satisfy
+  - cvlr_sanity_checked
+- id: K2
+  name: Log the value an assertion reads when it is an enum or a bitfield
+  triggers:
+  - Asserting over a status field, enum discriminant, or a chain of `is_x!(..) || is_y!(..)` tests
+  - A rule over such a value fails with a counterexample that looks arbitrary rather than wrong
+  channel: RULE
+  file: recipes/cvlr-k2-clog-before-enum-assert.md
+  search_terms:
+  - clog
+  - cvlr_assert
+- id: K3
+  name: Sysvars, read directly and tied to the syscall
+  triggers:
+  - A handler reads `Clock` or `Rent`, by syscall or from a sysvar account
+  - You are about to split a handler, mock a read, or skip a property because a sysvar read is
+    external
+  - A property about the rent-exempt reserve or `minimum_balance`
+  channel: RULE
+  file: recipes/cvlr-k3-sysvars-read-directly.md
+  search_terms:
+  - from_account_info
+  - Clock::get
+  - Rent::get
+  - minimum_balance
+- id: K4
+  name: A loop the bound does not finish
+  triggers:
+  - A rule stops on `Unwinding condition in a loop`
+  - You are about to raise `loop_iter` or turn on `optimistic_loop`
+  - A property over a loop whose trip count is set by account data
+  channel: [CONF, RULE, SUMMARY, EDIT, SKIP]
+  file: recipes/cvlr-k4-loop-the-bound-does-not-finish.md
+  search_terms:
+  - loop_iter
+  - optimistic_loop
+- id: K5
+  name: '`Cannot overflow` on an inferred pointer'
+  triggers:
+  - "A rule stops on `Cannot overflow: inferred pointer` or `Cannot overflow: computing TAC map index`"
+  channel: [RULE, SKIP]
+  file: recipes/cvlr-k5-cannot-overflow-inferred-pointer.md
+- id: K6
+  name: Taking a CPI out from under a handler
+  triggers:
+  - A handler performs a CPI and the property is about the handler's own bookkeeping
+  - A property about a token balance or a mint's supply across a CPI
+  - A rule stops on `[3003]` with `alloc/src/rc.rs` in the trace
+  - A VIOLATED rule over a value decoded back out of an instruction's bytes
+  channel: EDIT
+  file: recipes/cvlr-k6-taking-a-cpi-out-from-under-a-handler.md
+  search_terms:
+  - swap_import
+  - invoke_signed
+  - spl_token_transfer
+- id: K7
+  name: Descending to the program's state-transition core
+  triggers:
+  - A handler-level rule is blocked by a CPI, by account validation or by error formatting, and the
+    program has an accounting function below the handler
+  channel: RULE
+  file: recipes/cvlr-k7-descend-to-the-state-transition-core.md
+- id: K8
+  name: 'A rule that times out: its shape first, then a bounded stand-in'
+  triggers:
+  - A rule comes back TIMEOUT in a job that returned verdicts, or a rule that drives one function
+    alone times out
+  - A rule ranges over several account-list lengths or pre-state variants, multiplies two unbounded
+    `u64`s, or walks a distance nothing bounds
+  - A timed-out rule's statistics line says `static analysis`
+  - One function holds most of a timed-out rule's branching or nonlinear share, including a function
+    in a stand-in already in place
+  channel: [RULE, EDIT, SKIP]
+  file: recipes/cvlr-k8-a-bounded-stand-in.md
+  search_terms:
+  - mock_fn
+- id: K9
+  name: A halted job, and which rule halted it
+  triggers:
+  - A job that reaches its time limit, with no verdicts or with rules cut off as TIMEOUT
+  - A rule that still halts the job when submitted alone
+  - A handler that runs a `HashSet` insert, serializes a fixed-size array, or reads a buffer an
+    external allocator filled
+  channel: [RULE, EDIT, SKIP]
+  file: recipes/cvlr-k9-a-halted-job.md
+- id: K10
+  name: A rule the pointer analysis refuses
+  triggers:
+  - A rule ends in `[3308]` illegal dereference of an absolute address with error formatting in the
+    trace, or in `[3006]` illegal store of a stack pointer
+  - You are about to write a `summarize_for_prover` directive
+  channel: [SUMMARY, SKIP]
+  file: recipes/cvlr-k10-a-rule-the-pointer-analysis-refuses.md
+- id: K11
+  name: State the analysis cannot size, variable-length collections and `swap_derive`
+  triggers:
+  - A rule ends in `[3005]` memcpy with dynamically sized length
+  - A rule ends in `[3308]` on the program's account state, and a `data_len()` assumption did not
+    clear it
+  - An internal error out of `ScalarDomain`
+  - A submission that fails with no per-rule verdicts at all
+  - You are about to ask the editor for a `swap_derive`
+  channel: [EDIT, SKIP]
+  file: recipes/cvlr-k11-state-the-analysis-cannot-size.md
+- id: K12
+  name: Diagnosing a vacuous rule
+  triggers:
+  - A rule reported `SANITY_FAILED`
+  - You are about to write a `cvlr_satisfy!` rule to find out why another rule is vacuous
+  channel: RULE
+  file: recipes/cvlr-k12-diagnosing-a-vacuous-rule.md
+- id: K13
+  name: Acceptance through a `seeds` constraint
+  triggers:
+  - An acceptance property whose validation runs through a `seeds` constraint, including `init` on a
+    PDA
+  - A property that a non-canonical PDA is refused
+  channel: SKIP
+  file: recipes/cvlr-k13-acceptance-through-seeds.md
+  search_terms:
+  - find_program_address
+  - create_program_address
+- id: K14
+  name: Validating an accounts struct with `try_accounts`
+  triggers:
+  - A property enforced by the accounts struct's `#[account(...)]` constraints rather than by the
+    handler body
+  - You need a name `#[derive(Accounts)]` generates (the bumps type, the discriminant) and cannot find
+    it in the source
+  channel: RULE
+  file: recipes/cvlr-k14-validating-with-try-accounts.md
+  search_terms:
+  - try_accounts
+- id: K15
+  name: 'A rule that cannot finish: nonlinear arithmetic'
+  triggers:
+  - A job reports a rule at a low completion percentage after splitting it into many sub-problems,
+    and halts on its global timeout
+  - A rule multiplies or divides two symbolic values, in the program's arithmetic helpers or in the
+    property itself
+  - A counterexample whose witness holds a value no field of the program could store
+  channel: [RULE, EDIT, SKIP]
+  file: recipes/cvlr-k15-nonlinear-arithmetic.md
+  search_terms:
+  - NativeInt
+  - cvlr_lemma
