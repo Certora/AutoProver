@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Literal
 
 from certora_autosetup.setup.summary_resolver import extract_cvl_ast
+from pydantic import ValidationError
 
 from composer.pipeline.user_properties import PROPERTY_FILE_SUFFIX, UserProperty, UserPropertyFile
 
@@ -245,11 +246,20 @@ def read_property_files(root: Path, files: Iterable[Path]) -> PropertyFiles:
         try:
             loaded = UserPropertyFile.load(root / rel)
         except (OSError, ValueError) as e:
-            unreadable[rel] = str(e)
+            unreadable[rel] = _why_unreadable(e)
             continue
         for p in loaded.properties:
             defined.setdefault(p.id, []).append((rel, p))
     return PropertyFiles(defined, unreadable)
+
+
+def _why_unreadable(e: OSError | ValueError) -> str:
+    """Why a properties file did not load, without its path: each field error, or the OS error."""
+    if isinstance(e.__cause__, ValidationError):
+        return "; ".join(
+            f"{'.'.join(map(str, err['loc'])) or 'file'}: {err['msg']}" for err in e.__cause__.errors()
+        )
+    return e.strerror or str(e) if isinstance(e, OSError) else str(e)
 
 
 def defined_differently(ids: Iterable[str], defined: Definitions) -> dict[str, list[Path]]:
@@ -269,13 +279,77 @@ def defined_differently(ids: Iterable[str], defined: Definitions) -> dict[str, l
 
 type Severity = Literal["error", "warning", "info"]
 
+type ProblemKind = Literal[
+    "suite-does-not-load",
+    "unreadable-property-file",
+    "unreadable-spec",
+    "unparsed-spec",
+    "unknown-property",
+    "stray-property-tag",
+    "property-defined-differently",
+    "untagged-property",
+]
+
 
 @dataclass(frozen=True)
 class Problem:
     severity: Severity
+    kind: ProblemKind
     message: str
     file: str | None = None
     line: int | None = None
+    #: The rule or invariant the problem is about, if one.
+    rule: str | None = None
+    #: How to fix it.
+    hint: str | None = None
+
+
+def tag_problems(
+    tagged: Iterable[tuple[tuple[str, str], Sequence[str]]],
+    stray: Iterable[StrayTag],
+    suite_ids: Collection[str],
+    files: PropertyFiles,
+) -> list[Problem]:
+    """The problems of a project's tags and properties files, for the suite of ``suite_ids``.
+    ``tagged`` pairs each ``(spec file, rule)`` with at least one tag with the ids it names; ``stray``
+    the tags above no rule; ``files`` what the project's properties files define.
+
+    A properties file that does not read and a tag naming an id that no properties file defines
+    are errors (a tag naming another suite's property is fine); a stray tag and a property of the
+    suite that two files define differently are warnings."""
+    problems = [
+        Problem(
+            "error", "unreadable-property-file", f"The file does not read as a properties file: {why}",
+            path.as_posix(), hint="Fix the file, or rename it if it is not a property suite.",
+        )
+        for path, why in files.unreadable.items()
+    ]
+    for (spec, rule), ids in tagged:
+        unknown = [pid for pid in ids if pid not in suite_ids and pid not in files.defined]
+        if unknown:
+            problems.append(Problem(
+                "error", "unknown-property",
+                f"Rule {rule} is tagged with {', '.join(unknown)}, which no properties file defines.",
+                spec, rule=rule, hint="Define the property in a properties file, or correct the id in the tag.",
+            ))
+    problems += [
+        Problem(
+            "warning", "stray-property-tag",
+            f"The tag ({', '.join(t.ids)}) is not directly above a rule or invariant, so it tags no rule.",
+            t.spec_file, t.line,
+            hint="Move the tag into the comment directly above its rule, with no blank line between them.",
+        )
+        for t in stray
+    ]
+    problems += [
+        Problem(
+            "warning", "property-defined-differently",
+            f"Property {pid} has different definitions in {', '.join(p.as_posix() for p in paths)}.",
+            hint="Define the property in one file, and import that file from every suite that uses it.",
+        )
+        for pid, paths in defined_differently(suite_ids, files.defined).items()
+    ]
+    return problems
 
 
 @dataclass(frozen=True)
@@ -299,54 +373,40 @@ def check_suite(root: Path, suite: str, skipped: Iterable[str] = ()) -> SuiteChe
     try:
         loaded = UserPropertyFile.load_suite(root / suite)
     except (OSError, ValueError) as e:
-        return SuiteCheck({}, [Problem("error", str(e), suite)])
+        return SuiteCheck({}, [Problem("error", "suite-does-not-load", str(e), suite)])
     ids = [p.id for p in loaded.properties]
     skipped = list(skipped)
-    files = read_property_files(root, iter_files(root, PROPERTY_FILE_SUFFIX, skipped))
-    defined = files.defined
-    problems: list[Problem] = [
-        Problem("error", f"The file does not read as a properties file: {why}", path.as_posix())
-        for path, why in files.unreadable.items()
-    ]
-    rules: dict[str, list[tuple[str, str]]] = {pid: [] for pid in ids}
+    problems: list[Problem] = []
+    tagged: dict[tuple[str, str], tuple[str, ...]] = {}
+    stray: list[StrayTag] = []
     for spec in iter_files(root, ".spec", skipped):
         try:
             text = (root / spec).read_text()
         except OSError as e:
-            problems.append(Problem("error", f"The spec cannot be read: {e}", spec.as_posix()))
+            problems.append(Problem("error", "unreadable-spec", f"The spec cannot be read: {e}", spec.as_posix()))
             continue
         if not tagged_ids(text):
             continue
         lines = rule_lines(text)
         if lines is None:
             problems.append(Problem(
-                "error", "The spec does not parse on its own, so its tags were not read.", spec.as_posix(),
+                "error", "unparsed-spec", "The spec does not parse on its own, so its tags were not read.",
+                spec.as_posix(),
             ))
             continue
         tags = read_tags(spec.as_posix(), text, {r: ln[0] for r, ln in lines.items() if ln is not None})
-        for rule, tagged in tags.by_rule.items():
-            for pid in tagged:
-                if pid in rules:
-                    rules[pid].append((spec.as_posix(), rule))
-                elif pid not in defined:
-                    problems.append(Problem(
-                        "error", f"Rule {rule} is tagged with {pid}, which no properties file defines.",
-                        spec.as_posix(),
-                    ))
-        problems += [
-            Problem(
-                "warning", f"The tag ({', '.join(t.ids)}) is not directly above a rule or invariant.",
-                t.spec_file, t.line,
-            )
-            for t in tags.stray
-        ]
+        tagged.update(((spec.as_posix(), rule), pids) for rule, pids in tags.by_rule.items())
+        stray += tags.stray
+    files = read_property_files(root, iter_files(root, PROPERTY_FILE_SUFFIX, skipped))
+    problems += tag_problems(tagged.items(), stray, ids, files)
+    rules: dict[str, list[tuple[str, str]]] = {pid: [] for pid in ids}
+    for ref, pids in tagged.items():
+        for pid in pids:
+            if pid in rules:
+                rules[pid].append(ref)
     problems += [
-        Problem("warning", f"Property {pid} has different definitions in "
-                f"{', '.join(p.as_posix() for p in paths)}.")
-        for pid, paths in defined_differently(ids, defined).items()
-    ]
-    problems += [
-        Problem("info", f"No rule is tagged with property {pid}.") for pid, refs in rules.items() if not refs
+        Problem("info", "untagged-property", f"No rule is tagged with property {pid}.")
+        for pid, refs in rules.items() if not refs
     ]
     return SuiteCheck(rules, problems)
 
@@ -372,6 +432,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     for p in result.problems:
         where = f"{p.file}:{p.line}: " if p.file and p.line else (f"{p.file}: " if p.file else "")
         print(f"{p.severity}: {where}{p.message}", file=sys.stderr)
+        if p.hint:
+            print(f"    {p.hint}", file=sys.stderr)
     return 0 if result.ok else 1
 
 

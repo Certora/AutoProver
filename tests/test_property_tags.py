@@ -118,15 +118,24 @@ def test_check_suite_lists_each_property_with_its_rules_and_the_problems(
         "no_round_trip_profit": [(spec, "roundTrip")],
         "never_tagged": [],
     }
-    by_message = {p.message: p for p in result.problems}
-    unknown = by_message["Rule roundTrip is tagged with typo_id, which no properties file defines."]
-    assert unknown.severity == "error" and unknown.file == spec
-    assert {p.line for p in result.problems if p.severity == "warning" and p.line} == {9, 22}
-    assert by_message["Property burn_rounding has different definitions in "
-                      "certora/suites/accounting.property-suite.json, certora/suites/rounding.property-suite.json."]
-    assert by_message["No rule is tagged with property never_tagged."].severity == "info"
-    # supply_matches_shares is another suite's property: no remark.
+    by_kind: dict[str, list[pt.Problem]] = {}
+    for p in result.problems:
+        by_kind.setdefault(p.kind, []).append(p)
+    [unknown] = by_kind["unknown-property"]
+    assert (unknown.severity, unknown.file, unknown.rule) == ("error", spec, "roundTrip")
+    assert unknown.message == "Rule roundTrip is tagged with typo_id, which no properties file defines."
+    assert unknown.hint
+    assert [(p.severity, p.line) for p in by_kind["stray-property-tag"]] == [("warning", 9), ("warning", 22)]
+    [different] = by_kind["property-defined-differently"]
+    assert different.message == (
+        "Property burn_rounding has different definitions in "
+        "certora/suites/accounting.property-suite.json, certora/suites/rounding.property-suite.json."
+    )
+    [untagged] = by_kind["untagged-property"]
+    assert (untagged.severity, untagged.message) == ("info", "No rule is tagged with property never_tagged.")
+    # supply_matches_shares is another suite's property: no problem.
     assert not [p for p in result.problems if "supply_matches_shares" in p.message]
+    assert set(by_kind) == {"unknown-property", "stray-property-tag", "property-defined-differently", "untagged-property"}
     assert not result.ok
 
 
@@ -138,8 +147,12 @@ def test_a_suite_file_that_does_not_read_is_an_error(tmp_path: Path, monkeypatch
 
     result = check_suite(tmp_path, "certora/suites/rounding.property-suite.json", ["out-copies"])
 
-    unreadable = [p for p in result.problems if "does not read as a properties file" in p.message]
+    unreadable = [p for p in result.problems if p.kind == "unreadable-property-file"]
     assert [(p.severity, p.file) for p in unreadable] == [("error", "certora/suites/broken.property-suite.json")]
+    # The reason is the field error alone, not the file's path on this machine.
+    assert unreadable[0].message == (
+        "The file does not read as a properties file: properties.0.description: Field required"
+    )
 
 
 def test_a_suite_that_does_not_load_is_one_error(tmp_path: Path) -> None:
@@ -148,5 +161,5 @@ def test_a_suite_that_does_not_load_is_one_error(tmp_path: Path) -> None:
     result = check_suite(tmp_path, "a.property-suite.json")
 
     [problem] = result.problems
-    assert problem.severity == "error" and "cycle" in problem.message
+    assert (problem.severity, problem.kind) == ("error", "suite-does-not-load") and "cycle" in problem.message
     assert pt.main([str(tmp_path), "a.property-suite.json"]) == 1
