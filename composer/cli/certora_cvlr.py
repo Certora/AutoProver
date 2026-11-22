@@ -37,6 +37,7 @@ from composer.spec.cvlr.conf import (
     CheckVerdicts,
     CollectUnsatCore,
     OptimisticLoop,
+    PreciseBitwise,
     TunableConf,
 )
 from composer.spec.cvlr.externals import external_warnings
@@ -149,6 +150,12 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="WHY",
         help="Assume every loop finishes within --loop-iter. Unsound: every verdict in the job "
         "then depends on it. Give the reason.",
+    )
+    prove_.add_argument(
+        "--precise-bitwise",
+        metavar="WHY",
+        help="Encode bitwise operations exactly (bit-vectors) instead of approximately. Give the "
+        "reason.",
     )
     prove_.add_argument(
         "--msg",
@@ -291,6 +298,9 @@ async def _prove(args: argparse.Namespace) -> int:
             loop_iter=args.loop_iter,
             optimistic_loop=(
                 OptimisticLoop(args.optimistic_loop) if args.optimistic_loop is not None else None
+            ),
+            precise_bitwise=(
+                PreciseBitwise(args.precise_bitwise) if args.precise_bitwise is not None else None
             ),
         ),
         msg=args.msg,

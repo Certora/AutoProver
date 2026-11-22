@@ -44,19 +44,21 @@ from composer.spec.util import string_hash
 #: (``docs/upstream-defects.md`` P17).
 #:
 #: TODO(cvlr-todo U25): remove ``prover_version`` before the Solana AutoProver ships.
+_BASE_PROVER_ARGS = [
+    "-unsatCoresForAllAsserts true",
+    "-solanaSkipCallRegInst true",
+    "-solanaTACOptimize 2",
+    "-solanaStackSize 8192",
+    "-solanaHeapSize 262144",
+    "-solanaTACMathInt true",
+    "-solanaTACSoundSignedMath true",
+]
+
 BASE_CONF: Conf = {
     "smt_timeout": "6000",
     "rule_sanity": "basic",
     "prover_version": "master",
-    "prover_args": [
-        "-unsatCoresForAllAsserts true",
-        "-solanaSkipCallRegInst true",
-        "-solanaTACOptimize 2",
-        "-solanaStackSize 8192",
-        "-solanaHeapSize 262144",
-        "-solanaTACMathInt true",
-        "-solanaTACSoundSignedMath true",
-    ],
+    "prover_args": _BASE_PROVER_ARGS,
 }
 
 
@@ -69,6 +71,21 @@ class OptimisticLoop:
     """
 
     why: str
+
+
+@dataclass(frozen=True)
+class PreciseBitwise:
+    """Bitwise operations encoded precisely (bit-vectors), with the reason.
+
+    The reason is not part of the conf.
+    """
+
+    why: str
+
+
+#: ``-smt_preciseBitwiseOps`` takes no value (``... true`` stops the job at startup) and turns on the
+#: bit-vector theory, which ``-solanaTACMathInt`` must be off for.
+_PRECISE_BITWISE_ARGS = ["-smt_preciseBitwiseOps", "-solanaTACMathInt false"]
 
 
 @dataclass(frozen=True)
@@ -85,6 +102,8 @@ class TunableConf:
     #: rule in the submission is verified assuming its loops finish within ``loop_iter``, so the
     #: bound becomes part of what a verdict means.
     optimistic_loop: OptimisticLoop | None = None
+    #: Off.
+    precise_bitwise: PreciseBitwise | None = None
 
 
 @dataclass(frozen=True)
@@ -128,11 +147,17 @@ def merge_settings(current: TunableConf, update: TunableConf | SettingsEdit) -> 
 
 def tunable_conf(tunable: TunableConf) -> Conf:
     """The conf ``tunable`` describes, before any one submission's keys are added."""
-    return {
+    conf: Conf = {
         **BASE_CONF,
         "loop_iter": str(tunable.loop_iter),
         "optimistic_loop": tunable.optimistic_loop is not None,
     }
+    if tunable.precise_bitwise is not None:
+        conf["prover_args"] = [
+            *(a for a in _BASE_PROVER_ARGS if not a.startswith("-solanaTACMathInt ")),
+            *_PRECISE_BITWISE_ARGS,
+        ]
+    return conf
 
 
 def conf_history(tunable: TunableConf) -> tuple[str, ...]:

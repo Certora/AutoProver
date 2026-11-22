@@ -24,6 +24,7 @@ SUBCOMMANDS: dict[str, tuple[str, ...]] = {
         "--exclude-rule",
         "--loop-iter",
         "--optimistic-loop",
+        "--precise-bitwise",
         "--msg",
         "--group-id",
         "--unsat-core",
