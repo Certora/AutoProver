@@ -1591,7 +1591,7 @@ def _evaluate_report() -> AutoProverReport:
 
 def test_schema_4_2_round_trips():
     report = _evaluate_report()
-    assert report.schema_version == "4.2"
+    assert report.schema_version == "4.3"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
@@ -1741,3 +1741,69 @@ def test_render_html_shows_property_coverage_in_the_group():
 
 def test_render_html_without_property_coverage_has_no_coverage_table():
     assert "Property coverage" not in render_html(_mini_report())
+
+
+# ---------------------------------------------------------------------------
+# A property its rules establish only in part
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_collect_carries_what_a_cvlr_mapping_leaves_unestablished():
+    """A lending program's max-LTV property mapped to rules that never reached the borrow cap: the
+    cap's rules timed out and were dropped. The author's commentary said so, but only in a file the
+    report never read, and the report showed the property as formalized like any other."""
+    from composer.spec.cvlr.harness import GeneratedHarness
+    from composer.spec.cvlr.state import PropertyRuleMapping as CvlrMapping
+
+    result = GeneratedHarness(
+        commentary="c",
+        harness="h",
+        property_rules=[
+            CvlrMapping(property_title="within_max_ltv", rules=["rule_post_check"],
+                        unestablished="The borrow cap is unverified: its rules timed out."),
+            CvlrMapping(property_title="no_dust", rules=["rule_no_dust"]),
+        ],
+    )
+    assert result.unestablished_parts() == {
+        "within_max_ltv": "The borrow cap is unverified: its rules timed out.",
+    }
+
+    async def no_verdicts(_formalized):
+        return {}
+
+    props = [_prop("within_max_ltv", "max ltv"), _prop("no_dust", "no dust")]
+    properties, *_ = await collect(
+        [ReportComponentInput(name="Borrowing", props=props,
+                              formalized=Delivered(result, pathlib.Path("borrowing.rs")))],
+        fetch_verdicts=no_verdicts,
+    )
+    by_title = {p.title: p for p in properties}
+    assert by_title["within_max_ltv"].unestablished == (
+        "The borrow cap is unverified: its rules timed out.")
+    assert by_title["no_dust"].unestablished is None
+
+
+def test_coverage_warns_of_a_property_established_only_in_part():
+    partial = _fp("C", "within_max_ltv", [("c.rs", "r")]).model_copy(
+        update={"unestablished": "the cap"})
+    whole = _fp("C", "no_dust", [("c.rs", "r2")])
+    cov = validate(
+        properties=[partial, whole], rules=[_rv("c.rs", "r"), _rv("c.rs", "r2")],
+        groups=[_pg("g", [partial.key, whole.key])], skipped=[], gave_up=[], curtailed=[],
+        dropped_orphan_rules=0,
+    )
+    assert any("established only in part" in w and "within_max_ltv" in w for w in cov.warnings)
+    assert not any("no_dust" in w for w in cov.warnings)
+
+
+def test_render_html_shows_what_a_property_leaves_unestablished_in_its_group():
+    report = _mini_report()
+    report.properties[0] = report.properties[0].model_copy(
+        update={"unestablished": "only the single-deposit case is checked"})
+    h = render_html(report)
+    group = h.index('id="deposit-openness"')
+    table = h.index("Not established by these")
+    assert group < table
+    assert "<section" not in h[group + 1:table]
+    assert "only the single-deposit case is checked" in h[table:]
+    assert "Not established by these" not in render_html(_mini_report())

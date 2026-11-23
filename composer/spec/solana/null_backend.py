@@ -65,6 +65,9 @@ class NullResult(BaseModel):
     def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]:
         return [(t, list(u)) for t, u in self.property_rules]
 
+    def unestablished_parts(self) -> dict[PropertyTitle, str]:
+        return {}
+
     @property
     def artifact_text(self) -> str:
         return json.dumps(

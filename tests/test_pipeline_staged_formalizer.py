@@ -60,6 +60,8 @@ class _Result:
     run_link = None
     def property_checks(self): return []
 
+    def unestablished_parts(self): return {}
+
 
 class _Formalizer:
     """Records the order of ``begin`` / ``formalize`` calls. ``calls`` is shared with the staged half
@@ -341,6 +343,9 @@ class _FocusResult:
 
     def property_checks(self):
         return [(t, ["rule_" + t]) for t in self._mapped]
+
+    def unestablished_parts(self):
+        return {}
 
 
 def _props(*titles):

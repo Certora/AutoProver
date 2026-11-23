@@ -69,6 +69,12 @@ def validate(
             f"{len(curtailed)} component(s) were cut short by the run budget; their properties "
             "are excluded from the groupings above (see the budget appendix)."
         )
+    partial = sorted(p.title for p in properties if p.unestablished is not None)
+    if partial:
+        warnings.append(
+            f"{len(partial)} propert(ies) are established only in part; each names what its "
+            f"rules do not establish: {', '.join(partial)}."
+        )
 
     # A rule a property maps to but no run reported. Distinguishable from a rule the checker
     # genuinely returned UNKNOWN for, which carries the link of the run that said so. Named

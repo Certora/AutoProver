@@ -36,6 +36,11 @@ class ReportableResult(Protocol):
 
     def property_checks(self) -> list[tuple[PropertyTitle, list[RuleName]]]: ...
 
+    def unestablished_parts(self) -> dict[PropertyTitle, str]:
+        """The part of each property that its mapped checks do not establish, as the author stated
+        it. A property absent here is claimed in full."""
+        ...
+
     @property
     def output_link(self) -> str | None:
         """The verification-run link for this result (prover job URL / local dir), or ``None`` for
@@ -235,6 +240,7 @@ async def collect[R: ReportableResult](
         run_link = inp.formalized.run_link
         skip_reasons = {s.property_title: s.reason for s in res.skipped}
         mapping = dict(res.property_checks())
+        unestablished = res.unestablished_parts()
 
         def _ref(unit_name: RuleName) -> RuleRef:
             v = verdicts.get(unit_name)
@@ -249,7 +255,8 @@ async def collect[R: ReportableResult](
                 refs = [_ref(un) for un in mapping[prop.title] if un.strip()]
                 referenced.update(refs)
                 properties.append(FormalizedProperty(
-                    component=inp.name, rule_refs=refs, **prop.model_dump()
+                    component=inp.name, rule_refs=refs, unestablished=unestablished.get(prop.title),
+                    **prop.model_dump(),
                 ))
             else:
                 # The completion validator guarantees skipped-or-mapped; a residue means the

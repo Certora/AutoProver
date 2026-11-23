@@ -103,6 +103,9 @@ class GeneratedFoundryTest(BaseModel):
         """Property title -> the foundry test names that demonstrate it (the report's
         `ReportableResult` adapter; pairs with the structurally-shared ``skipped`` field)."""
         return [(m.property_title, m.tests) for m in self.property_tests]
+
+    def unestablished_parts(self) -> dict[PropertyTitle, str]:
+        return {}
     
     @property
     def artifact_text(self) -> str:

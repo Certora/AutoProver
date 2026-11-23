@@ -88,6 +88,13 @@ class PropertyRuleMapping(BaseModel):
         "over bases `[base_deposit, base_withdraw]` declares `solvency_deposit` and "
         "`solvency_withdraw`, so name those rather than the invocation."
     )
+    unestablished: str | None = Field(
+        default=None,
+        description="What part of the property these rules do not establish, and why: a conjunct "
+        "whose rules timed out and were dropped, an entry point no rule reaches, a range a rule "
+        "holds only under a pinned value. Leave it unset only when the rules establish the whole "
+        "property as stated. The report shows it beside the property's verdicts.",
+    )
 
 
 class RuleSubject(BaseModel):

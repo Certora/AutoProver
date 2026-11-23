@@ -67,7 +67,11 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
   acceptance stamps the publish gate; like the prover stamp, any later `put_harness` or skip change
   invalidates it.
 * `result(commentary, property_rules, rule_subjects)` — publish. Refused unless *both* stamps are on
-  the current buffer, and unless every rule you declared says what it drives.
+  the current buffer, and unless every rule you declared says what it drives. When a property's
+  rules establish only part of it (a conjunct whose rules you dropped after they timed out, an
+  entry point no rule reaches, a value a rule pins), say what is missing in that mapping's
+  `unestablished`. The report shows it beside the property's verdicts; commentary alone does not
+  reach the report.
 * `give_up(reason)` — last-resort exit.
 
 ## The prover configuration your rules run under
