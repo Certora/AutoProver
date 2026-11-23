@@ -880,6 +880,15 @@ async def batch_cvlr_generation(
                     "The edits to the program that draft was written against have been restored "
                     f"to your working copy; use `{EDIT_HISTORY_LOG}` to review them."
                 )
+        resumed_input.append(
+            "Only the draft and the program's edits carry over. Skips, expected failures, "
+            "summaries and your memory start empty: record again the ones the draft still needs."
+        )
+        _log.info(
+            "cvlr: %s resumes from its last draft with %d program edit(s); its skips, expected "
+            "failures, summaries and memory start empty",
+            description, len(restored_history),
+        )
 
     init_state = CvlrGenerationInput(
         curr_spec=last.spec if last is not None else None,
