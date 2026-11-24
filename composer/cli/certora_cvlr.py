@@ -158,6 +158,14 @@ def build_parser() -> argparse.ArgumentParser:
         "reason.",
     )
     prove_.add_argument(
+        "--heap-size",
+        type=int,
+        default=TunableConf.heap_size,
+        metavar="BYTES",
+        help="The TAC heap bound (default %(default)s). Raise it for a rule that stops on ERROR "
+        "[6001], to the size the error names.",
+    )
+    prove_.add_argument(
         "--msg",
         help="The job's message on the Prover dashboard (default: the component, then the "
         "package).",
@@ -302,6 +310,7 @@ async def _prove(args: argparse.Namespace) -> int:
             precise_bitwise=(
                 PreciseBitwise(args.precise_bitwise) if args.precise_bitwise is not None else None
             ),
+            heap_size=args.heap_size,
         ),
         msg=args.msg,
         purpose=CollectUnsatCore() if args.unsat_core else CheckVerdicts(),

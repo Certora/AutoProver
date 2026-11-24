@@ -377,18 +377,20 @@ halted job with no tree view still raises `CloudJobError` with its alerts. PreAu
 halted jobs this way. Seen as 18 jobs on the 2026-10-16 stake run
 ([stake-benchmark.md](./stake-benchmark.md)) and 6 on the lending benchmark's run 2b.
 
-**U33. `-solanaHeapSize` could be a setting the author may change.** `BASE_CONF` raises it to 256 KB,
-enough for the one crashed job of the lending benchmark that was resubmitted
-([klend-benchmark.md](./klend-benchmark.md)). A larger program could still overflow it. Since
-[EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773) the overflowing rule's error
-names the option and a size to pass, so the author's response is mechanical: a
-`TunableConf.heap_size: int` defaulting to 262144, rendered by `tunable_conf`. Raising it is sound
-(over the bound is an error, not a weaker proof), so unlike `optimistic_loop` it needs no
-justification. Before building it, check the error reaches the author: an `ERROR` rule's tree-view
-messages are collected (`flatten_tree_view` in [results.py](../composer/prover/results.py)), but no
-run has shown the 6001 text arriving. `-solanaStackSize` is a separate question: the Prover takes
-only multiples of 4096, and frame size interacts with what the program was compiled for. See
-[upstream-defects.md](./upstream-defects.md) P17.
+**U33. `-solanaHeapSize` is a setting `prove` may change; the author's tool does not have it yet.**
+`BASE_CONF` raises it to 1 MB (`DEFAULT_HEAP_SIZE`). 256 KB was enough for the one crashed job of the
+lending benchmark that was resubmitted ([klend-benchmark.md](./klend-benchmark.md)), but rules of
+two larger Anchor programs overflowed it: on one, 510 of the charged sites were the arms of the
+error enum's `name()`, inlined at each of a handler's error sites. A larger program could still
+overflow 1 MB, so `TunableConf.heap_size` carries it and `certora-cvlr prove --heap-size BYTES` sets
+it for one job. Since [EVMVerifier#8773](https://github.com/Certora/EVMVerifier/pull/8773) the
+overflowing rule's error names the option and a size to pass, so the response is mechanical. Open:
+`adjust_prover_config` does not offer it; before adding it there, check the error reaches the
+author: an `ERROR` rule's tree-view messages are collected (`flatten_tree_view` in
+[results.py](../composer/prover/results.py)), but no run has shown the 6001 text arriving.
+`-solanaStackSize` is a separate question: the Prover takes only multiples of 4096, and frame size
+interacts with what the program was compiled for. See [upstream-defects.md](./upstream-defects.md)
+P17.
 
 **U34. `verify_rules` cannot select rules, so parallel runs cannot split a unit.** Two
 `verify_rules` calls for one unit can run at once — the build permit, not a per-unit lock, keeps

@@ -37,19 +37,23 @@ from composer.spec.util import string_hash
 #: ``-solanaTACMathInt`` (P8) are on the Prover's master branch and not yet released, hence
 #: ``prover_version``.
 #:
-#: ``-solanaHeapSize`` is 256 KB, eight times the default. The bound is not the program's runtime
-#: heap: the Prover charges each allocation site in a rule's inlined program, frees nothing, and
-#: charges 512 bytes for a size it cannot read, which every formatted log message is. A rule over the
-#: bound gets an error, not a weaker proof. A large Anchor program's rules overflow the default
-#: (``docs/upstream-defects.md`` P17).
+#: ``-solanaHeapSize`` is 1 MB, 32 times the default. The bound is not the program's runtime heap:
+#: the Prover charges each allocation site in a rule's inlined program, frees nothing, and charges
+#: 512 bytes for a size it cannot read, which every formatted log message and error name is. A rule
+#: over the bound gets an error, not a weaker proof, so a larger bound costs no soundness. Rules of
+#: large Anchor programs overflow the default (``docs/upstream-defects.md`` P17), and some overflow
+#: 256 KB: an `#[error_code]` enum's ``name()`` arms are inlined at every error site of a handler.
 #:
 #: TODO(cvlr-todo U25): remove ``prover_version`` before the Solana AutoProver ships.
+#: The TAC heap bound every unit starts with, in bytes (``-solanaHeapSize``; see above).
+DEFAULT_HEAP_SIZE = 1048576
+
 _BASE_PROVER_ARGS = [
     "-unsatCoresForAllAsserts true",
     "-solanaSkipCallRegInst true",
     "-solanaTACOptimize 2",
     "-solanaStackSize 8192",
-    "-solanaHeapSize 262144",
+    f"-solanaHeapSize {DEFAULT_HEAP_SIZE}",
     "-solanaTACMathInt true",
     "-solanaTACSoundSignedMath true",
 ]
@@ -104,6 +108,8 @@ class TunableConf:
     optimistic_loop: OptimisticLoop | None = None
     #: Off.
     precise_bitwise: PreciseBitwise | None = None
+    #: The TAC heap bound, in bytes. A rule over it gets ERROR [6001], whose message names a size.
+    heap_size: int = DEFAULT_HEAP_SIZE
 
 
 @dataclass(frozen=True)
@@ -152,11 +158,12 @@ def tunable_conf(tunable: TunableConf) -> Conf:
         "loop_iter": str(tunable.loop_iter),
         "optimistic_loop": tunable.optimistic_loop is not None,
     }
+    heap = f"-solanaHeapSize {tunable.heap_size}"
+    args = [heap if a.startswith("-solanaHeapSize ") else a for a in _BASE_PROVER_ARGS]
     if tunable.precise_bitwise is not None:
-        conf["prover_args"] = [
-            *(a for a in _BASE_PROVER_ARGS if not a.startswith("-solanaTACMathInt ")),
-            *_PRECISE_BITWISE_ARGS,
-        ]
+        args = [a for a in args if not a.startswith("-solanaTACMathInt ")] + _PRECISE_BITWISE_ARGS
+    if args != _BASE_PROVER_ARGS:
+        conf["prover_args"] = args
     return conf
 
 
