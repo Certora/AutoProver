@@ -143,7 +143,9 @@ A stand-in cannot help when the property is *decided* by the heavy computation: 
 health check or a cap computed with the program's own fixed-point divisions. When those are the
 `fixed` crate's 128-bit type's own operations, the editor's `narrow_fixed` kind computes that type at
 64 bits for the whole unit. It does not reach a wide integer (a `U256`) the program builds from the
-type's bits: the timeout statistics name which one holds the time. Recipe K15 says when that is worth it and what it costs, and which of the program's constants to check first: one below the narrowed precision reads as zero. Decide it when the unit starts,
+type's bits: the timeout statistics name which one holds the time, and when it is the program's
+own wide integer, recipe K17 has the editor's two kinds for it. Recipe K15 says when narrowing the
+`fixed` type is worth it and what it costs, and which of the program's constants to check first: one below the narrowed precision reads as zero. Decide it when the unit starts,
 before its rules, because every value a rule builds lives at the type's scale.
 
 ## When the program itself is in the way, ask the editor
@@ -158,7 +160,7 @@ failed, which rule, and which code you believe is in the way. Do not prescribe a
 the diagnosis, the editor owns what to do about it, and a request that dictates the edit is one it has
 to re-derive anyway.
 
-The editor's charter is ten kinds, and knowing them tells you what is worth asking for:
+The editor's charter is twelve kinds, and knowing them tells you what is worth asking for:
 
 * **`early_panic`** rewrites every `?` in a function to `.unwrap()`. The same choice as
   `.unwrap()`-versus-`.is_ok()` above, applied where a rule cannot reach: a `?` *inside* the program,
@@ -216,6 +218,15 @@ The editor's charter is ten kinds, and knowing them tells you what is worth aski
   NFrac>`. **Name `NFrac` in the request**: values must fit below `2^(64 - NFrac)` and anything below
   `2^-NFrac` becomes zero. Every verdict in the unit is then about the narrowed arithmetic. Fetch
   recipe K15 with `get_cvlr_recipe` before asking.
+* **`native_muldiv`** gives a function that multiplies then divides through a wide intermediate (a
+  `U256` product and quotient, often a helper such as `full_mul_int_ratio` or `mul_div`) a body that
+  computes the same value, with the same failures, as one operation on the Prover's mathematical
+  integers. It is exact, so it changes no verdict's meaning, and it reaches methods. Name the
+  function and the rule whose statistics put the time in it.
+* **`narrow_wide_int`** computes the program's own wide integer type's multiplication and division
+  in its low 128 bits for your unit, assuming larger values away. **State the bound your unit's
+  values fit within**; every verdict is then proved only below `2^128` in that type. Recipe K17
+  covers both of these and when each applies.
 
 One more thing people reach for, and you should prefer the honest version of it. Shrinking a bounded collection —
 the array in the state struct going from 8 entries to 2 under the `certora` feature — makes loops over

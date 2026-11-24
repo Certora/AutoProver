@@ -28,13 +28,16 @@ and computes there still computes at full width. Examples are a `U256` from `con
 (K16), a "big fraction" for an interest index, or a helper that multiplies and divides a value's
 encoding by integers in 256 bits. Before asking, look at where the timed-out rule's time goes: if
 the dominant function is the program's (`uint_types::U256::div_impl`, a `BigFraction` operator)
-rather than one in `fixed`, narrowing will not move it.
+rather than one in `fixed`, narrowing will not move it on its own: K17 has the editor's two kinds
+for that arithmetic.
 
 Measured on the same lending program's valuation properties: with the type narrowed (`NFrac = 14`),
 the program's own 256-bit division still held 41-62 % of every timed-out rule's branching and no
 rule got a verdict. The properties that verified did so through K8 stand-ins for the market-value
 functions, which they only consumed. The ones decided by the valuation (LTV, minimum position value)
-were skipped. On the same program, rules on the post-borrow health check, which compares the type's
+were skipped. With the program's wide integer narrowed as well and its multiply-by-ratio helper
+computed natively (K17), the borrow-cap rules verified. On the same program, rules on the
+post-borrow health check, which compares the type's
 values directly, went from timeouts to verdicts once narrowed.
 
 **What every verdict in the unit then means.**

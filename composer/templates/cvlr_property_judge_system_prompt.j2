@@ -160,6 +160,20 @@ be stale; the tool is authoritative.
    paths it covers. And the assumed-away range is a precondition: a rule whose amounts can exceed
    `2^(64 - NFrac)` in the program is proved only below that, which the verdict should say.
 
+   A **`narrow_wide_int`** computes a wide integer type's multiplication and division only where
+   both operands' high 128 bits are zero and the product fits in 128 bits; every other execution is
+   assumed away. Like `narrow_fixed` it is bounded and its cost is stated: **a rule whose values in
+   that type can reach `2^128` is proved only below it**, and a property about that type's overflow
+   cannot have a green verdict. Under a `narrow_fixed` in the same unit the narrow type's encodings
+   stay below `2^64`, so a product of two of them always fits and the assumption excludes only
+   products with larger integers (a raw amount, a scale constant); check the rule's inputs for
+   those. A rule that reaches the narrowed operator should carry a `cvlr_satisfy!` witness that it
+   still does.
+
+   A **`native_muldiv`** is the exception among these: it computes the same value with the same
+   failures as the function it replaces, so it changes no verdict's meaning. Weigh it only if its
+   justification does not say that, or names a failure it left out.
+
    One further question for a swap, and it is the reason the kind has a stated precondition: the
    author's impls read and write **one** value per type. If a rule drives a handler taking *two*
    accounts of the swapped type — a transfer, a merge, a source and a destination — the two are the

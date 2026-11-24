@@ -1014,6 +1014,28 @@ presumably has no SSH keys or registry tokens at all, so private git or registry
 there regardless; whether cloud runs should support them, and how the owner would provide
 credentials, is a separate question for the executor (AIAutoProver).
 
+**U60. A cap decided by the program's own `U256` arithmetic.** — **kinds built (2026-11-24), not
+yet run end to end.** Run 10's max-LTV rules on a lending program's `calculate_borrow` timed out at
+`2^129`-`2^312` paths and were dropped. Hand probes on the same rules found four things needed
+together: K15's `narrow_fixed`; the program's `U256` multiply and divide computed in 128 bits; its
+multiply-by-ratio helper (`full_mul_int_ratio`) computed as one `NativeInt` `muldiv`; and, for the
+all-available and at-most borrow sizes, the rule split into lemma rules plus a composed rule that
+assumes their instances (monolithic, both still timed out at 2 h with `2^15`-`2^28` paths). Split,
+all-available verified (7 rules, 44 s). For at-most, both pieces' assertions verified (the larger in
+103 s), but the lemma that the result is the exact or the all-available one did not finish its
+non-vacuity check in 39 minutes, so that piece is not yet shown to be non-vacuous. The first two levers are now editor kinds 11 and 12,
+`native_muldiv` (exact: same value, same failures) and `narrow_wide_int` (a `redirect_module` of the
+wide type with `*`/`/` on the low halves, larger values assumed away, the author states the
+bound), known to the editor, reviewer, judge and author, with recipe K17. K17 also describes the
+lemma split, but nothing pushes it yet: an author has to find the lemmas itself. Open:
+
+* A run that exercises both kinds on the valuation unit.
+* `cvlr-fixed`'s `NarrowFixedU128` `*` wraps on overflow; klend's build panics (`fixed` with
+  debug assertions in release). A monotonicity lemma over the narrow `*` came back VIOLATED on a
+  wrapped product. Fix in cvlr: panic, as `fixed` does with overflow checks on.
+* The lemma split as pushed guidance: when a timed-out rule's statistics show few paths and a
+  handful of degree-4 nonlinear operations.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
