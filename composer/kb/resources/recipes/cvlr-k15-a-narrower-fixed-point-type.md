@@ -64,6 +64,13 @@ the narrowed unit, or skip it citing this recipe. On the lending program a minim
 because the shipped threshold had become zero, and the narrowing had to be taken back for the rules
 that needed it too.
 
+**Check the largest constants too.** A literal above `2^(64 - NFrac)` does not fit the narrow type,
+and the build fails on it (`lit: out of range`) wherever it is, even in a module your unit never
+reaches. The same lending program has a price-ratio bound of `1e15` in its order operations: it
+needs `NFrac` at most 14, while its minimum position value of `1e-6` needs at least 20. With such a
+pair no `NFrac` serves the program, and the editor will refuse; skip the properties the narrowing
+was for, citing both constants, rather than asking again.
+
 **Choosing `NFrac`.** Large enough that the smallest factor a property depends on stays non-zero;
 small enough that the largest amount fits below `2^(64 - NFrac)`. 14 suits values up to about
 `10^15` with four decimal digits of precision. Name it in the request; the editor refuses one

@@ -1021,9 +1021,8 @@ together: K15's `narrow_fixed`; the program's `U256` multiply and divide compute
 multiply-by-ratio helper (`full_mul_int_ratio`) computed as one `NativeInt` `muldiv`; and, for the
 all-available and at-most borrow sizes, the rule split into lemma rules plus a composed rule that
 assumes their instances (monolithic, both still timed out at 2 h with `2^15`-`2^28` paths). Split,
-all-available verified (7 rules, 44 s). For at-most, both pieces' assertions verified (the larger in
-103 s), but the lemma that the result is the exact or the all-available one did not finish its
-non-vacuity check in 39 minutes, so that piece is not yet shown to be non-vacuous. The first two levers are now editor kinds 11 and 12,
+all-available verified (7 rules, 44 s) and at-most verified (2 rules, the larger in under ten
+minutes, both non-vacuous). The first two levers are now editor kinds 11 and 12,
 `native_muldiv` (exact: same value, same failures) and `narrow_wide_int` (a `redirect_module` of the
 wide type with `*`/`/` on the low halves, larger values assumed away, the author states the
 bound), known to the editor, reviewer, judge and author, with recipe K17. K17 also describes the
@@ -1035,6 +1034,21 @@ lemma split, but nothing pushes it yet: an author has to find the lemmas itself.
   wrapped product. Fix in cvlr: panic, as `fixed` does with overflow checks on.
 * The lemma split as pushed guidance: when a timed-out rule's statistics show few paths and a
   handful of degree-4 nonlinear operations.
+
+Run 11 (2026-11-24, the valuation unit on these kinds, about $20, 2h49m) used `native_muldiv` on
+both ratio helpers unprompted by a timeout (it cleared a `[3001]` on the market-value path), and the
+editor got the ceiling variant's intermediate overflow right. `narrow_wide_int` was never needed:
+after an exact K16 redirect (revised once for a `[3003]` in `from_halves`) the borrow-cap rules
+timed out in `fixed`'s own operations, which is K15's case, and `narrow_fixed` was refused twice
+because no `NFrac` fits both the program's `1e15` price-ratio bound and its `1e-6` minimum value.
+Two missing kinds the editor named, both now seen in more than one run:
+
+* **Narrowing past an unreachable constant.** `narrow_fixed` cannot compile a literal above
+  `2^(64 - NFrac)`, even in a module the unit never reaches. A gated copy of that constant
+  (saturated, or the module gated off) would unblock it, at the cost of that module's meaning.
+* **Mocking one method.** The author wrote a `nondet()` stand-in for `Reserve::queued_liquidity_amount`,
+  which the cap only consumes through a `saturating_sub`. No kind reaches a single inherent method;
+  `redirect_module` would replace all of `reserve.rs`. Run 6 hit the same wall exposing a private fn.
 
 ## Leads from the certora-cvlr-kb ledger
 

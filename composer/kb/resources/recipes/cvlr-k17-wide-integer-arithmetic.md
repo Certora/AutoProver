@@ -36,8 +36,7 @@ the maximum loan-to-value (exact, all-available and at-most borrow sizes) timed 
 with `2^129` to `2^312` paths. With the fixed-point type narrowed (K15) and the wide type narrowed,
 the exact-size rule verified in seconds; the other two still timed out, down to `2^15`-`2^33`
 paths. With `native_muldiv` on the multiply-by-ratio helper as well, they still timed out as
-written. Split as the next paragraph says, the all-available rule verified, every piece in under a
-minute; the at-most rule's pieces verified their assertions in under two minutes.
+written. Split as the next paragraph says, both verified, every piece in under ten minutes.
 
 **What may remain: a proof that has to be split.** After both kinds, a rule that chains several
 products and quotients of symbolic values can still time out on a small nonlinear core: a handful
