@@ -142,7 +142,7 @@ class PropertyCoverage(BaseModel):
 
 type SceneConcern = Literal[
     "sound", "over_approximation", "under_approximation", "vacuity_risk",
-    "unresolved_or_havoc", "wrong_resolution",
+    "unresolved_or_havoc", "wrong_resolution", "unverified_model",
 ]
 type SceneEffect = Literal[
     "false_proof", "false_witness", "false_violation", "vacuity", "timeout_or_cost", "none",
@@ -159,7 +159,10 @@ class SceneFinding(BaseModel):
         "over_approximation = adds behaviour; under_approximation = removes reachable behaviour; "
         "vacuity_risk = assumes away a rule's premise; unresolved_or_havoc = a depended-on call is "
         "havocked, a risk when that call is expected to have a real effect on the rule's correctness; "
-        "wrong_resolution = linked/dispatched to the wrong implementation."))
+        "wrong_resolution = linked/dispatched to the wrong implementation; unverified_model = a "
+        "model of an external contract whose real code is not available, so the model cannot be "
+        "checked against it; the note lists the model's assumptions as justified by the author "
+        "(in a comment or a require reason; not verified) or not justified."))
     effect: SceneEffect = Field(description=(
         "false_proof = an assert rule could be VERIFIED that should not be; false_witness = a "
         "satisfy rule could be SATISFIED by a witness the real code cannot reach; "
@@ -685,7 +688,7 @@ groups."""
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7"] = "3.7"
+    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8"] = "3.8"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written
