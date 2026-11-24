@@ -74,7 +74,10 @@ be stale; the tool is authoritative.
    `handler(..).unwrap(); cvlr_assert!(!x);` checks that no success admits X, and a panic is not a
    success.
 
-   `mock_fn` is the harness-mirror problem wearing an attribute. It replaces the function's body
+   `mock_fn` is the harness-mirror problem wearing an attribute, and a `mock_method` is the same
+   thing for a method: everything below applies to both. A `mock_method`'s justification lists the
+   method's callers; each of them computes with the stand-in, so a rule through any of them is
+   reasoning over it. It replaces the function's body
    with a named stand-in, so ask the question you asked of the rules: whose code is at the bottom. A
    stand-in for a hash, or for a CPI the property does not speak about, is doing its job. A stand-in
    that reproduces the arithmetic a rule asserts over means the rule verifies the stand-in, and that

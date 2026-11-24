@@ -1046,9 +1046,12 @@ Two missing kinds the editor named, both now seen in more than one run:
 * **Narrowing past an unreachable constant.** `narrow_fixed` cannot compile a literal above
   `2^(64 - NFrac)`, even in a module the unit never reaches. A gated copy of that constant
   (saturated, or the module gated off) would unblock it, at the cost of that module's meaning.
-* **Mocking one method.** The author wrote a `nondet()` stand-in for `Reserve::queued_liquidity_amount`,
-  which the cap only consumes through a `saturating_sub`. No kind reaches a single inherent method;
-  `redirect_module` would replace all of `reserve.rs`. Run 6 hit the same wall exposing a private fn.
+* **Mocking one method** — **built (2026-11-24) as kind 13, `mock_method`.** The author wrote a
+  `nondet()` stand-in for `Reserve::queued_liquidity_amount`, which the cap only consumes through a
+  `saturating_sub`. No kind reached a single inherent method; `redirect_module` would have replaced
+  all of `reserve.rs`. `mock_method` duplicates the method under the gates with a body that only
+  calls the author's stand-in, receiver first, and lists the method's callers for the judge. Not
+  yet run end to end. (Run 6's wall, exposing a private fn, is a different kind and still open.)
 
 ## Leads from the certora-cvlr-kb ledger
 

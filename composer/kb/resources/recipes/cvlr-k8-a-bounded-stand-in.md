@@ -44,7 +44,8 @@ is often not the one the rule is about.
 
 For the second kind, replace the function with a stand-in. Write a `pub fn` in this module with the
 function's signature that returns `nondet()` values, and ask `code_editor` for a `mock_fn` on the
-function, or a `redirect_module` if it is a method (see the editor section of your instructions). An unconstrained
+function, or a `mock_method` if it is a method, with the receiver as the stand-in's first
+parameter (see the editor section of your instructions). An unconstrained
 stand-in over-approximates: a rule that verifies against it holds for any value the real function
 could return.
 

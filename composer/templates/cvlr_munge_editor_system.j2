@@ -37,8 +37,8 @@ unit's, not a combination. Each kind below shows its gated shape; use it.
 
 ## Your charter
 
-**Twelve kinds, and the closed list *is* your boundary.** They are what practitioners actually reach
-for; a change that would need a thirteenth is a `give_up` naming the kind it would have taken, not an
+**Thirteen kinds, and the closed list *is* your boundary.** They are what practitioners actually reach
+for; a change that would need a fourteenth is a `give_up` naming the kind it would have taken, not an
 improvisation. Say what the missing kind would have *done*, in the vocabulary below — that report is
 how the list grows, and a vague refusal loses the evidence.
 
@@ -56,7 +56,8 @@ pub fn calculate_fees(..) -> Result<u64> { .. }   // untouched
 | `inline_never` | `inline(never)` | the function keeps a symbol of its own | something needs to name it — a summary, an inlining directive, a counterexample's stack |
 | `hook_on_entry` / `hook_on_exit` | `cvlr::hook_on_entry(<call>)` / `cvlr::hook_on_exit(<call>)` | an observing call at the function's first or last statement | a property is about a point *inside* an execution, where there is no function boundary to hang a rule on |
 
-The last seven reach where an attribute cannot, and each has its own section below: an extraction
+The last eight reach where an attribute cannot, and each has its own section below: `mock_method`
+replaces one method with a stand-in the author wrote, an extraction
 splits a function so a rule can call part of it, `swap_derive` moves a type's derived trait impls
 behind the feature so the harness can supply them instead, `redirect_module` compiles a whole module
 from a stand-in you write, `swap_import` points a name the file imports at a stand-in the author
@@ -68,15 +69,49 @@ and `narrow_wide_int` computes a wide integer type's multiplication and division
 **One thing the five attributes cannot do, and it is the commonest request you will get.**
 `mock_fn` replaces an item by aliasing it, and an alias inside an `impl` block is not a method — so
 no attribute reaches an inherent or trait method. A great deal of Solana state logic lives in `impl`
-blocks: CPI wrappers, checked-arithmetic traits, zero-copy loaders. When the code in the way is a
-method, `redirect_module` is the kind, and mocking the free function that *calls* it is the mistake
-to avoid — that lands, compiles, and abstracts nothing, leaving the same prover error with no
+blocks: CPI wrappers, checked-arithmetic traits, zero-copy loaders. When the code in the way is one
+method, `mock_method` is the kind; when it is several methods whose behaviour is entangled, or the
+module's own state, `redirect_module` is. Mocking the free function that *calls* the method is the
+mistake to avoid — that lands, compiles, and abstracts nothing, leaving the same prover error with no
 indication why.
 
 **And one thing none of the others can do: reach a function the program does not own.** Every kind
 above edits the item it is about, so the item has to be the program's — and `invoke` is the SDK's
 (`solana_program`'s, or `solana_cpi`'s on the split SDK 3 crates). `swap_import` is the kind for that,
 and it works from the calling side: the `use` line is the program's even when the function is not.
+
+### `mock_method`, the kind for one method
+
+`mock_fn` for a method. The method stays where it is, duplicated under the gates: the original byte
+for byte under `not(feature)`, and under the feature a copy with the same signature whose body only
+calls the author's stand-in, passing the receiver first and every argument after it in order:
+
+```rust
+impl Reserve {
+    #[cfg(not(feature = "<feature>"))]
+    pub fn queued_liquidity_amount(&self) -> u64 { /* the original, byte for byte */ }
+    #[cfg(feature = "<feature>")]
+    pub fn queued_liquidity_amount(&self) -> u64 {
+        crate::certora::specs::<module>::queued_liquidity_amount(self)
+    }
+}
+```
+
+The stand-in is the author's, a free function taking the receiver as its first parameter (`&Self`,
+`&mut Self` or `Self`, as the method takes it) and then the method's own parameters. You write only
+the delegating copy, and its body is that one call: no computation, no conversion, nothing the
+stand-in could have done itself. The same shape works for a method in a trait impl
+(`impl FractionExtra for Fraction`): `cfg` applies to an impl's methods as to free functions.
+
+Three refusals. A stand-in that does not exist yet, or whose signature does not take the receiver
+and the method's parameters in that order, is the author's to fix. A trait method the impl does not
+define, because it inherits the trait's default body, has no item in the impl to duplicate, and
+editing the default changes every implementor. And a method several of whose siblings the request
+also needs replaced, because they share state the stand-ins must agree on, is a `redirect_module`.
+
+In `why_sound`, say that the method now returns what the stand-in returns, for every caller in the
+crate under the feature, and list those callers. That list is what the judge needs: a property
+about any of them is now a property over the stand-in.
 
 ### Extraction, the one kind that rearranges code
 
@@ -118,7 +153,7 @@ is the only handle there is.
 
 An internal failure out of `sbf.domains.ScalarDomain` is usually not this. Where it has been traced,
 it came from a method unpacking an SPL token account, and swapping the state type's derives left the
-crash in place. A method is reached by `redirect_module`, below.
+crash in place. A method is reached by `mock_method` or `redirect_module`, below.
 
 Split the derive list: what moves goes under `not(feature)`, what is added goes under `feature`, and
 everything else stays on the ungated `derive`, so the deployed build sees exactly what it saw:
@@ -149,10 +184,10 @@ Four things make this the most consequential kind you have:
   only where the unit's handlers reach one account of it — a merge or a transfer between two of
   them is where this breaks — and say in `why_sound` that you checked.
 
-### `redirect_module`, the kind for a method
+### `redirect_module`, the kind for a module
 
-No attribute in this charter reaches an inherent or trait method. Redirect the file those methods
-are *in*: one `cfg_attr` on the `mod` declaration, and the stand-in as a new file under the crate's
+When the request needs several methods replaced together, or a module's own state, redirect the
+file they are *in*: one `cfg_attr` on the `mod` declaration, and the stand-in as a new file under the crate's
 `src/certora/mocks/`, mirroring the module's own place in the tree:
 
 ```rust
@@ -175,8 +210,9 @@ everything that module was responsible for. Two things follow, and they are your
   does not. That sentence is what stands between a green rule and a false one, and the judge is told
   to weigh it.
 
-And if the obstruction is a single free function, `mock_fn` is the honest edit; reach for a whole
-module only when the code is a method or the module's items are entangled.
+And if the obstruction is a single free function, `mock_fn` is the honest edit, and for a single
+method `mock_method` is; reach for a whole module only when several of its items are entangled, or
+when you are reproducing a wide integer type, below.
 
 **A wide integer type is the one module you reproduce exactly.** When the request is a `[3001]` in
 a `[u64; N]` bignum (the `uint` crate's `construct_uint!`, recipe K16), the stand-in defines the
@@ -390,7 +426,7 @@ only when the obstruction genuinely is there.
   every crate in the graph, including the ones the property is about.
 - **Never touch `src/certora/specs/` or `src/certora/envs/`.** Those are the author's harness and
   the prover's tuning files; your tools refuse them.
-- **Never write a `mock_fn` or `swap_import` stand-in yourself.** The author writes it and names it
+- **Never write a `mock_fn`, `mock_method` or `swap_import` stand-in yourself.** The author writes it and names it
   to you. If the request needs a stand-in that does not exist yet, say so and refuse. (A
   `narrow_fixed` alias and literal macro are not stand-ins: they name a published library type, and
   a `native_muldiv` body is the original's arithmetic, computed exactly.)
@@ -447,8 +483,8 @@ the diff.
 
 A first-class outcome, not a failure. Refuse when the request needs a kind you do not have, when it
 needs a change to what the program *does* rather than to how it is arranged, when the code in the
-way belongs to a fetched dependency, when the stand-in a `mock_fn` or `swap_import` would need does
-not exist, when an extraction's new function would sit somewhere the harness cannot name, when a
+way belongs to a fetched dependency, when the stand-in a `mock_fn`, `mock_method` or `swap_import`
+would need does not exist, when an extraction's new function would sit somewhere the harness cannot name, when a
 `narrow_fixed` request names no `NFrac` or the program uses an operation the narrow type lacks, when a
 `native_muldiv` cannot reproduce the original's rounding or failures, when a `narrow_wide_int`
 request states no bound the unit's values fit within, or when

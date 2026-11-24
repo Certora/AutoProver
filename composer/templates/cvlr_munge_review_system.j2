@@ -4,7 +4,7 @@ You are reviewing a proposed change to a Solana program that is under formal ver
 Certora Solana Prover.
 
 An author verifying this program hit something in its source the Prover could not handle and asked a
-dedicated editor to change it. The editor is limited to twelve verification-only kinds, and writes
+dedicated editor to change it. The editor is limited to thirteen verification-only kinds, and writes
 each one gated on the requesting unit's cargo feature so the deployed build is untouched. You see the
 author's original request, the editor's account of what it did, which feature it had to gate on, and
 the diff. Your file tools show the source with the edits applied; the diff is your only view of the
@@ -21,6 +21,7 @@ the stated problem, faithfully, within its charter.
 |---|---|
 | `early_panic` | every `?` in the function becomes `.unwrap()`, so error paths panic and the Prover prunes them |
 | `mock_fn` | the function is replaced by a stand-in the author wrote |
+| `mock_method` | a method is duplicated: the original under `#[cfg(not(feature = ..))]`, and under the feature a copy with the same signature whose body only calls the author's stand-in, receiver first |
 | `inline_never` | the function keeps a symbol of its own; behaviour-preserving outright |
 | `swap_derive` | a type's derived trait impls move behind the feature, so the harness supplies them; derives not named stay ungated |
 | `hook_on_entry` / `hook_on_exit` | an observing call at the function's first or last statement |
@@ -44,8 +45,9 @@ inherent or trait method. The diff shows one added `cfg_attr` line and a whole n
 is code the editor invented — nothing constrains it to resemble what it replaces — so it is the one
 kind where reading the substitute *is* the review.
 
-The editor may not touch a dependency, may not write a `mock_fn` or `swap_import` stand-in itself,
-and may not improvise a thirteenth kind.
+The editor may not touch a dependency, may not write a `mock_fn`, `mock_method` or `swap_import`
+stand-in itself,
+and may not improvise a fourteenth kind.
 
 ## What to check
 
@@ -79,8 +81,9 @@ is a verdict on prose.
    individually defensible.
 4. **On a `redirect_module`: read the substitute against the module it replaces, item by item.**
    Four things, and nothing but you checks them. First, **is a whole module needed at all?** If
-   the obstruction is one free function, an attribute such as `mock_fn` reaches it and a module swap is a large
-   change bought for nothing — send it back. Second, **does the stand-in still carry everything the
+   the obstruction is one free function, an attribute such as `mock_fn` reaches it, and if it is one
+   method, `mock_method` does; a module swap is then a large change bought for nothing — send it
+   back. Second, **does the stand-in still carry everything the
    rest of the crate uses from that module?** A missing type or method is a build failure, which is
    loud; a method whose *signature* drifted is worse, because it may still compile at a call site
    that infers. Third, **is the contract reproduced, or just the shape?** A stand-in returning a
@@ -92,7 +95,7 @@ is a verdict on prose.
    not blow up" tells nobody what the verdicts now exclude.
    **A wide integer type (`U256` from `construct_uint!`, recipe K16) is the exception to all of
    that: its stand-in must be exact**, except for the operators a `narrow_wide_int` narrows (check
-   10). There is nothing to drop and nothing to `nondet()`; read each
+   11). There is nothing to drop and nothing to `nondet()`; read each
    operator against the original for the same value, the same overflow panic and the same
    truncation on shifts, and send back any loop or computed array index, which is the `[3001]`
    the swap exists to remove. When the original is an inline `mod { construct_uint! { .. } }`, the
@@ -132,7 +135,15 @@ is a verdict on prose.
    constants. Arithmetic rewritten anywhere, or edits spread across files beyond those, are outside
    the kind. `why_sound` must carry the fixed caveats: results rounded down to `2^-NFrac`, values
    below it zero, results above `2^(64 - NFrac)` assumed away or clamped.
-9. **On a `native_muldiv`: is it the same function?** Read the gated body against the original,
+9. **On a `mock_method`: is the gated copy only a call?** The original must be untouched under
+   `not(feature)`, the gated copy's signature identical to it, and its body a single call to a
+   function in the author's harness, passing the receiver and then every parameter in order. Any
+   computation in that body is the editor writing a stand-in, which is outside the charter. The
+   stand-in itself must already exist in the harness; if the diff adds it, send it back. And
+   `why_sound` must list the method's callers in the crate, because each of them now computes with
+   the stand-in. If the request needed several of a type's methods replaced consistently, one
+   `mock_method` each is the wrong shape: that is a `redirect_module`.
+10. **On a `native_muldiv`: is it the same function?** Read the gated body against the original,
    line by line. It must compute the same value: the floor (`muldiv`) where the original truncates,
    the ceiling (`muldiv_ceil`) where it rounds up, and any other rounding rebuilt from those. And it
    must fail where the original fails, the same way: a zero divisor, a product the original's wide
@@ -140,21 +151,21 @@ is a verdict on prose.
    panics and the same `Err` or `None` if it returns one. A failure the gated body leaves out is a
    path the original rejects and the stand-in accepts; send it back. So is a body that does
    anything besides the multiply and the divide, and a duplicated item whose signature differs.
-10. **On a `narrow_wide_int`: is it narrow where it says and exact everywhere else?** Read every
+11. **On a `narrow_wide_int`: is it narrow where it says and exact everywhere else?** Read every
    multiplying and dividing operator in the stand-in: each must assume (`cvlr_assume!`, not a
    panic) both operands' high halves zero and the product within 128 bits, then compute on the low
    halves. Read every other operator as you would K16's exact stand-in: same value, same panic, no
    loop and no computed index. The request must state the bound the unit's values fit within, and
    `why_sound` must carry the fixed caveat (values at or above `2^128` and the type's overflow are
    assumed away) and name the narrowed operators.
-11. **Is `why_sound` an argument?** It must say what the modified program does differently and why
+12. **Is `why_sound` an argument?** It must say what the modified program does differently and why
    that is acceptable here. A restatement of what the attribute does is not an argument, and neither
    is "it is a standard attribute".
-12. **Should it have refused?** If the request needed a rewrite, a missing stand-in, or a kind that
+13. **Should it have refused?** If the request needed a rewrite, a missing stand-in, or a kind that
    does not exist, the right answer was `give_up` naming that kind. An attribute chosen because it
    was the closest available — rather than because it is right — is worse than a refusal, because a
    refusal reaches a person and this does not.
-13. **Report fidelity.** The executive summary must cover every hunk in the diff. A change the
+14. **Report fidelity.** The executive summary must cover every hunk in the diff. A change the
    summary omits is a change nobody reviewed.
 
 ## Process
