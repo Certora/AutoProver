@@ -11,9 +11,10 @@
 > producer shrinks to "parse my docs → emit JSON", with no dependency on the RAG stack.
 >
 > **Scope:** this layer ships the *mechanism* — the format, the importer, and the tag→connection
-> registry — with **no corpus on it**; the first adopter is the Crucible application, which lands
-> with the Solana backend. The Foundry and CVL builders stay exactly as they are; they are
-> candidate future adopters (§5), not part of this change. The format is nonetheless designed to be
+> registry. Its first corpus is the CVLR API reference, `cvlr_api_kb`, generated in this repository
+> by `composer/scripts/cvlr_api_docs.py`; the Crucible application's corpus is another producer, on
+> its own branch. The Foundry and CVL builders stay exactly as they are; they are candidate future
+> adopters (§5). The format is nonetheless designed to be
 > general, so migrating them later needs no schema change.
 >
 > Companion to [rust-applications.md](./rust-applications.md) (the descriptor-driven app model and
@@ -229,9 +230,9 @@ KNOWLEDGE_BASES: dict[str, str] = {
 }
 ```
 
-It is **empty here** — a corpus's entry lands with the application that declares it, together with
-the `composer/tools/<corpus>_rag.py` that searches it, because [`rag_env.py`](../composer/tools/rag_env.py)
-requires both halves before a tag is usable. This is the same registry idea
+Its entries are the corpora the importer fills: `cvlr_api_kb` is the first. An application's entry
+lands with the `composer/tools/<corpus>_rag.py` that searches it, because
+[`rag_env.py`](../composer/tools/rag_env.py) requires both halves before a wheel's tag is usable. This is the same registry idea
 as `rag_env.py` (tag → search tools) and the ecosystem registry:
 a declarative tag resolved to a concrete resource, not a fork. The existing
 `*_DEFAULT_CONNECTION` constants in `db.py` stay put; if CVL/Foundry ever migrate onto this path,
@@ -242,7 +243,8 @@ corpus's *import* target and its *runtime* search tools resolve by one name.
 
 ## 5. Does the format generalize? (Foundry / CVL — future adopters, not now)
 
-No *existing* corpus moves onto this mechanism now — the first adopter is a new one (Crucible's).
+No *existing* corpus moves onto this mechanism now — its adopters are new ones (the CVLR API
+reference, and Crucible's).
 But to be sure we aren't designing a Crucible-shaped format by accident, it's worth checking the
 format could absorb the *other* corpora later.
 
@@ -272,6 +274,16 @@ The genuinely corpus-specific pieces — Foundry's `.mdx → .html` conversion
 translation, CVL's docutils traversal — would stay in producers either way. So the model absorbs
 both non-trivial corpora cleanly; the design isn't Crucible-only.
 
+**One measurement, from a corpus that briefly tried it.** The `cvlr_kb` documentation half was for a
+while produced out of tree, which meant lifting `ragbuild.py`'s docutils walk into a shared parser.
+That lift is reverted — the manual is built and ingested here — but what it showed is worth keeping:
+the per-element mapping above is exactly right, with every element the CVL traversal handles having
+one kind and no residue; and the one thing this flat format cannot express is `push_child`, which
+links a parent chunk to its first child's header path and opening sentence. A manifest-based
+producer simply omits it. That is the whole gap between the two representations, and it is small —
+but real, so a CVL migration should decide about it deliberately rather than discovering it as a
+quality regression.
+
 ---
 
 ## 6. What this gives Rust applications (the motivating case)
@@ -283,8 +295,9 @@ without writing composer-resident Python glued to the RAG DB. Two levels:
 - **Level 1 (what this layer enables):** the app ships a `<kb>.rag.json` next to its crate (built
   however it likes — a script in the app's own repo, checked-in output, a CI artifact) and the
   generic `rag_import.py` ingests it. No checkout of the upstream doc source at build or run time.
-  Composer ships the importer and the schema, nothing corpus-specific. Crucible is the first app to
-  do this; see its own docs for that corpus.
+  Composer ships the importer and the schema, nothing corpus-specific. Crucible does this; see its own docs
+  for that corpus. The CVLR backend does the same with an in-tree producer,
+  `composer/scripts/cvlr_api_docs.py`, so the pattern is not wheel-specific.
 - **Level 2 (optional, natural follow-on):** add a wheel FFI callout — `rag_entries() -> str`
   returning the manifest JSON — so RAG content becomes part of the app package exactly like
   `descriptor()`. The importer could then ingest straight from a loaded wheel
@@ -305,16 +318,24 @@ The mechanism, corpus-free:
    covered by [`tests/test_rag_import.py`](../tests/test_rag_import.py) (each product feeds exactly
    its own index, block kinds cut as declared, `part` numbering across sections *and* across
    manifests sharing a DB, code-ref tagging, version and target-resolution refusals).
-3. The `KNOWLEDGE_BASES` registry (§4) in [`composer/rag/db.py`](../composer/rag/db.py) — **empty**,
-   the same resting state as [`rag_env.py`](../composer/tools/rag_env.py)'s tools registry.
+3. The `KNOWLEDGE_BASES` registry (§4) in [`composer/rag/db.py`](../composer/rag/db.py).
+4. The first producer, [`composer/scripts/cvlr_api_docs.py`](../composer/scripts/cvlr_api_docs.py):
+   rustdoc JSON over the CVLR crates the backend pins, emitted as one manifest tagged `cvlr_api_kb`.
+   Of the RAG package it imports only the manifest model and the corpus's header layout
+   (`composer/rag/cvlr_api.py`), so it pulls in neither spaCy, an embedding model nor a DB,
+   and it is covered by [`tests/test_cvlr_api_docs.py`](../tests/test_cvlr_api_docs.py), its
+   walk by compiling every path it emits against the pinned crates. That is the producer/importer split working as intended.
 
-What an adopting application adds, in one go: its committed `<kb>.rag.json`, both registry halves
-(the `KNOWLEDGE_BASES` connection + a `composer/tools/<corpus>_rag.py` in `rag_env._FACTORIES`), the
-DB role/schema in [`init-db.sql`](../composer/scripts/init-db.sql), and whatever container wiring
-populates it at `setup-db` time.
+What an adopting application adds, in one go: its `<kb>.rag.json` (or the producer that builds it),
+its `KNOWLEDGE_BASES` connection, the DB role/schema in
+[`init-db.sql`](../composer/scripts/init-db.sql), and whatever container wiring populates it at
+`setup-db` time. A wheel that names the corpus in its descriptor also needs the
+`composer/tools/<corpus>_rag.py` in `rag_env._FACTORIES` that searches it.
 
-**Untouched:** `foundry_ragbuild.py`, `ragbuild.py` (CVL), their wrappers, and `refresh_rag.sh`.
-No runtime code changes — the search tools, `rag_env.py`, and the DB API are the same.
+**Not producers:** `ragbuild.py` builds the CVL, extended and CVLR-manual corpora by name
+(`--corpus`), parsing sphinx HTML and writing straight to each corpus's database, which is the right
+shape whenever the source is something this repository builds anyway. `foundry_ragbuild.py` and
+`refresh_rag.sh` are unchanged.
 
 ---
 

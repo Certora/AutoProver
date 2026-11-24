@@ -1065,7 +1065,7 @@ def test_reading_a_workspace_passes_its_toolchain_and_cargo_home_on(tmp_path, mo
 
     def read(*, toolchain: str | None, cargo_home: Path | None) -> None:
         metadata._cargo_metadata(
-            tmp_path, offline=True, features=(), toolchain=toolchain,
+            tmp_path, offline=True, no_deps=False, features=(), toolchain=toolchain,
             cargo_home=cargo_home, timeout_s=5,
         )
 
@@ -1102,7 +1102,8 @@ def test_a_missing_toolchain_fails_the_read_before_cargo_runs(tmp_path, monkeypa
     monkeypatch.setattr(rustup.subprocess, "run", fake_run)
     with pytest.raises(rustup.ToolchainMissing, match="rustup toolchain install 9.9.9"):
         metadata._cargo_metadata(
-            tmp_path, offline=True, features=(), toolchain="9.9.9", cargo_home=None, timeout_s=5
+            tmp_path, offline=True, no_deps=False, features=(), toolchain="9.9.9",
+            cargo_home=None, timeout_s=5,
         )
     ((args, env),) = probes
     assert args[1:] == ["which", "--toolchain", "9.9.9", "cargo"]
