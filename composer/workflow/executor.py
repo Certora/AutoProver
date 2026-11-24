@@ -19,6 +19,7 @@ from composer.input.files import (
 
 from composer.llm.provider import ModelProvider
 
+from composer.kb.kb_context import CVL_BUNDLE
 from composer.kb.knowledge_base import kb_tools as make_kb_tools
 from composer.llm.types import CacheLevel
 from composer.rag.models import DefaultEmbedder
@@ -530,7 +531,7 @@ def _cvl_knowledge_setup(
     carries the manual trio + recipe retrieval (the CVL context documents ride
     in its initial prompt)."""
     manual_tools = tuple(cvl_manual_tools(rag_db))
-    recipe_tools = tuple(make_kb_tools())
+    recipe_tools = tuple(make_kb_tools(CVL_BUNDLE))
     builder = (
         Builder()
         .with_llm(
