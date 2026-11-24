@@ -40,6 +40,8 @@ from composer.prover.conf import InheritRules, RuleSelection, dump_conf
 from composer.spec.cvlr.conf import (
     DEFAULT_FEATURE,
     PLATFORM_TOOLS_VERSION,
+    CheckVerdicts,
+    ConfPurpose,
     TunableConf,
     RunOverlay,
     solana_conf,
@@ -104,6 +106,7 @@ class Submission:
     #: Points-to summary files this submission reads, workdir-relative. One per
     #: unit. See :class:`~composer.spec.cvlr.conf.RunOverlay`.
     summaries: tuple[Path, ...] = ()
+    purpose: ConfPurpose = CheckVerdicts()
 
 
 def _sbf_build(session: CargoSession, submission: Submission) -> SbfBuild:
@@ -138,6 +141,7 @@ async def write_submission(session: CargoSession, submission: Submission, *, int
             rules=submission.rules,
             msg=submission.msg,
             summaries=submission.summaries,
+            purpose=submission.purpose,
         ),
     )
     conf_path = script.with_suffix(".conf")
