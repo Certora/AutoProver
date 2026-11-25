@@ -49,7 +49,7 @@ def test_non_json_after_stripping_raises_with_context():
 
 
 # ---------------------------------------------------------------------------
-# extract_cvl_ast with `use` declarations (runs the real ASTExtraction.jar)
+# extract_cvl_ast with `import` and `use` declarations (runs the real ASTExtraction.jar)
 # ---------------------------------------------------------------------------
 
 _USE_SPEC = """\
@@ -74,21 +74,8 @@ def _ast_jar_present() -> bool:
 
 
 @pytest.mark.skipif(not _ast_jar_present(), reason="needs the Certora CLI jars and Java")
-def test_use_declarations_do_not_stop_the_parse():
+def test_import_and_use_declarations_do_not_stop_the_parse():
     from composer.pipeline.property_tags import rule_lines
 
-    # Without blanking the `use` declarations the parser returns no AST at all.
     assert rule_lines(_USE_SPEC) == {"r": (11, 11), "inv": (3, 3)}
 
-
-def test_blank_range_keeps_lines_and_multibyte_offsets():
-    from certora_autosetup.setup.summary_resolver import _blank_range
-
-    src = "a ü use x;\nkeep\n"
-    # "use x;" starts at byte 5 ("a " is 2 bytes, "ü" is 2, then a space) and ends at byte 11.
-    rng = {"start": {"line": 0, "charByteOffset": 5}, "end": {"line": 0, "charByteOffset": 11}}
-    assert _blank_range(src, rng) == "a ü       \nkeep\n"
-
-    multi = "x\nuse invariant i {\n  preserved { }\n} tail\n"
-    rng = {"start": {"line": 1, "charByteOffset": 0}, "end": {"line": 3, "charByteOffset": 1}}
-    assert _blank_range(multi, rng) == "x\n" + " " * 17 + "\n" + " " * 15 + "\n  tail\n"
