@@ -64,6 +64,9 @@ class GitCommit:
 
     repo: str
     rev: str
+    #: Other crates of the repository that the graph reaches from crates.io (a chain crate depends
+    #: on them directly), read from this commit too so that the graph holds one copy of each.
+    family: tuple[str, ...] = ()
 
     def patch_body(self) -> tuple[tuple[str, str], ...]:
         return (("git", self.repo), ("rev", self.rev))
@@ -104,12 +107,15 @@ class CommitPatch:
 
 
 def commit_patches(crates: Iterable[CrateRelease]) -> tuple[CommitPatch, ...]:
-    """Patches for the releases that name a commit. Empty when every release is on crates.io."""
-    return tuple(
-        CommitPatch(crate.name, crate.version, crate.commit)
-        for crate in crates
-        if crate.commit is not None
-    )
+    """Patches for the releases that name a commit, and for the crates each commit's
+    :attr:`~GitCommit.family` names, once each. Empty when every release is on crates.io."""
+    patches: dict[str, CommitPatch] = {}
+    for crate in crates:
+        if crate.commit is None:
+            continue
+        for name in (crate.name, *crate.commit.family):
+            patches.setdefault(name, CommitPatch(name, crate.version, crate.commit))
+    return tuple(patches.values())
 
 
 @dataclass(frozen=True)
@@ -420,10 +426,11 @@ _CORE = CrateRelease("cvlr", "0.6.3")
 #: ``cvlr-fixed`` with its ``fixed`` feature, for a program on the ``fixed`` crate: the two
 #: stand-ins for a 128-bit fixed-point type the editor swaps in under a unit's feature,
 #: ``cvlr_fixed::exact::ExactFixedU128`` (``exact_fixed``, multiplication and division on native
-#: integers) and ``cvlr_fixed::narrow::NarrowFixedU128`` (``narrow_fixed``, 64 bits). Released with the core, so
-#: at its version.
+#: integers) and ``cvlr_fixed::narrow::NarrowFixedU128`` (``narrow_fixed``, 64 bits). Released
+#: with the core, so at its version and from its commit.
 NARROW_FIXED = ConditionalCrate(
-    trigger="fixed", release=CrateRelease("cvlr-fixed", _CORE.version, features=("fixed",))
+    trigger="fixed",
+    release=CrateRelease("cvlr-fixed", _CORE.version, commit=_CORE.commit, features=("fixed",)),
 )
 
 #: ``cvlr-solana`` 0.5.2, which reads account flags without branching (each nondet account used to
