@@ -51,7 +51,7 @@ def test_the_dependency_block_carries_the_platform_too():
     # Without it a probe cannot name AccountInfo, so an entry that mentions one would fail the
     # gate for a missing import rather than for anything about CVLR.
     block = ref.SOLANA_V2.cargo_dependencies()
-    assert 'cvlr = "=0.6.3"' in block
+    assert 'cvlr = "=0.6.4"' in block
     assert 'cvlr-solana = "=0.5.2"' in block
     assert 'solana-program = "2.2"' in block
 
@@ -60,7 +60,8 @@ def test_a_target_on_fixed_is_given_the_narrow_fixed_point_type_and_another_is_n
     # cvlr-fixed's `fixed` feature compiles the `fixed` crate, so a target that never uses it would
     # be made to build one only to be offered a type it has no use for.
     on_fixed = ref.SOLANA_V2.for_target(lambda name: name == "fixed")
-    narrow = ref.CrateRelease("cvlr-fixed", ref.SOLANA_V2.core.version, features=("fixed",))
+    core = ref.SOLANA_V2.core
+    narrow = ref.CrateRelease("cvlr-fixed", core.version, commit=core.commit, features=("fixed",))
     assert narrow in on_fixed.scaffold_crates()
     assert on_fixed.for_target(lambda name: name == "fixed") == on_fixed
     assert ref.SOLANA_V2.for_target(lambda _: False) is ref.SOLANA_V2
@@ -68,8 +69,8 @@ def test_a_target_on_fixed_is_given_the_narrow_fixed_point_type_and_another_is_n
 
 
 def test_a_crate_with_features_is_declared_with_them():
-    narrow = ref.CrateRelease("cvlr-fixed", "0.6.3", features=("fixed",))
-    assert narrow.dependency_line() == 'cvlr-fixed = { version = "=0.6.3", features = ["fixed"] }'
+    narrow = ref.CrateRelease("cvlr-fixed", "0.6.4", features=("fixed",))
+    assert narrow.dependency_line() == 'cvlr-fixed = { version = "=0.6.4", features = ["fixed"] }'
     # The API corpus documents what a target on `fixed` is offered, so its probe declares it.
     assert narrow.dependency_line() in ref.SOLANA_V2.cargo_dependencies()
 
@@ -234,7 +235,7 @@ def test_the_sdk_generations_switch_off_the_sdk_allocator():
 
 
 def test_the_1_18_line_shares_the_core_and_has_no_program_models():
-    """`cvlr-solana` 0.4.x requires `cvlr-*` `>=0.4, <1`, so it resolves onto the one 0.6.3 core.
+    """`cvlr-solana` 0.4.x requires `cvlr-*` `>=0.4, <1`, so it resolves onto the one 0.6.4 core.
     The 0.4 line has no stake model and no separate token crate, so there is nothing to withhold."""
     v1 = ref.SOLANA_V1_18
     assert v1.core == ref.SOLANA_V2.core
@@ -261,3 +262,15 @@ def test_the_sdk3_line_is_released_whole():
     assert {(c.name, c.version) for c in (v3.binding, *(m.release for m in v3.models))} == {
         ("cvlr-solana", "0.6.1"), ("cvlr-solana-stake", "0.6.1"), ("cvlr-spl-token", "0.6.1")
     }
+
+
+def test_a_commit_patches_the_crates_of_its_repository_the_graph_also_reaches():
+    """A chain crate on crates.io depends on the core's own crates directly. Patching only the core
+    to a commit leaves a second, crates.io copy of each of those in the graph, and two copies of a
+    trait the harness implements and the chain crate calls."""
+    commit = ref.GitCommit("https://x", "abc", family=("cvlr-mathint", "cvlr-nondet"))
+    core = ref.CrateRelease("cvlr", "0.6.4", commit=commit)
+    fixed = ref.CrateRelease("cvlr-fixed", "0.6.4", commit=commit, features=("fixed",))
+    patches = ref.commit_patches([core, fixed, ref.CrateRelease("cvlr-solana", "0.5.2")])
+    assert [p.name for p in patches] == ["cvlr", "cvlr-mathint", "cvlr-nondet", "cvlr-fixed"]
+    assert all(p.commit == commit and p.version == "0.6.4" for p in patches)

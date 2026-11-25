@@ -49,6 +49,7 @@ from composer.spec.cvlr.reference import (
     SOLANA_V2,
     SOLANA_V3,
     SOROBAN,
+    commit_patches,
     generations,
 )
 from composer.sandbox.config import SandboxConfig
@@ -244,7 +245,7 @@ def test_the_manifest_a_fresh_project_ends_up_with_still_parses(tmp_path):
         "dep:cvlr", "dep:cvlr-solana", "dep:cvlr-solana-stake", "dep:cvlr-spl-token",
     ]
     # Optional is what keeps CVLR out of a release build, and what makes `dep:` legal above.
-    assert parsed["dependencies"]["cvlr"] == {"version": "=0.6.3", "optional": True}
+    assert parsed["dependencies"]["cvlr"] == {"version": "=0.6.4", "optional": True}
     metadata = parsed["package"]["metadata"]["certora"]
     assert metadata["sources"] == ["Cargo.toml", "src/**/*.rs"]
     assert metadata["solana_inlining"] == ["src/certora/envs/cvlr_inlining.txt"]
@@ -367,7 +368,7 @@ def test_a_workspace_gets_the_pins_and_its_member_inherits_them(tmp_path):
     apply(plan, workspace.root)
 
     root = tomllib.loads((tmp_path / "Cargo.toml").read_text())
-    assert root["workspace"]["dependencies"]["cvlr"] == {"version": "=0.6.3"}
+    assert root["workspace"]["dependencies"]["cvlr"] == {"version": "=0.6.4"}
     member = tomllib.loads((tmp_path / "programs" / "prog" / "Cargo.toml").read_text())
     assert member["dependencies"]["cvlr"] == {"workspace": True, "optional": True}
 
@@ -379,7 +380,7 @@ def test_a_project_on_fixed_declares_the_narrow_type_behind_the_certora_feature(
 
     parsed = tomllib.loads((tmp_path / "Cargo.toml").read_text())
     assert parsed["dependencies"]["cvlr-fixed"] == {
-        "version": "=0.6.3",
+        "version": "=0.6.4",
         "features": ["fixed"],
         "optional": True,
     }
@@ -392,7 +393,7 @@ def test_a_crate_added_since_set_up_is_declared_and_turned_on(tmp_path):
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
         '[features]\ncertora = ["dep:cvlr", "dep:cvlr-solana", "dep:cvlr-solana-stake", '
-        '"dep:cvlr-spl-token"]\n\n[dependencies]\ncvlr = "=0.6.3"\ncvlr-solana = "=0.5.2"\n'
+        '"dep:cvlr-spl-token"]\n\n[dependencies]\ncvlr = "=0.6.4"\ncvlr-solana = "=0.5.2"\n'
         'cvlr-solana-stake = "=0.5.2"\ncvlr-spl-token = "=0.5.2"\nsolana-program',
     )
     workspace, package = _project(tmp_path, manifest=manifest, workspace_manifest=manifest)
@@ -451,7 +452,7 @@ def test_a_project_already_set_up_is_read_rather_than_refused(tmp_path):
     # "nothing to do" rather than a refusal.
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
-        '[features]\ncertora = ["dep:cvlr"]\n\n[dependencies]\ncvlr = "0.6.3"\nsolana-program',
+        '[features]\ncertora = ["dep:cvlr"]\n\n[dependencies]\ncvlr = "0.6.4"\nsolana-program',
     )
     plan, _ = _plan(tmp_path, manifest=manifest, workspace_manifest=manifest)
     assert not plan.blocked
@@ -635,9 +636,9 @@ def test_a_line_refusal_is_put_in_terms_the_project_author_can_act_on(
 
 
 def test_a_project_already_on_the_pinned_release_is_not_refused(tmp_path):
-    # `=0.6.3` is the requirement the scaffold writes. A bare `0.6.3` is the same release written
+    # `=0.6.4` is the requirement the scaffold writes. A bare `0.6.4` is the same release written
     # by hand. Neither is a refusal.
-    for requirement in ("=0.6.3", "0.6.3"):
+    for requirement in ("=0.6.4", "0.6.4"):
         root = tmp_path / requirement
         manifest = STANDALONE.replace(
             "[dependencies]\nsolana-program",
@@ -647,7 +648,7 @@ def test_a_project_already_on_the_pinned_release_is_not_refused(tmp_path):
             root,
             manifest=manifest,
             workspace_manifest=manifest,
-            cvlr_resolved={"cvlr": "0.6.3"},
+            cvlr_resolved={"cvlr": "0.6.4"},
         )
         assert not plan.blocked, requirement
 
@@ -660,13 +661,13 @@ def test_a_reference_set_crate_the_project_does_not_name_is_not_a_refusal(tmp_pa
     chain = SOLANA_V2.binding.version
     manifest = STANDALONE.replace(
         "[dependencies]\nsolana-program",
-        f'[dependencies]\ncvlr = "=0.6.3"\ncvlr-solana = "={chain}"\nsolana-program',
+        f'[dependencies]\ncvlr = "=0.6.4"\ncvlr-solana = "={chain}"\nsolana-program',
     )
     plan, _ = _plan(
         tmp_path,
         manifest=manifest,
         workspace_manifest=manifest,
-        cvlr_resolved={"cvlr": "0.6.3", "cvlr-solana": chain},
+        cvlr_resolved={"cvlr": "0.6.4", "cvlr-solana": chain},
     )
     assert not plan.blocked
     (dependencies,) = [a for a in _additions(plan) if a.table == ("dependencies",)]
@@ -1166,8 +1167,9 @@ def test_an_unpublished_release_is_read_from_its_commit(tmp_path):
     plan = plan_scaffold(workspace, package, _UNPUBLISHED)
     assert not plan.blocked
     patches = _commit_patches(plan)
-    assert set(patches) == {p.name for p in _UNPUBLISHED.from_commits()}
-    for patch in _UNPUBLISHED.from_commits():
+    expected = commit_patches(_UNPUBLISHED.crates())
+    assert set(patches) == {p.name for p in expected}
+    for patch in expected:
         body = patches[patch.name].body
         assert ("git", patch.commit.repo) in body and ("rev", patch.commit.rev) in body
     tomllib.loads(apply_and_read(plan, tmp_path))

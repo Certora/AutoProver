@@ -27,8 +27,9 @@ finding, and expect_rule_failure does not account for one.
 {{ timeout_streak }} runs in a row have had a rule that timed out, and each of those ran to the job's time limit whatever
 else it checked. Do not restate the timed-out rules again: renaming, splitting or dropping a conjunct does not
 change what a rule runs over. Before the next submission, change what is under the rule (a stand-in for the function or
-operation the statistics name, recipe K8), drop a handler-level rule whose fact a rule on the program's accounting
-function already proves and say how the two connect, or skip the property and cite these timeouts.
+operation the statistics name, recipe K8), split a rule on few paths into lemmas it assumes (recipe K17), drop a
+handler-level rule whose fact a rule on the program's accounting function already proves and say how the two connect,
+or skip the property and cite these timeouts.
 {% endif %}{%- for recipe in recipes %}
 {{ recipe }}
 {% endfor %}

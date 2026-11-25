@@ -262,7 +262,8 @@ summary. The judge will ask.
 
 Fixed-point arithmetic on the `fixed` crate's 128-bit type is the exception: its operations are
 methods of a library type the program does not own, so there is no module of the program's to
-redirect. The editor's `narrow_fixed` kind computes the type at 64 bits instead (recipe K15).
+redirect. The editor's `exact_fixed` kind computes its multiplication and division on native
+integers, and `narrow_fixed` computes the type at 64 bits (recipe K15).
 
 ### The arithmetic is the property's
 

@@ -533,6 +533,17 @@ class RuleStatistics:
     nonlinear: tuple[Hotspot, ...]
 
     @property
+    def path_count_log2(self) -> int | None:
+        """The path count's base-2 exponent, rounded down, when the Prover wrote a readable one."""
+        if self.path_count is None:
+            return None
+        if (power := _POWER_OF_TWO.search(self.path_count)) is not None:
+            return int(power.group(1))
+        if (count := _COUNT.fullmatch(self.path_count.strip())) is not None:
+            return max(int(count.group(0).replace(",", "")).bit_length() - 1, 0)
+        return None
+
+    @property
     def top_share(self) -> int | None:
         """The largest share any one function holds, of branching or of nonlinear operations."""
         shares = [spots[0].share for spots in (self.branching, self.nonlinear) if spots]
@@ -549,6 +560,8 @@ class RuleStatistics:
         return "; ".join(parts)
 
 
+_POWER_OF_TWO = re.compile(r"2\^(\d+)")
+_COUNT = re.compile(r"\d[\d,]*")
 _SHARE = re.compile(r"contrib\. to (?:branching|nonlinear ops): (\d+) %")
 _PHASE_PREFIX = "verification phase:"
 

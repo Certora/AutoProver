@@ -44,7 +44,8 @@ is often not the one the rule is about.
 
 For the second kind, replace the function with a stand-in. Write a `pub fn` in this module with the
 function's signature that returns `nondet()` values, and ask `code_editor` for a `mock_fn` on the
-function, or a `redirect_module` if it is a method (see the editor section of your instructions). An unconstrained
+function, or a `mock_method` if it is a method, with the receiver as the stand-in's first
+parameter (see the editor section of your instructions). An unconstrained
 stand-in over-approximates: a rule that verifies against it holds for any value the real function
 could return.
 
@@ -109,6 +110,6 @@ theirs spent about 21 submissions on the same timeouts before skipping.
 
 **When the program's own fixed-point type is the function.** If the time is in the `fixed` crate's
 128-bit type itself and the property is decided by those computations, no stand-in serves it: fetch
-K15 for the editor's `narrow_fixed` kind. If it is in a wide integer the program builds from that
-type's bits (a `U256`, a "big fraction"), narrowing does not reach it, and this recipe is still the
-one.
+K15 for the editor's `exact_fixed` and `narrow_fixed` kinds. If it is in a wide integer the program builds from that
+type's bits (a `U256`, a "big fraction"), narrowing does not reach it: this recipe still serves a
+property that only consumes the result, and K17 one that is decided by it.

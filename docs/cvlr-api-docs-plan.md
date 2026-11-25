@@ -48,9 +48,9 @@ generations, because a chain crate is bound to one SDK line and each line has it
 
 | Generation | Core | `cvlr-solana`, `cvlr-solana-stake`, `cvlr-spl-token` |
 |---|---|---|
-| `solana-program` 1.18 (`SOLANA_V1_18`) | `cvlr` 0.6.3 | `cvlr-solana` 0.4.6 only |
-| `solana-program` 2.x (`SOLANA_V2`) | `cvlr` 0.6.3 | 0.5.1 |
-| `solana-*` 3.x (`SOLANA_V3`) | `cvlr` 0.6.3 | 0.6.0 |
+| `solana-program` 1.18 (`SOLANA_V1_18`) | `cvlr` 0.6.4 | `cvlr-solana` 0.4.6 only |
+| `solana-program` 2.x (`SOLANA_V2`) | `cvlr` 0.6.4 | 0.5.1 |
+| `solana-*` 3.x (`SOLANA_V3`) | `cvlr` 0.6.4 | 0.6.0 |
 
 Soroban has one, `cvlr-soroban` and `cvlr-soroban-derive` 0.4.0. The scaffold reads which generation
 the project is on and pins that set. What the run compiles is guaranteed equal to it, because
@@ -198,7 +198,8 @@ no prose. Both repositories have since documented every item and check for it in
 documented release, `cvlr` 0.6.2, is published, and so is `cvlr-solana` 0.5.1; 0.6.0 is read from
 its release commit until it is. Built from those pins, the corpus has 0 of 354 items without prose
 (2026-10-27). The producer's `--undocumented` report is how that is rechecked after a bump. At
-`cvlr` 0.6.3, with `cvlr-fixed`'s `narrow` module documented, it is 0 of 442 (2026-11-18).
+`cvlr` 0.6.3, with `cvlr-fixed`'s `narrow` module documented, it is 0 of 442 (2026-11-18); at
+0.6.4, with the `exact` module too, 0 of 495 (2026-11-25).
 
 ### 4.3 Header paths
 

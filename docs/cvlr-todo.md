@@ -1014,6 +1014,104 @@ presumably has no SSH keys or registry tokens at all, so private git or registry
 there regardless; whether cloud runs should support them, and how the owner would provide
 credentials, is a separate question for the executor (AIAutoProver).
 
+**U60. A cap decided by the program's own `U256` arithmetic.** — **kinds built (2026-11-24), not
+yet run end to end.** Run 10's max-LTV rules on a lending program's `calculate_borrow` timed out at
+`2^129`-`2^312` paths and were dropped. Hand probes on the same rules found four things needed
+together: K15's `narrow_fixed`; the program's `U256` multiply and divide computed in 128 bits; its
+multiply-by-ratio helper (`full_mul_int_ratio`) computed as one `NativeInt` `muldiv`; and, for the
+all-available and at-most borrow sizes, the rule split into lemma rules plus a composed rule that
+assumes their instances (monolithic, both still timed out at 2 h with `2^15`-`2^28` paths). Split,
+all-available verified (7 rules, 44 s) and at-most verified (2 rules, the larger in under ten
+minutes, both non-vacuous). The first two levers are now editor kinds 11 and 12,
+`native_muldiv` (exact: same value, same failures) and `narrow_wide_int` (a `redirect_module` of the
+wide type with `*`/`/` on the low halves, larger values assumed away, the author states the
+bound), known to the editor, reviewer, judge and author, with recipe K17. K17 also describes the
+lemma split, but nothing pushes it yet: an author has to find the lemmas itself. Open:
+
+* A run that exercises both kinds on the valuation unit.
+* `cvlr-fixed`'s `NarrowFixedU128` `*` wraps on overflow; klend's build panics (`fixed` with
+  debug assertions in release). A monotonicity lemma over the narrow `*` came back VIOLATED on a
+  wrapped product. Fix in cvlr: panic, as `fixed` does with overflow checks on.
+* The lemma split as pushed guidance: when a timed-out rule's statistics show few paths and a
+  handful of degree-4 nonlinear operations. — **built (2026-11-25)**: the "few paths" timeout
+  symptom pushes K17; see run 14 below.
+
+Run 11 (2026-11-24, the valuation unit on these kinds, about $20, 2h49m) used `native_muldiv` on
+both ratio helpers unprompted by a timeout (it cleared a `[3001]` on the market-value path), and the
+editor got the ceiling variant's intermediate overflow right. `narrow_wide_int` was never needed:
+after an exact K16 redirect (revised once for a `[3003]` in `from_halves`) the borrow-cap rules
+timed out in `fixed`'s own operations, which is K15's case, and `narrow_fixed` was refused twice
+because no `NFrac` fits both the program's `1e15` price-ratio bound and its `1e-6` minimum value.
+Two missing kinds the editor named, both now seen in more than one run:
+
+* **Narrowing past an unreachable constant.** `narrow_fixed` cannot compile a literal above
+  `2^(64 - NFrac)`, even in a module the unit never reaches. A gated copy of that constant
+  (saturated, or the module gated off) would unblock it, at the cost of that module's meaning.
+* **Mocking one method** — **built (2026-11-24) as kind 13, `mock_method`.** The author wrote a
+  `nondet()` stand-in for `Reserve::queued_liquidity_amount`, which the cap only consumes through a
+  `saturating_sub`. No kind reached a single inherent method; `redirect_module` would have replaced
+  all of `reserve.rs`. `mock_method` duplicates the method under the gates with a body that only
+  calls the author's stand-in, receiver first, and lists the method's callers for the judge. Not
+  yet run end to end. (Run 6's wall, exposing a private fn, is a different kind and still open.)
+
+Run 12 (2026-11-24, the same unit on all three kinds, about $17, 3h20m) **verified the borrow-path
+max-LTV conjunct for the first time**: exact size, and all-available and at-most inside an
+elevation group, plus borrow and repay no-dust and debt below collateral. What got it there:
+
+* `native_muldiv` on `full_mul_int_ratio`, asked for up front by name from K17.
+* `mock_method` on `Reserve::queued_liquidity_amount` (nondet stand-in, consumed only by a
+  saturating subtraction). The first request was refused because the author batched it with the
+  `put_harness` that wrote the stand-in, so the editor read the old harness; the retry landed.
+  `code_editor` needs #325's batching guard against `put_harness`.
+* `narrow_fixed` refused a third time on the constant conflict. The editor then proposed, and the
+  author asked for, `Fraction`'s `*` and `/` at the rules' call sites rewritten through helpers
+  that compute each as one exact `NativeInt` `muldiv` (an extraction plus `native_muldiv`,
+  duplicating whole functions). Exact, so no verdict changed meaning and the `1e-6` dust threshold
+  stayed meaningful. No narrowing and no lemma split were needed.
+
+Not established: all-available and at-most outside an elevation group (borrow factor above 1),
+three timeouts. That is the `mv(a) * bf` core the hand probes needed a lemma split for.
+
+**Next kind, from this run: `native_fixed`.** Swap the fixed-point alias (like `narrow_fixed`) for a
+type with the same 128-bit encoding whose `*` and `/` are each one native `muldiv`: exact, one
+alias edit instead of duplicated function bodies, and no constant can fall out of range. Likely a
+`cvlr-fixed` type beside `NarrowFixedU128`. It would also make `narrow_fixed` the fallback rather
+than the first lever.
+
+**Built (2026-11-24) as kind 14, `exact_fixed`**, over a new `cvlr_fixed::exact::ExactFixedU128<Frac>`
+(cvlr [#56](https://github.com/Certora/cvlr/pull/56), published in `cvlr` 0.6.4). It wraps the program's `FixedU128` and
+delegates everything but fixed-point `*`/`/`, which are one native `muldiv`; the operators defer to
+`fixed`'s own `debug_assert!` on overflow. Checked by host tests against `fixed` and 37 Prover
+rules against a floor specification. A probe with it in place of klend's `Fraction`, at full
+width: the exact-amount cap verified in 95 s and 7 of 9 split-proof lemmas verified; the two that
+did not, and the unsplit all-available and at-most rules, timed out through the exact `U256`
+stand-in (2^67 to 2^252 paths), which is K17's ground. **Released (2026-11-25):** `_CORE` pins
+`cvlr` 0.6.4, which ships the `exact` module, and the API corpus is rebuilt from it (0 of 495 items
+undocumented, 19 of 19 examples compile).
+
+Run 13 (2026-11-24, the same unit on all four kinds with the core pinned to the cvlr PR, about $14,
+2h19m) asked for `exact_fixed` up front from K15 (one alias-and-literal hunk, no `narrow_fixed`
+refusal), `native_muldiv` from K17, K16's exact `U256` redirect after a `[3001]`, and `mock_method`
+on `Reserve::freely_available_liquidity_amount` and `ReserveFees::calculate_borrow_fees`. Verified:
+the exact-size cap, liabilities below assets, and borrow and repay no-dust, all at full precision.
+Not established: all-available and at-most, which the mocks took from 2^84 and 2^158 paths to 2^27
+and 2^44 and still timed out three times, with no function holding the time. Nothing pushed the
+lemma split, and the author did not split.
+
+Run 14 (2026-11-25, run 13 plus the "few paths" push; restarted once after a reboot, the resumed
+run about $21-26 and 2h58m) **verified max LTV for all three borrow sizes, with no narrowing and
+no hand edits.** The all-available rule timed out on 2^41 paths, K17 was pushed, and the author
+split it into four lemmas proved for all inputs (market value is monotone; the `Fraction` product
+is monotone; `mv(y / bf) * bf <= mv(y)`; the value of the amount computed for a value is at most
+that value), assumed at the run's values, the monotonicity ones as implications. The third lemma
+timed out on 9 paths, K17 was pushed again, and the author split it at a borrow factor of 1 and
+above 1 (the factor is at least 1 by `get_borrow_factor`). Every piece verified. At-most verified on
+the same lemma instances, without the exact-or-all-available composition the hand probe used.
+Other verdicts as before: the liquidation-threshold edge (low) and the same-reserve rollover rules
+(medium; behaviour judged by design in run 10's triage) violated; the different-reserve rollover
+rules timed out at 2^150 and were dropped. `FEW_PATHS_LOG2 = 64` was right on both sides here: the
+handler-level drafts timed out at 2^65 to 2^320 and got only K8, and both lemma-split pushes landed.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open

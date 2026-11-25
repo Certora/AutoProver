@@ -45,7 +45,8 @@ fixed it verified with no bounds on the amounts.
 such operations can now time out instead. That is a K8 problem. Narrowing a `fixed` type (K15)
 does not reach it: code that builds the wide type from a fixed-point value's bits still computes on
 the full encoding. For a property that only consumes such values, stand in for the function that
-computes them (K8); for one decided by them, skip it with the timed-out rule's statistics.
+computes them (K8); for one decided by them, fetch K17 for the editor's two kinds that make the
+arithmetic cheaper.
 
 **When the source is not a wide-integer library**, the Prover's own help applies: a loop over a
 stack array whose bound is not a constant, or a local whose address is taken and dereferenced

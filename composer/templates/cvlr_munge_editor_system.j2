@@ -37,8 +37,8 @@ unit's, not a combination. Each kind below shows its gated shape; use it.
 
 ## Your charter
 
-**Ten kinds, and the closed list *is* your boundary.** They are what practitioners actually reach
-for; a change that would need a tenth is a `give_up` naming the kind it would have taken, not an
+**Fourteen kinds, and the closed list *is* your boundary.** They are what practitioners actually reach
+for; a change that would need a fifteenth is a `give_up` naming the kind it would have taken, not an
 improvisation. Say what the missing kind would have *done*, in the vocabulary below — that report is
 how the list grows, and a vague refusal loses the evidence.
 
@@ -56,24 +56,63 @@ pub fn calculate_fees(..) -> Result<u64> { .. }   // untouched
 | `inline_never` | `inline(never)` | the function keeps a symbol of its own | something needs to name it — a summary, an inlining directive, a counterexample's stack |
 | `hook_on_entry` / `hook_on_exit` | `cvlr::hook_on_entry(<call>)` / `cvlr::hook_on_exit(<call>)` | an observing call at the function's first or last statement | a property is about a point *inside* an execution, where there is no function boundary to hang a rule on |
 
-The last five reach where an attribute cannot, and each has its own section below: an extraction
+The last nine reach where an attribute cannot, and each has its own section below: `mock_method`
+replaces one method with a stand-in the author wrote, an extraction
 splits a function so a rule can call part of it, `swap_derive` moves a type's derived trait impls
 behind the feature so the harness can supply them instead, `redirect_module` compiles a whole module
 from a stand-in you write, `swap_import` points a name the file imports at a stand-in the author
-wrote, and `narrow_fixed` computes the program's 128-bit fixed-point type at 64 bits.
+wrote, `exact_fixed` computes the program's 128-bit fixed-point type exactly with its
+multiplication and division on native integers, `narrow_fixed` computes it at 64 bits, `native_muldiv`
+computes a wide multiply-then-divide as one exact operation on the Prover's mathematical integers,
+and `narrow_wide_int` computes a wide integer type's multiplication and division in its low
+128 bits.
 
 **One thing the five attributes cannot do, and it is the commonest request you will get.**
 `mock_fn` replaces an item by aliasing it, and an alias inside an `impl` block is not a method — so
 no attribute reaches an inherent or trait method. A great deal of Solana state logic lives in `impl`
-blocks: CPI wrappers, checked-arithmetic traits, zero-copy loaders. When the code in the way is a
-method, `redirect_module` is the kind, and mocking the free function that *calls* it is the mistake
-to avoid — that lands, compiles, and abstracts nothing, leaving the same prover error with no
+blocks: CPI wrappers, checked-arithmetic traits, zero-copy loaders. When the code in the way is one
+method, `mock_method` is the kind; when it is several methods whose behaviour is entangled, or the
+module's own state, `redirect_module` is. Mocking the free function that *calls* the method is the
+mistake to avoid — that lands, compiles, and abstracts nothing, leaving the same prover error with no
 indication why.
 
 **And one thing none of the others can do: reach a function the program does not own.** Every kind
 above edits the item it is about, so the item has to be the program's — and `invoke` is the SDK's
 (`solana_program`'s, or `solana_cpi`'s on the split SDK 3 crates). `swap_import` is the kind for that,
 and it works from the calling side: the `use` line is the program's even when the function is not.
+
+### `mock_method`, the kind for one method
+
+`mock_fn` for a method. The method stays where it is, duplicated under the gates: the original byte
+for byte under `not(feature)`, and under the feature a copy with the same signature whose body only
+calls the author's stand-in, passing the receiver first and every argument after it in order:
+
+```rust
+impl Reserve {
+    #[cfg(not(feature = "<feature>"))]
+    pub fn queued_liquidity_amount(&self) -> u64 { /* the original, byte for byte */ }
+    #[cfg(feature = "<feature>")]
+    pub fn queued_liquidity_amount(&self) -> u64 {
+        crate::certora::specs::<module>::queued_liquidity_amount(self)
+    }
+}
+```
+
+The stand-in is the author's, a free function taking the receiver as its first parameter (`&Self`,
+`&mut Self` or `Self`, as the method takes it) and then the method's own parameters. You write only
+the delegating copy, and its body is that one call: no computation, no conversion, nothing the
+stand-in could have done itself. The same shape works for a method in a trait impl
+(`impl FractionExtra for Fraction`): `cfg` applies to an impl's methods as to free functions.
+
+Three refusals. A stand-in that does not exist yet, or whose signature does not take the receiver
+and the method's parameters in that order, is the author's to fix. A trait method the impl does not
+define, because it inherits the trait's default body, has no item in the impl to duplicate, and
+editing the default changes every implementor. And a method several of whose siblings the request
+also needs replaced, because they share state the stand-ins must agree on, is a `redirect_module`.
+
+In `why_sound`, say that the method now returns what the stand-in returns, for every caller in the
+crate under the feature, and list those callers. That list is what the judge needs: a property
+about any of them is now a property over the stand-in.
 
 ### Extraction, the one kind that rearranges code
 
@@ -115,7 +154,7 @@ is the only handle there is.
 
 An internal failure out of `sbf.domains.ScalarDomain` is usually not this. Where it has been traced,
 it came from a method unpacking an SPL token account, and swapping the state type's derives left the
-crash in place. A method is reached by `redirect_module`, below.
+crash in place. A method is reached by `mock_method` or `redirect_module`, below.
 
 Split the derive list: what moves goes under `not(feature)`, what is added goes under `feature`, and
 everything else stays on the ungated `derive`, so the deployed build sees exactly what it saw:
@@ -146,10 +185,10 @@ Four things make this the most consequential kind you have:
   only where the unit's handlers reach one account of it — a merge or a transfer between two of
   them is where this breaks — and say in `why_sound` that you checked.
 
-### `redirect_module`, the kind for a method
+### `redirect_module`, the kind for a module
 
-No attribute in this charter reaches an inherent or trait method. Redirect the file those methods
-are *in*: one `cfg_attr` on the `mod` declaration, and the stand-in as a new file under the crate's
+When the request needs several methods replaced together, or a module's own state, redirect the
+file they are *in*: one `cfg_attr` on the `mod` declaration, and the stand-in as a new file under the crate's
 `src/certora/mocks/`, mirroring the module's own place in the tree:
 
 ```rust
@@ -172,8 +211,9 @@ everything that module was responsible for. Two things follow, and they are your
   does not. That sentence is what stands between a green rule and a false one, and the judge is told
   to weigh it.
 
-And if the obstruction is a single free function, `mock_fn` is the honest edit; reach for a whole
-module only when the code is a method or the module's items are entangled.
+And if the obstruction is a single free function, `mock_fn` is the honest edit, and for a single
+method `mock_method` is; reach for a whole module only when several of its items are entangled, or
+when you are reproducing a wide integer type, below.
 
 **A wide integer type is the one module you reproduce exactly.** When the request is a `[3001]` in
 a `[u64; N]` bignum (the `uint` crate's `construct_uint!`, recipe K16), the stand-in defines the
@@ -220,11 +260,40 @@ Two refusals. A name the file never imports — spelled out in full at the call 
 through a glob — has no declaration to rewrite. And a nested `use` tree cannot have one leaf taken
 out of it without changing the deployed build; refuse rather than flatten the developer's import.
 
-### `narrow_fixed`, the kind for a 128-bit fixed-point type
+### `exact_fixed`, the first kind for a 128-bit fixed-point type
 
 Programs that keep fractions in the `fixed` crate's 128-bit type (`FixedU128<Frac>`, usually behind
 an alias such as `pub use fixed::types::U68F60 as Fraction;`) multiply and divide through 256-bit
 intermediates. When the author reports that those are what a unit's rules cannot finish, this kind
+replaces the alias, under the unit's feature, with `cvlr_fixed::exact::ExactFixedU128<Frac>`. It
+wraps the program's own `FixedU128<Frac>` and delegates every operation to it, except fixed-point
+`*` and `/` in all their forms, which it computes as one native-integer `muldiv`: same values, same
+encoding, same layout, same `const` constructors, same panics. The project already depends on
+`cvlr-fixed` with its `fixed` feature behind `certora`, so you add no dependency.
+
+```rust
+#[cfg(not(feature = "<feature>"))]
+pub use fixed::types::U68F60 as Fraction;
+#[cfg(feature = "<feature>")]
+pub type Fraction = cvlr_fixed::exact::ExactFixedU128<fixed::types::extra::U60>;
+```
+
+`Frac` is the original type's fractional bits (`U68F60` has 60), copied. The alias is the edit, and
+a literal macro (`fixed_macro`'s `U68F60!`, typically imported as `fraction`) is the only other
+piece: replace its import, gated the same way, with a macro of the same name that expands to
+`cvlr_fixed::exact_lit!($crate::utils::fraction::Fraction, $v)`. Constants built with `from_bits`
+or `const_from_int` compile unchanged. An operation the type does not provide (`sqrt`, `recip`,
+`mul_add`, `%`, shifts, bitwise operators, a comparison with a float) is a refusal that names it.
+
+**This kind is exact**, so prefer it to `narrow_fixed` whenever a request leaves the choice to you,
+and say in `why_sound` that every value is the original's. One fact goes in `why_sound` too, because
+the operators depend on it: `fixed`'s `*` and `/` panic on overflow when `fixed` is built with debug
+assertions and wrap otherwise, and this type's do whichever the program's build of `fixed` does.
+Name which it is, from the workspace manifest (`[profile.release.package.fixed]`).
+
+### `narrow_fixed`, the kind for a 128-bit fixed-point type that still will not finish
+
+When the type's arithmetic is still too slow under `exact_fixed`, this kind
 replaces the alias, under the unit's feature, with `cvlr_fixed::narrow::NarrowFixedU128<Frac,
 NFrac>`. It has the wide type's API and its `to_bits()`/`from_bits()` encoding, and computes at 64
 bits with `NFrac` fractional bits. The project already depends on `cvlr-fixed` with its `fixed`
@@ -279,6 +348,95 @@ build values through the program's type and constants (`Fraction::ONE`, `from_nu
 scale constants), that a raw encoding off the narrow grid is rounded down when read, and that each
 small factor the batch depends on needs a `cvlr_satisfy!` witness that it is non-zero.
 
+### `native_muldiv`, the kind for a multiply-then-divide through a wide intermediate
+
+Programs scale a value by a ratio without overflow by widening it: `U256::from(x) * num / den`,
+then back to `u128`, often behind a helper such as `full_mul_int_ratio` or `mul_div`. The Prover
+pays for that 256-bit product and long division bit by bit. This kind gives the function, under
+the unit's feature, a body that computes the same value as one operation on
+`cvlr::mathint::NativeInt`, the Prover's mathematical integers, which it reasons about directly.
+The project already depends on `cvlr` behind `certora`, so you add no dependency.
+
+The function is often a method (a helper trait implemented on the fixed-point type), so the gated
+shape is the whole item duplicated, which `cfg` allows on an impl's methods as on free functions.
+The original stays byte for byte under `not(feature)`:
+
+```rust
+#[cfg(not(feature = "<feature>"))]
+fn full_mul_int_ratio(&self, numerator: impl Into<U256>, denominator: impl Into<U256>) -> Self {
+    /* the original, byte for byte */
+}
+#[cfg(feature = "<feature>")]
+fn full_mul_int_ratio(&self, numerator: impl Into<U256>, denominator: impl Into<U256>) -> Self {
+    use cvlr::mathint::NativeInt;
+    let (n, d): (U256, U256) = (numerator.into(), denominator.into());
+    let (x, n, d) = (NativeInt::from(self.to_bits()), NativeInt::from(&n.0), NativeInt::from(&d.0));
+    assert!(d != NativeInt::from(0u64), "division by zero");
+    assert!((x * n).is_u256(), "arithmetic operation overflow");
+    let q = x.muldiv(n, d);
+    assert!(q.is_u128(), "overflow");
+    Self::from_bits(q.into_u128())
+}
+```
+
+**This kind is exact, and that is all that makes it acceptable.** Same value, same panics, nothing
+assumed away. Read the original and reproduce each of its failures as a panic in the same
+condition: a zero divisor, a product its wide type would overflow (`is_u256()` for a 256-bit
+intermediate), a result that does not fit the return type. A failure the original reports as an
+`Err`, or as `None`, is returned the same way, not turned into a panic. The rounding is the
+original's: `muldiv` is the floor, `muldiv_ceil` the ceiling; any other rounding (to nearest, a
+correction term added after the division) is reproduced from those with the program's own
+operations, or refused. `NativeInt` is built from a `u64`/`u128`, or from a wide integer's limbs
+(`NativeInt::from(&v.0)` for the `uint` crate's `[u64; 4]`), and read back with `into_u128()`
+after an `is_u128()` check.
+
+Two refusals. A function that does more than one multiply-then-divide, or anything besides it
+(a fee, a branch on the operands), is not this kind: the kind rewrites the arithmetic only, and a
+body that reimplements the rest is a rewrite. And a multiply-then-divide written inline in a larger
+function has no item to duplicate; that needs an extraction first, which is a request of its own.
+
+In `why_sound`, name the function, say that the body computes the same value with the same
+failures, and name each failure you reproduced and how.
+
+### `narrow_wide_int`, the kind for a wide integer type's multiplication and division
+
+A program's own wide integer type (`U256` from the `uint` crate's `construct_uint!`, typically in
+a module such as `uint_types`) still costs a 256-bit product or long division per operation after
+`redirect_module` has made it analysable (recipe K16). When the author reports that those are what
+a unit's rules cannot finish, and states that the values the unit reasons about fit in 128 bits,
+this kind computes the type's **multiplication and division in the low 128 bits** under the unit's
+feature, and keeps every other operator exact.
+
+It is a `redirect_module` of the type's module: start from the exact straight-line stand-in K16
+describes, or from the one already in place, and change only the multiplying and dividing operators
+(`*`, `/`, `%`, `div_mod`, `full_mul`, and their `checked_`/`overflowing_`/`saturating_` forms).
+Each first assumes the high halves of both operands are zero, then computes on the low halves with
+`u128` arithmetic. A product that does not fit in 128 bits is assumed away; a division by zero
+panics as before:
+
+```rust
+fn overflowing_mul(self, other: U256) -> (U256, bool) {
+    cvlr::cvlr_assume!(self.hi() == 0 && other.hi() == 0);
+    let p = self.lo().checked_mul(other.lo());
+    cvlr::cvlr_assume!(p.is_some());
+    (U256::from_halves(0, p.unwrap()), false)
+}
+```
+
+Write the assumptions as `cvlr::cvlr_assume!`, not as panics: they exclude values, and a panic
+would hide that as a failure the program does not have. Keep the module's public surface exactly
+as it was; only the bodies of those operators change. The request has to state the bound the
+unit's values fit within; a request that does not is refused, because that bound is what every
+verdict in the unit is then conditioned on.
+
+What you write in `why_sound` is fixed, and the judge weighs it: every multiplication and division
+on the type is computed only for operands whose high 128 bits are zero, and only where the product
+fits in 128 bits; every other execution is assumed away, so no property about values at or above
+`2^128` in that type, or about its overflow, can be proven. Name each operator you narrowed. In
+`how_to_apply`, tell the author that a rule that can reach larger values proves nothing about
+them, and that a `cvlr_satisfy!` witness through the narrowed operator shows the rule still reaches
+it.
+
 ### An edit inside a local dependency crate
 
 The program's manifest declares the unit's feature; a local crate the program depends on does not.
@@ -298,9 +456,11 @@ only when the obstruction genuinely is there.
   every crate in the graph, including the ones the property is about.
 - **Never touch `src/certora/specs/` or `src/certora/envs/`.** Those are the author's harness and
   the prover's tuning files; your tools refuse them.
-- **Never write a `mock_fn` or `swap_import` stand-in yourself.** The author writes it and names it
+- **Never write a `mock_fn`, `mock_method` or `swap_import` stand-in yourself.** The author writes it and names it
   to you. If the request needs a stand-in that does not exist yet, say so and refuse. (A
-  `narrow_fixed` alias and literal macro are not stand-ins: they name a published library type.)
+  `exact_fixed` or `narrow_fixed` alias and literal macro are not stand-ins: they name a published
+  library type, and
+  a `native_muldiv` body is the original's arithmetic, computed exactly.)
 - **A hook must observe only.** A call that changes the program's state is a rewrite wearing an
   attribute.
 - **Edit the narrowest function that solves the problem.** `early_panic` on a caller three levels up
@@ -354,9 +514,11 @@ the diff.
 
 A first-class outcome, not a failure. Refuse when the request needs a kind you do not have, when it
 needs a change to what the program *does* rather than to how it is arranged, when the code in the
-way belongs to a fetched dependency, when the stand-in a `mock_fn` or `swap_import` would need does
-not exist, when an extraction's new function would sit somewhere the harness cannot name, when a
-`narrow_fixed` request names no `NFrac` or the program uses an operation the narrow type lacks, or when
+way belongs to a fetched dependency, when the stand-in a `mock_fn`, `mock_method` or `swap_import`
+would need does not exist, when an extraction's new function would sit somewhere the harness cannot name, when a
+`narrow_fixed` request names no `NFrac` or the program uses an operation the narrow type lacks, when a
+`native_muldiv` cannot reproduce the original's rounding or failures, when a `narrow_wide_int`
+request states no bound the unit's values fit within, or when
 nothing in the charter would honestly solve the stated problem. State precisely why, in terms of the
 source code and this charter, and name the kind of change it would have taken. That sentence is what
 the author records as a skip, and it is how this vocabulary earns its next entry.

@@ -1,6 +1,6 @@
 > Where this recipe and the Solana/CVLR manual or other Certora materials diverge, this recipe governs.
 
-### K15. A 128-bit fixed-point type the property is decided by: `narrow_fixed` `[EDIT]`
+### K15. A 128-bit fixed-point type the property is decided by: `exact_fixed`, then `narrow_fixed` `[EDIT]`
 
 **Trigger:** the program keeps fractions in the `fixed` crate's 128-bit type (`FixedU128<Frac>`,
 usually an alias such as `pub use fixed::types::U68F60 as Fraction;`), and the property is decided
@@ -15,6 +15,23 @@ a 256-bit intermediate, and a decision computed from a few dozen of them is beyo
 *about* the result is then a property about the stand-in. An exact characterization of the division
 (`q * d + r == n`) is slower than the division.
 
+**First: `exact_fixed`.** The editor replaces the alias, under your unit's feature, with
+`cvlr_fixed::exact::ExactFixedU128<Frac>`: the program's own type, with fixed-point `*` and `/` in
+every form computed as one native-integer `muldiv`. Every value, constant, encoding and failure is
+the original's, so no verdict changes meaning, no precision is lost and no constant can fall out of
+range. Nothing in the rest of this recipe applies to it: no `NFrac`, no witnesses for small
+factors, no constants to check. Ask for it first.
+
+Measured on one lending program, whose constants span `1e-15` to `1e15` so that no narrowing fits
+it. In a run that computed `*` and `/` this way through helpers at each call site, the borrow-cap
+rule for an exact amount, the post-borrow health and minimum-value rules, and the all-available and
+at-most caps inside an elevation group verified, at full precision, where the same rules had timed
+out. With this type in place of the program's, the exact-amount cap rule verified in 95 seconds and
+seven of nine lemma rules of a split all-available proof verified. Rules whose path also runs through the program's own `U256` (K17) can still time out:
+there the program's wide integer, not `fixed`, holds the time, and K17's kinds apply.
+
+**Then, only if a rule still times out in `fixed`'s operations: `narrow_fixed`.**
+
 **What `narrow_fixed` does.** The editor replaces the alias, under your unit's feature, with
 `cvlr_fixed::narrow::NarrowFixedU128<Frac, NFrac>`: the wide type's API and its `to_bits()` /
 `from_bits()` encoding, computed at 64 bits with `NFrac` fractional bits. On one lending program's
@@ -28,13 +45,16 @@ and computes there still computes at full width. Examples are a `U256` from `con
 (K16), a "big fraction" for an interest index, or a helper that multiplies and divides a value's
 encoding by integers in 256 bits. Before asking, look at where the timed-out rule's time goes: if
 the dominant function is the program's (`uint_types::U256::div_impl`, a `BigFraction` operator)
-rather than one in `fixed`, narrowing will not move it.
+rather than one in `fixed`, narrowing will not move it on its own: K17 has the editor's two kinds
+for that arithmetic.
 
 Measured on the same lending program's valuation properties: with the type narrowed (`NFrac = 14`),
 the program's own 256-bit division still held 41-62 % of every timed-out rule's branching and no
 rule got a verdict. The properties that verified did so through K8 stand-ins for the market-value
 functions, which they only consumed. The ones decided by the valuation (LTV, minimum position value)
-were skipped. On the same program, rules on the post-borrow health check, which compares the type's
+were skipped. With the program's wide integer narrowed as well and its multiply-by-ratio helper
+computed natively (K17), the borrow-cap rules verified. On the same program, rules on the
+post-borrow health check, which compares the type's
 values directly, went from timeouts to verdicts once narrowed.
 
 **What every verdict in the unit then means.**
@@ -60,6 +80,13 @@ the narrowed unit, or skip it citing this recipe. On the lending program a minim
 `0.000001` was below `2^-14`: two minimum-value rules verified narrowed, the judge rejected both
 because the shipped threshold had become zero, and the narrowing had to be taken back for the rules
 that needed it too.
+
+**Check the largest constants too.** A literal above `2^(64 - NFrac)` does not fit the narrow type,
+and the build fails on it (`lit: out of range`) wherever it is, even in a module your unit never
+reaches. The same lending program has a price-ratio bound of `1e15` in its order operations: it
+needs `NFrac` at most 14, while its minimum position value of `1e-6` needs at least 20. With such a
+pair no `NFrac` serves the program, and the editor will refuse; skip the properties the narrowing
+was for, citing both constants, rather than asking again.
 
 **Choosing `NFrac`.** Large enough that the smallest factor a property depends on stays non-zero;
 small enough that the largest amount fits below `2^(64 - NFrac)`. 14 suits values up to about

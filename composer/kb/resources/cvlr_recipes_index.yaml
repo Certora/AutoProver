@@ -188,7 +188,7 @@ recipes:
   search_terms:
   - explain_vacuity
 - id: K15
-  name: 'A 128-bit fixed-point type the property is decided by: `narrow_fixed`'
+  name: 'A 128-bit fixed-point type the property is decided by: `exact_fixed`, then `narrow_fixed`'
   triggers:
   - The program keeps fractions in the `fixed` crate's 128-bit type (`FixedU128`, an alias such as
     `Fraction`), and a property is decided by its multiplications and divisions
@@ -198,4 +198,22 @@ recipes:
   file: recipes/cvlr-k15-a-narrower-fixed-point-type.md
   search_terms:
   - NarrowFixedU128
+  - ExactFixedU128
+- id: K17
+  name: 'A property decided by the program''s own wide-integer arithmetic: `native_muldiv` and `narrow_wide_int`'
+  triggers:
+  - A timed-out rule's statistics name the program's own wide integer (a `U256` operator such as
+    `div_impl` or `full_mul`, or the K16 stand-in's) or a multiply-by-ratio helper on it as the
+    dominant function, and the property is decided by that arithmetic
+  - A timeout that narrowing the `fixed` type (K15) did not move
+  - A rule that still times out on few paths (2^64 or fewer) with no function holding most of the
+    time, after both kinds or with no wide integer in sight, so the proof has to be split
+  channel: EDIT
+  file: recipes/cvlr-k17-wide-integer-arithmetic.md
+  pushed_on:
+  - timeout: few paths
+  search_terms:
+  - NativeInt
+  - muldiv
+  - full_mul_int_ratio
   - narrow_lit

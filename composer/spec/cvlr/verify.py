@@ -452,6 +452,14 @@ class VerifyDeps:
 DOMINANT_SHARE = 40
 
 
+#: The base-2 exponent of a timed-out rule's path count at or below which, with no dominant function,
+#: the rule is taken to be held by a small nonlinear core: a proof to split (recipe K17) rather than
+#: paths to cut. Provisional, from klend's timeouts: the rules a lemma split then verified stood at
+#: 2^15-2^44 paths, the handler-level rules a stand-in was the lever for at 2^117 and up, and a rule
+#: that a mock took from 2^84 to 2^27 sat between.
+FEW_PATHS_LOG2 = 64
+
+
 #: Runs in a row with a timed-out rule before the verdict note says to stop restating: the first
 #: draft and two restatements. In the vault tutorial's cloud run (5bb6e2c7) the author restated the
 #: same handler-level rules through ten more timed-out runs.
@@ -488,6 +496,13 @@ def symptoms(report: ProverReport) -> set[Symptom]:
         dominant = stats.top_share is not None and stats.top_share >= DOMINANT_SHARE
         if dominant:
             found.add(TimeoutSymptom(timeout="dominant function"))
+        elif (
+            not report.halted
+            and not isinstance(stats.phase, StaticAnalysis)
+            and (log2 := stats.path_count_log2) is not None
+            and log2 <= FEW_PATHS_LOG2
+        ):
+            found.add(TimeoutSymptom(timeout="few paths"))
         # Read back after a benchmark to move DOMINANT_SHARE: which timeouts were told, and at
         # what share, against whether a stand-in for that function then cleared them.
         _log.info(

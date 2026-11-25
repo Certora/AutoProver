@@ -74,7 +74,10 @@ be stale; the tool is authoritative.
    `handler(..).unwrap(); cvlr_assert!(!x);` checks that no success admits X, and a panic is not a
    success.
 
-   `mock_fn` is the harness-mirror problem wearing an attribute. It replaces the function's body
+   `mock_fn` is the harness-mirror problem wearing an attribute, and a `mock_method` is the same
+   thing for a method: everything below applies to both. A `mock_method`'s justification lists the
+   method's callers; each of them computes with the stand-in, so a rule through any of them is
+   reasoning over it. It replaces the function's body
    with a named stand-in, so ask the question you asked of the rules: whose code is at the bottom. A
    stand-in for a hash, or for a CPI the property does not speak about, is doing its job. A stand-in
    that reproduces the arithmetic a rule asserts over means the rule verifies the stand-in, and that
@@ -159,6 +162,22 @@ be stale; the tool is authoritative.
    none; accept such a rule only with a `cvlr_satisfy!` witness that the factor is non-zero on the
    paths it covers. And the assumed-away range is a precondition: a rule whose amounts can exceed
    `2^(64 - NFrac)` in the program is proved only below that, which the verdict should say.
+
+   A **`narrow_wide_int`** computes a wide integer type's multiplication and division only where
+   both operands' high 128 bits are zero and the product fits in 128 bits; every other execution is
+   assumed away. Like `narrow_fixed` it is bounded and its cost is stated: **a rule whose values in
+   that type can reach `2^128` is proved only below it**, and a property about that type's overflow
+   cannot have a green verdict. Under a `narrow_fixed` in the same unit the narrow type's encodings
+   stay below `2^64`, so a product of two of them always fits and the assumption excludes only
+   products with larger integers (a raw amount, a scale constant); check the rule's inputs for
+   those. A rule that reaches the narrowed operator should carry a `cvlr_satisfy!` witness that it
+   still does.
+
+   A **`native_muldiv`** is the exception among these: it computes the same value with the same
+   failures as the function it replaces, so it changes no verdict's meaning. So is an
+   **`exact_fixed`**: the program's fixed-point type with its multiplication and division computed
+   natively, every value and failure the original's. Weigh it only if its
+   justification does not say that, or names a failure it left out.
 
    One further question for a swap, and it is the reason the kind has a stated precondition: the
    author's impls read and write **one** value per type. If a rule drives a handler taking *two*
