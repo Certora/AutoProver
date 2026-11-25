@@ -1053,6 +1053,30 @@ Two missing kinds the editor named, both now seen in more than one run:
   calls the author's stand-in, receiver first, and lists the method's callers for the judge. Not
   yet run end to end. (Run 6's wall, exposing a private fn, is a different kind and still open.)
 
+Run 12 (2026-11-24, the same unit on all three kinds, about $17, 3h20m) **verified the borrow-path
+max-LTV conjunct for the first time**: exact size, and all-available and at-most inside an
+elevation group, plus borrow and repay no-dust and debt below collateral. What got it there:
+
+* `native_muldiv` on `full_mul_int_ratio`, asked for up front by name from K17.
+* `mock_method` on `Reserve::queued_liquidity_amount` (nondet stand-in, consumed only by a
+  saturating subtraction). The first request was refused because the author batched it with the
+  `put_harness` that wrote the stand-in, so the editor read the old harness; the retry landed.
+  `code_editor` needs #325's batching guard against `put_harness`.
+* `narrow_fixed` refused a third time on the constant conflict. The editor then proposed, and the
+  author asked for, `Fraction`'s `*` and `/` at the rules' call sites rewritten through helpers
+  that compute each as one exact `NativeInt` `muldiv` (an extraction plus `native_muldiv`,
+  duplicating whole functions). Exact, so no verdict changed meaning and the `1e-6` dust threshold
+  stayed meaningful. No narrowing and no lemma split were needed.
+
+Not established: all-available and at-most outside an elevation group (borrow factor above 1),
+three timeouts. That is the `mv(a) * bf` core the hand probes needed a lemma split for.
+
+**Next kind, from this run: `native_fixed`.** Swap the fixed-point alias (like `narrow_fixed`) for a
+type with the same 128-bit encoding whose `*` and `/` are each one native `muldiv`: exact, one
+alias edit instead of duplicated function bodies, and no constant can fall out of range. Likely a
+`cvlr-fixed` type beside `NarrowFixedU128`. It would also make `narrow_fixed` the fallback rather
+than the first lever.
+
 ## Leads from the certora-cvlr-kb ledger
 
 certora-cvlr-kb is being retired once it has nothing left to teach AutoProver. Of its 102 open
