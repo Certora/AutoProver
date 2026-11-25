@@ -82,6 +82,13 @@ class GeneratedHarness(BaseModel):
     def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
         return [(m.property_title, list(m.rules)) for m in self.property_rules]
 
+    def unestablished_parts(self) -> dict[PropertyTitle, str]:
+        return {
+            m.property_title: m.unestablished
+            for m in self.property_rules
+            if m.unestablished is not None
+        }
+
     @property
     def artifact_text(self) -> str:
         return self.harness

@@ -125,6 +125,9 @@ class GeneratedCVL(BaseModel):
         """Property title -> the CVL rule names that verify it (the report's `ReportableResult`
         adapter; pairs with the structurally-shared ``skipped`` field)."""
         return [(m.property_title, m.rules) for m in self.property_rules]
+
+    def unestablished_parts(self) -> dict[PropertyTitle, str]:
+        return {}
     
     @property
     def artifact_text(self) -> str:

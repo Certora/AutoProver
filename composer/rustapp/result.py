@@ -62,6 +62,9 @@ class RustFormalResult(BaseModel):
     def property_checks(self) -> list[tuple[PropertyTitle, list[CheckName]]]:
         return [(title, list(names)) for title, names in self.checks]
 
+    def unestablished_parts(self) -> dict[PropertyTitle, str]:
+        return {}
+
     def check_properties(self) -> dict[CheckName, list[PropertyTitle]]:
         """``checks`` inverted: check name -> the property titles it verifies. For display, where
         the property's own words ("Balance never overflows") read better than the backend's check

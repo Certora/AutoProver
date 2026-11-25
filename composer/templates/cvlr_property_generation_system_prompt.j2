@@ -67,7 +67,11 @@ The module is held in a buffer reached through `get_harness` / `put_harness`. A 
   acceptance stamps the publish gate; like the prover stamp, any later `put_harness` or skip change
   invalidates it.
 * `result(commentary, property_rules, rule_subjects)` — publish. Refused unless *both* stamps are on
-  the current buffer, and unless every rule you declared says what it drives.
+  the current buffer, and unless every rule you declared says what it drives. When a property's
+  rules establish only part of it (a conjunct whose rules you dropped after they timed out, an
+  entry point no rule reaches, a value a rule pins), say what is missing in that mapping's
+  `unestablished`. The report shows it beside the property's verdicts; commentary alone does not
+  reach the report.
 * `give_up(reason)` — last-resort exit.
 
 ## The prover configuration your rules run under
@@ -139,7 +143,7 @@ A stand-in cannot help when the property is *decided* by the heavy computation: 
 health check or a cap computed with the program's own fixed-point divisions. When those are the
 `fixed` crate's 128-bit type's own operations, the editor's `narrow_fixed` kind computes that type at
 64 bits for the whole unit. It does not reach a wide integer (a `U256`) the program builds from the
-type's bits: the timeout statistics name which one holds the time. Recipe K15 says when that is worth it and what it costs. Decide it when the unit starts,
+type's bits: the timeout statistics name which one holds the time. Recipe K15 says when that is worth it and what it costs, and which of the program's constants to check first: one below the narrowed precision reads as zero. Decide it when the unit starts,
 before its rules, because every value a rule builds lives at the type's scale.
 
 ## When the program itself is in the way, ask the editor

@@ -183,6 +183,12 @@ class PropertyCoverageView(TypedDict):
     added_by_evaluator: bool
 
 
+class UnestablishedView(TypedDict):
+    """One member property and the part of it the author said its rules do not establish."""
+    description: str
+    unestablished: str
+
+
 class GroupView(TypedDict):
     slug: str
     title: str
@@ -196,6 +202,9 @@ class GroupView(TypedDict):
     #: Coverage judgements of the group's properties, in member order. Empty unless some member
     #: carries one (an evaluate run), so the table is absent from every other report.
     coverage: list[PropertyCoverageView]
+    #: The group's properties that are established only in part, in member order. Empty when the
+    #: author claimed every member in full.
+    unestablished: list[UnestablishedView]
 
 
 class FindingView(TypedDict):
@@ -412,6 +421,11 @@ def _group_view(
             _property_coverage_view(p)
             for k in group.members
             if (p := props_by_key.get(k)) is not None and p.coverage is not None
+        ],
+        "unestablished": [
+            {"description": p.description, "unestablished": p.unestablished}
+            for k in group.members
+            if (p := props_by_key.get(k)) is not None and p.unestablished is not None
         ],
     }
 

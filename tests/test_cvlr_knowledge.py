@@ -982,6 +982,16 @@ def test_k15_says_narrowing_does_not_reach_a_wide_integer_built_from_the_bits():
     assert "narrowing does not reach it" in _recipe("K8")
 
 
+def test_k15_has_the_author_check_the_programs_constants_before_narrowing():
+    """A lending program's minimum position value (1e-6) was below `2^-14`. Two minimum-value rules
+    verified narrowed and the judge rejected both; the author had chosen `NFrac` without looking at
+    the constants its properties compared against."""
+    recipe = _recipe("K15")
+    assert "Check the program's constants before you ask" in recipe
+    assert "`2^(64 - NFrac + Frac)`" in recipe
+    assert "which of the program's constants to check first" in _flat(_author_system_prompt())
+
+
 def test_an_indeterminate_stack_access_pushes_k16():
     """`[3001]` on 256-bit arithmetic is cleared by redirecting the integer type, and summaries do
     not clear it. Without the push, an author spent submissions on summaries and an `inline_never`

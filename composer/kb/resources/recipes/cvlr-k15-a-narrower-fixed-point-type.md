@@ -34,7 +34,8 @@ Measured on the same lending program's valuation properties: with the type narro
 the program's own 256-bit division still held 41-62 % of every timed-out rule's branching and no
 rule got a verdict. The properties that verified did so through K8 stand-ins for the market-value
 functions, which they only consumed. The ones decided by the valuation (LTV, minimum position value)
-were skipped.
+were skipped. On the same program, rules on the post-borrow health check, which compares the type's
+values directly, went from timeouts to verdicts once narrowed.
 
 **What every verdict in the unit then means.**
 
@@ -46,7 +47,19 @@ were skipped.
   it covers, or it may hold because there is nothing to check.
 * **Values must fit below `2^(64 - NFrac)`.** A result above that is assumed away by checked,
   wrapping and operator forms, and clamped to the narrow maximum by `saturating_*` and `from_bits`.
-  Say so in the commentary of every rule whose amounts could exceed it.
+  Say so in the commentary of every rule whose amounts could exceed it. A rule that passes raw
+  encodings in (a `_sf` field, a `from_bits` argument) assumes each of them below
+  `2^(64 - NFrac + Frac)` before the call; otherwise two different values clamp to the same maximum
+  and the counterexample is about the clamp.
+
+**Check the program's constants before you ask.** List every constant and configured value the
+unit's properties compare against: `fraction!` and `from_num` literals, minimum-value and threshold
+constants, configured percentages read as fractions. Each one below `2^-NFrac` reads as zero once
+narrowed, and a property decided by it cannot be checked under narrowing. Keep that property out of
+the narrowed unit, or skip it citing this recipe. On the lending program a minimum position value of
+`0.000001` was below `2^-14`: two minimum-value rules verified narrowed, the judge rejected both
+because the shipped threshold had become zero, and the narrowing had to be taken back for the rules
+that needed it too.
 
 **Choosing `NFrac`.** Large enough that the smallest factor a property depends on stays non-zero;
 small enough that the largest amount fits below `2^(64 - NFrac)`. 14 suits values up to about

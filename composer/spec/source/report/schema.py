@@ -277,6 +277,12 @@ class FormalizedProperty(PropertyFormulation):
         default_factory=list,
         description="Identities of the rules that (jointly) formalize this property.",
     )
+    unestablished: str | None = Field(
+        default=None,
+        description="The part of the property its rules do not establish, as the author stated "
+        "it. None when the author claimed the whole property, and on reports written before "
+        "schema 4.3.",
+    )
     coverage: PropertyCoverage | None = None
     rank: int | None = Field(
         default=None,
@@ -725,8 +731,8 @@ class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
     schema_version: Literal[
         "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9", "3.10", "4.0", "4.1",
-        "4.2",
-    ] = "4.2"
+        "4.2", "4.3",
+    ] = "4.3"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written

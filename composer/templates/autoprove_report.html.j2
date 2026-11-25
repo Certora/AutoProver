@@ -457,6 +457,17 @@ pre.diff .d-file { color: var(--muted-fg); font-weight: 600; }
       {%- endfor %}
     </tbody>
   </table>
+  {%- if g.unestablished %}
+  <h3>Not established by these {{ terms.unit_plural }}</h3>
+  <table class="rules">
+    <thead><tr><th>Property</th><th>What the {{ terms.unit_plural }} above do not establish</th></tr></thead>
+    <tbody>
+      {%- for u in g.unestablished %}
+      <tr><td>{{ u.description }}</td><td>{{ u.unestablished }}</td></tr>
+      {%- endfor %}
+    </tbody>
+  </table>
+  {%- endif %}
   {%- if g.coverage %}
   <h3>Property coverage</h3>
   <table class="rules">
