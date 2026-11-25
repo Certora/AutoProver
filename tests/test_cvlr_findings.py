@@ -27,6 +27,7 @@ from composer.prover.results import (
     SOLANA_TRACE,
     Hotspot,
     RuleStatistics,
+    OtherPhase,
     Solving,
     StaticAnalysis,
     VerificationPhase,
@@ -42,6 +43,7 @@ from composer.spec.cvlr.verify import (
     CexAnalysis,
     _CaptureCallbacks,
     DOMINANT_SHARE,
+    FEW_PATHS_LOG2,
     TIMEOUT_STREAK_WARNING,
     _verdicts_note,
     symptoms,
@@ -355,6 +357,44 @@ def test_the_gate_pushes_the_stand_in_recipe_when_one_function_holds_the_time():
     assert "### K8." in _report_note(stopped(10, DOMINANT_SHARE + 30))
     assert "### K8." not in _report_note(stopped(DOMINANT_SHARE - 1, DOMINANT_SHARE - 1))
     assert "### K8." not in _report_note(stopped(None, None))
+
+
+def test_the_gate_pushes_the_split_recipe_on_a_rule_that_timed_out_on_few_paths():
+    def stopped(
+        path_count: str | None,
+        *,
+        phase: VerificationPhase = Solving(14, 37, 10, 10),
+        branching: int | None = None,
+        halted: bool = False,
+    ) -> ProverReport:
+        stats = RuleStatistics(
+            phase=phase,
+            path_count=path_count,
+            branching=() if branching is None else (Hotspot("f", branching),),
+            nonlinear=(),
+        )
+        return _report({"r": "TIMEOUT"}, statistics={RulePath(rule="r"): stats}, halted=halted)
+
+    assert "### K17." in _report_note(stopped("approx. 2^44"))
+    assert "### K17." in _report_note(stopped(f"approx. 2^{FEW_PATHS_LOG2}"))
+    assert "### K17." in _report_note(stopped("1,024"))
+    assert "### K17." in _report_note(stopped("approx. 2^27", phase=OtherPhase("finished checking rule")))
+    assert "### K17." not in _report_note(stopped(f"approx. 2^{FEW_PATHS_LOG2 + 1}"))
+    assert "### K17." not in _report_note(stopped(None))
+    assert "### K17." not in _report_note(stopped("approx. 2^44", branching=DOMINANT_SHARE))
+    assert "### K17." not in _report_note(stopped("approx. 2^44", phase=StaticAnalysis()))
+    assert "### K17." not in _report_note(stopped("approx. 2^44", halted=True))
+
+
+def test_a_path_count_reads_as_its_base_2_exponent():
+    def log2(path_count: str | None) -> int | None:
+        return RuleStatistics(Solving(1, 0, 1, 10), path_count, (), ()).path_count_log2
+
+    assert log2("approx. 2^209") == 209
+    assert log2("1") == 0
+    assert log2("1,025") == 10
+    assert log2(None) is None
+    assert log2("unknown") is None
 
 
 def test_the_gate_pushes_the_halted_job_recipe_when_the_job_hit_its_limit():

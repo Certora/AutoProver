@@ -206,10 +206,12 @@ recipes:
     `div_impl` or `full_mul`, or the K16 stand-in's) or a multiply-by-ratio helper on it as the
     dominant function, and the property is decided by that arithmetic
   - A timeout that narrowing the `fixed` type (K15) did not move
-  - A rule that still times out after both kinds, with few paths and a handful of degree-4
-    nonlinear operations
+  - A rule that still times out on few paths (2^64 or fewer) with no function holding most of the
+    time, after both kinds or with no wide integer in sight, so the proof has to be split
   channel: EDIT
   file: recipes/cvlr-k17-wide-integer-arithmetic.md
+  pushed_on:
+  - timeout: few paths
   search_terms:
   - NativeInt
   - muldiv

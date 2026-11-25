@@ -38,13 +38,19 @@ the exact-size rule verified in seconds; the other two still timed out, down to 
 paths. With `native_muldiv` on the multiply-by-ratio helper as well, they still timed out as
 written. Split as the next paragraph says, both verified, every piece in under ten minutes.
 
-**What may remain: a proof that has to be split.** After both kinds, a rule that chains several
-products and quotients of symbolic values can still time out on a small nonlinear core: a handful
-of nonlinear operations of degree 4 in the statistics, with few paths. Split it. Write each step
+**What may remain: a proof that has to be split.** After these kinds, or after `exact_fixed`
+(K15), a rule that chains several products and quotients of symbolic values can still time out on
+a small nonlinear core. `verify_rules` attaches this recipe when it sees the sign: a timeout on
+`2^64` paths or fewer with no function holding most of the time. No stand-in cuts that, because
+nothing is left to cut. Split it. Write each step
 the property depends on as a rule of its own over fresh values (the computed amount is at most
 the quotient; the market value is monotone; multiplying then dividing by a factor rounds down),
 then a rule that drives the program once, assumes those steps at the values it computed with
 `cvlr_assume!`, and asserts the property. Each lemma holds for all inputs because its own rule
 proved it, so assuming an instance of it is sound. Say in the composed rule's commentary which
 rules it assumes, and keep all of them in the same unit so they are proved under the same
-edits.
+edits. Assume only what a rule of the unit proves: a `cvlr_assume!` of anything else is an
+unproved premise, and the composed rule's verdict means nothing without it. A choice between
+outcomes splits the same way: klend's at-most borrow was proved by a rule that its amount is the
+exact amount or the all-available amount, the rules proving the property of those two, and a rule
+composing them.

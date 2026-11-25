@@ -137,7 +137,10 @@ The prover report ends with a line for each rule that timed out: the phase it re
 count, and the functions with the largest share of its branching and of its nonlinear operations.
 `verify_rules` attaches recipe K8 to a timed-out rule. It covers the rule shapes that time out on
 their own, sorting the properties whose path crosses the function, and the stand-in for the ones
-that only consume its result.
+that only consume its result. A rule that times out on few paths, with no function holding most of
+the time, is held by its arithmetic rather than by its paths, and no stand-in cuts that:
+`verify_rules` attaches recipe K17 too, whose last section proves such a rule by splitting it into
+lemmas.
 
 A stand-in cannot help when the property is *decided* by the heavy computation: an eligibility, a
 health check or a cap computed with the program's own fixed-point divisions. When those are the

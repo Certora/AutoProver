@@ -115,7 +115,10 @@ Read the outcome:
     can hide every other rule in the submission. Find that rule before changing anything else.
     `verify_rules` attaches recipe K9.
   - A **rule that timed out** in a job that returned verdicts is that rule's own. `verify_rules`
-    attaches recipe K8: the rule's shape first, then a stand-in for what holds the time.
+    attaches recipe K8: the rule's shape first, then a stand-in for what holds the time. When the
+    rule timed out on few paths with no one function holding the time, it attaches recipe K17 as
+    well: what is left is a small nonlinear core, and its last section splits the proof into
+    lemmas.
 * **A rule the prover could not analyze** → an *error* rather than a verdict, so it comes back as
   neither VERIFIED nor VIOLATED. On this backend it is usually the pointer analysis refusing
   something on a path your rule reaches: `[3308]` illegal dereference of an absolute address (a
