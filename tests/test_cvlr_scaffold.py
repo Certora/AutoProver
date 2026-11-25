@@ -49,6 +49,7 @@ from composer.spec.cvlr.reference import (
     SOLANA_V2,
     SOLANA_V3,
     SOROBAN,
+    commit_patches,
     generations,
 )
 from composer.sandbox.config import SandboxConfig
@@ -1166,8 +1167,9 @@ def test_an_unpublished_release_is_read_from_its_commit(tmp_path):
     plan = plan_scaffold(workspace, package, _UNPUBLISHED)
     assert not plan.blocked
     patches = _commit_patches(plan)
-    assert set(patches) == {p.name for p in _UNPUBLISHED.from_commits()}
-    for patch in _UNPUBLISHED.from_commits():
+    expected = commit_patches(_UNPUBLISHED.crates())
+    assert set(patches) == {p.name for p in expected}
+    for patch in expected:
         body = patches[patch.name].body
         assert ("git", patch.commit.repo) in body and ("rev", patch.commit.rev) in body
     tomllib.loads(apply_and_read(plan, tmp_path))
