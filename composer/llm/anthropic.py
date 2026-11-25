@@ -24,8 +24,8 @@ from composer.llm.provider import (
 from composer.llm.pricing import PriceProvider, price_provider_for
 from composer.llm.bedrock import (
     INLINE_MEDIA_TYPES, MAX_DOCUMENT_BYTES, MAX_TOKENS_ENV_VAR, BedrockDocumentError,
-    base64_size, llm_backend, bedrock_region, inference_profile, max_output_tokens,
-    to_bedrock_model_id,
+    base64_size, llm_backend, bedrock_region, inference_profile, is_transient_stream_exception,
+    max_output_tokens, to_bedrock_model_id,
 )
 from .types import CacheLevel
 from .list_iter import ListIter, NoSuchElementError
@@ -365,10 +365,14 @@ class AnthropicService(ProviderServiceBase):
         """Mirrors the SDK's own ``_should_retry`` status roster (408/409/429
         and every 5xx, which covers 529 overloaded) plus connection-level
         failures (``APITimeoutError`` subclasses ``APIConnectionError``), a
-        transport failure mid-stream, and an error the server reports inside a
-        stream. 400-class request errors are deterministic — an over-long prompt
-        fails identically on every attempt — and are deliberately excluded."""
+        transport failure mid-stream, an error the server reports inside a
+        stream, and a transient exception frame that ends a Bedrock stream (see
+        :func:`composer.llm.bedrock.is_transient_stream_exception`). 400-class
+        request errors are deterministic — an over-long prompt fails identically
+        on every attempt — and are deliberately excluded."""
         if isinstance(exc, anthropic.APIConnectionError):
+            return True
+        if is_transient_stream_exception(exc):
             return True
         # The SDK does not wrap streamed-body failures as APIConnectionError: a dropped stream
         # raises httpx.RemoteProtocolError, a stalled one httpx.ReadTimeout. Both are transient.

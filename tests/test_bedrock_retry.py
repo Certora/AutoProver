@@ -3,7 +3,8 @@
 Bedrock admits a request against the token quota by its input plus its ``max_tokens``, so
 Bedrock requests carry a capped ``max_tokens``; the Anthropic API path keeps the configured
 value. Bedrock errors are retried by their HTTP status, by the SDK and then by
-``AnthropicService.should_retry``, as on the Anthropic API.
+``AnthropicService.should_retry``, as on the Anthropic API. An exception frame that ends an
+open stream is retried by ``should_retry`` when its type is transient.
 
 Everything runs offline against an ``httpx.MockTransport``. See composer/llm/bedrock.py and
 composer/llm/anthropic.py."""
@@ -17,7 +18,9 @@ from langchain_anthropic import ChatAnthropic
 from langchain_aws import ChatAnthropicBedrock
 
 from composer.llm.anthropic import AnthropicModelProvider, AnthropicService
-from composer.llm.bedrock import BACKEND_ENV_VAR, DEFAULT_MAX_TOKENS, MAX_TOKENS_ENV_VAR
+from composer.llm.bedrock import (
+    BACKEND_ENV_VAR, DEFAULT_MAX_TOKENS, MAX_TOKENS_ENV_VAR, stream_exception_type,
+)
 
 from tests.test_bedrock_backend import (
     _EVENT_STREAM, _MODEL, _REGION, _Options, _build, _event_stream, _exception_frame,
@@ -186,18 +189,39 @@ def _stream_ending_with_exception(name: str) -> httpx.Response:
     return httpx.Response(200, headers=_EVENT_STREAM, content=body + _exception_frame(name, "..."))
 
 
-# The SDK raises an exception frame inside a stream as a plain ValueError, which the run does
-# not retry, whatever the exception. How often Bedrock does this is to be seen live.
-@pytest.mark.parametrize("name", ["ThrottlingException", "ValidationException"])
+# The SDK raises an exception frame inside a stream as a plain ValueError and does not retry it
+# itself. The run retries it when the frame's type is transient: a server-side failure or
+# throttling, not a request the model rejects.
+@pytest.mark.parametrize("name, transient", [
+    ("internalServerException", True),
+    ("ThrottlingException", True),
+    ("serviceUnavailableException", True),
+    ("modelStreamErrorException", True),
+    ("ValidationException", False),
+    ("accessDeniedException", False),
+])
 @pytest.mark.asyncio
-async def test_exception_inside_a_stream_is_not_retried(
-    bedrock_env, monkeypatch, name: str
+async def test_exception_inside_a_stream_is_retried_when_transient(
+    bedrock_env, monkeypatch, name: str, transient: bool
 ) -> None:
     rec = _mock_bedrock(monkeypatch, lambda _: _stream_ending_with_exception(name))
     with pytest.raises(ValueError, match=name) as info:
         await _build().ainvoke("hi")
     assert len(rec.requests) == 1
-    assert _svc().should_retry(info.value) is False
+    assert stream_exception_type(info.value) == name.lower()
+    assert _svc().should_retry(info.value) is transient
+
+
+def test_stream_exception_type_reads_only_the_sdk_s_stream_error() -> None:
+    message = (
+        "Bad response code, expected 200: {'status_code': 400, 'headers': "
+        "{':exception-type': 'internalServerException', ':content-type': 'application/json', "
+        "':message-type': 'exception'}, 'body': b'{\"message\":\"Try your request again.\"}'}"
+    )
+    assert stream_exception_type(ValueError(message)) == "internalserverexception"
+    assert stream_exception_type(ValueError("internalServerException")) is None
+    assert stream_exception_type(RuntimeError(message)) is None
+    assert _svc().should_retry(ValueError("ordinary value error")) is False
 
 
 @pytest.mark.parametrize("error_type, transient", [
