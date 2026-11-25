@@ -19,7 +19,8 @@ nondet account, which timed out handler-level rules.
 | Release | Repository | Branch, PR | Release commit | State |
 |---|---|---|---|---|
 | `cvlr` 0.6.2, 13 crates | `Certora/cvlr` | [#52](https://github.com/Certora/cvlr/pull/52) | `0ef58e4` (squash of `de8dec0`): `main` (API docs #51, [#53](https://github.com/Certora/cvlr/pull/53)'s `.cvlr_rules` and `cvlr-rule-manifest`) released | merged; tags pushed; **published** 2026-10-27 |
-| `cvlr` 0.6.3, 13 crates | `Certora/cvlr` | [#55](https://github.com/Certora/cvlr/pull/55) | `d63b9bc` (squash): `main` with [#54](https://github.com/Certora/cvlr/pull/54)'s `cvlr_fixed::narrow` (`NarrowFixedU128`, U45) released | merged; tags pushed; **published** 2026-11-18; the core AutoProver pins |
+| `cvlr` 0.6.3, 13 crates | `Certora/cvlr` | [#55](https://github.com/Certora/cvlr/pull/55) | `d63b9bc` (squash): `main` with [#54](https://github.com/Certora/cvlr/pull/54)'s `cvlr_fixed::narrow` (`NarrowFixedU128`, U45) released | merged; tags pushed; **published** 2026-11-18 |
+| `cvlr` 0.6.4, 13 crates | `Certora/cvlr` | [#56](https://github.com/Certora/cvlr/pull/56), with its release commit last | `0130d9d` (rebase): `cvlr_fixed::exact` (`ExactFixedU128`) released | merged; tags pushed; **published** 2026-11-25; the core AutoProver pins |
 | `cvlr-solana` 0.5.1, 3 crates (SDK 2) | `Certora/cvlr-solana` | `eric/release-0.5.1`, [#22](https://github.com/Certora/cvlr-solana/pull/22) | `2e53877`: `main` (API docs #21, `rt` fix) released | merged (`a9898ba`, a merge commit); tags pushed; `v0.5` moved up to it; **published** 2026-10-27 |
 | `cvlr-solana` 0.6.0, 3 crates (SDK 3) | `Certora/cvlr-solana` | `eric/release-0.6.0` (the port, C1 and C2, on 0.5.1), [#24](https://github.com/Certora/cvlr-solana/pull/24) | `13bb381` | merged (`e92bccd`, a merge commit); tags pushed; **published** 2026-10-27 |
 | `cvlr-solana` 0.4.6, 1 crate (`solana-program` 1.18) | `Certora/cvlr-solana` | `v0.4`, [#23](https://github.com/Certora/cvlr-solana/pull/23) (`cvlr-solana-1-18-support.md` G3) | `b1988a4` | merged; tagged `cvlr-solana-v0.4.6`; **published** 2026-10-27 |
@@ -37,8 +38,8 @@ hash: the `cvlr` tags are recreated on it, after checking the two trees match, a
 `>=0.4`), so any 0.6.x core serves all three. AutoProver needs at least 0.6.2 for two other
 reasons: the published 0.6.1 has no API docs (`cvlr-todo.md` U28), and `verify_rules` reads rule
 names from the `.cvlr_rules` section that #53 added. 0.6.2 has both, and `cvlr-rule-manifest` is
-among its crates. It pins 0.6.3, which adds `cvlr_fixed::narrow` for programs on the `fixed` crate
-(U45).
+among its crates. It pins 0.6.4: 0.6.3 added `cvlr_fixed::narrow` for programs on the `fixed` crate
+(U45), and 0.6.4 adds `cvlr_fixed::exact` (the `exact_fixed` kind).
 
 ### Publishing, and git dependencies until then
 

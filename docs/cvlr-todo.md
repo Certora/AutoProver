@@ -1079,15 +1079,15 @@ alias edit instead of duplicated function bodies, and no constant can fall out o
 than the first lever.
 
 **Built (2026-11-24) as kind 14, `exact_fixed`**, over a new `cvlr_fixed::exact::ExactFixedU128<Frac>`
-(cvlr branch `eric/native-fixed-u128`, not yet published). It wraps the program's `FixedU128` and
+(cvlr [#56](https://github.com/Certora/cvlr/pull/56), published in `cvlr` 0.6.4). It wraps the program's `FixedU128` and
 delegates everything but fixed-point `*`/`/`, which are one native `muldiv`; the operators defer to
 `fixed`'s own `debug_assert!` on overflow. Checked by host tests against `fixed` and 37 Prover
 rules against a floor specification. A probe with it in place of klend's `Fraction`, at full
 width: the exact-amount cap verified in 95 s and 7 of 9 split-proof lemmas verified; the two that
 did not, and the unsplit all-available and at-most rules, timed out through the exact `U256`
-stand-in (2^67 to 2^252 paths), which is K17's ground. **Blocked on a cvlr release:** `_CORE` in
-`composer/spec/cvlr/reference.py` stays at 0.6.3 until `cvlr-fixed` with the `exact` module is
-published, and the API corpus has to be rebuilt from the new pin.
+stand-in (2^67 to 2^252 paths), which is K17's ground. **Released (2026-11-25):** `_CORE` pins
+`cvlr` 0.6.4, which ships the `exact` module, and the API corpus is rebuilt from it (0 of 495 items
+undocumented, 19 of 19 examples compile).
 
 Run 13 (2026-11-24, the same unit on all four kinds with the core pinned to the cvlr PR, about $14,
 2h19m) asked for `exact_fixed` up front from K15 (one alias-and-literal hunk, no `narrow_fixed`
