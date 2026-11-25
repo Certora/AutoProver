@@ -415,7 +415,9 @@ class ChainReference:
         return "\n".join(lines)
 
     def from_commits(self) -> tuple[CommitPatch, ...]:
-        return commit_patches(self.crates())
+        """The patches a probe crate declaring :meth:`cargo_dependencies` needs: the conditional
+        crates included, as it declares them."""
+        return commit_patches(self.documented().crates())
 
 
 #: The core line, shared by every chain. ``cvlr-spec`` (``cvlr_spec!``, ``cvlr_rules!``,
