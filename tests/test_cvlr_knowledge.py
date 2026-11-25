@@ -652,7 +652,7 @@ def test_the_author_knows_the_charter_without_holding_the_tool():
     prompt = _flat(_author_system_prompt())
     assert "code_editor(request)" in prompt
     assert "You do not make it" in prompt
-    assert "charter is thirteen kinds" in prompt
+    assert "charter is fourteen kinds" in prompt
     assert "The editor can refuse, and a refusal is information" in prompt
     # early_panic must not be sold as the answer to the one thing it cannot do.
     assert "does **not** help an acceptance property" in prompt
@@ -686,7 +686,7 @@ def test_every_kind_the_editor_offers_is_named_to_the_author():
     for kind in (
         "early_panic", "mock_fn", "inline_never", "hook_on_entry", "hook_on_exit",
         "redirect_module", "swap_import", "narrow_fixed", "native_muldiv", "narrow_wide_int",
-        "mock_method",
+        "mock_method", "exact_fixed",
     ):
         assert kind in prompt, kind
     assert "an extraction" in prompt
@@ -1020,13 +1020,13 @@ def test_the_editor_and_reviewer_know_the_two_wide_integer_kinds():
     and the `U256`'s multiply and divide computed in 128 bits, so both have to be kinds the editor
     has rather than improvisations it refuses."""
     editor = _munge_prompt("cvlr_munge_editor_system.j2")
-    assert "Thirteen kinds, and the closed list *is* your boundary." in editor
+    assert "Fourteen kinds, and the closed list *is* your boundary." in editor
     assert "### `native_muldiv`" in editor
     assert "### `narrow_wide_int`" in editor
     assert "**This kind is exact, and that is all that makes it acceptable.**" in editor
     assert "a `narrow_wide_int` request states no bound the unit's values fit within" in editor
     review = _munge_prompt("cvlr_munge_review_system.j2")
-    assert "limited to thirteen verification-only kinds" in review
+    assert "limited to fourteen verification-only kinds" in review
     assert "**On a `native_muldiv`: is it the same function?**" in review
     assert "**On a `narrow_wide_int`: is it narrow where it says and exact everywhere else?**" in review
 
@@ -1064,3 +1064,22 @@ def test_one_method_has_a_kind_of_its_own():
     assert "**`mock_method`** is `mock_fn` for a **method**" in author
     assert "a `mock_method` if it is a method" in _recipe("K8")
     assert "a `mock_method` is the same thing for a method" in _flat(_judge_system_prompt())
+
+
+def test_the_exact_fixed_point_kind_comes_before_narrowing():
+    """A lending program's constants span 1e-15 to 1e15, which no 64-bit narrowing holds, and its
+    dust threshold needs the precision narrowing removes. The borrow cap verified only once `*` and
+    `/` on the full type ran as native `muldiv`s. That is a kind of its own, tried before
+    `narrow_fixed`, and the judge is told it changes no verdict's meaning."""
+    editor = _munge_prompt("cvlr_munge_editor_system.j2")
+    assert "### `exact_fixed`, the first kind for a 128-bit fixed-point type" in editor
+    assert "cvlr_fixed::exact::ExactFixedU128<fixed::types::extra::U60>" in editor
+    assert "prefer it to `narrow_fixed` whenever a request leaves the choice to you" in editor
+    review = _munge_prompt("cvlr_munge_review_system.j2")
+    assert "**On an `exact_fixed` or a `narrow_fixed`: is it the type and nothing else?**" in review
+    assert "So is an **`exact_fixed`**" in _flat(_judge_system_prompt())
+    author = _flat(_author_system_prompt())
+    assert "the editor's `exact_fixed` kind computes that type's multiplication and division" in author
+    assert "Ask for it first when a timeout sits in `fixed`'s own operations" in author
+    recipe = _recipe("K15")
+    assert "**First: `exact_fixed`.**" in recipe

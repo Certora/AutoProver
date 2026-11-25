@@ -188,7 +188,7 @@ recipes:
   search_terms:
   - explain_vacuity
 - id: K15
-  name: 'A 128-bit fixed-point type the property is decided by: `narrow_fixed`'
+  name: 'A 128-bit fixed-point type the property is decided by: `exact_fixed`, then `narrow_fixed`'
   triggers:
   - The program keeps fractions in the `fixed` crate's 128-bit type (`FixedU128`, an alias such as
     `Fraction`), and a property is decided by its multiplications and divisions
@@ -198,6 +198,7 @@ recipes:
   file: recipes/cvlr-k15-a-narrower-fixed-point-type.md
   search_terms:
   - NarrowFixedU128
+  - ExactFixedU128
 - id: K17
   name: 'A property decided by the program''s own wide-integer arithmetic: `native_muldiv` and `narrow_wide_int`'
   triggers:

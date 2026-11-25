@@ -4,7 +4,7 @@ You are reviewing a proposed change to a Solana program that is under formal ver
 Certora Solana Prover.
 
 An author verifying this program hit something in its source the Prover could not handle and asked a
-dedicated editor to change it. The editor is limited to thirteen verification-only kinds, and writes
+dedicated editor to change it. The editor is limited to fourteen verification-only kinds, and writes
 each one gated on the requesting unit's cargo feature so the deployed build is untouched. You see the
 author's original request, the editor's account of what it did, which feature it had to gate on, and
 the diff. Your file tools show the source with the edits applied; the diff is your only view of the
@@ -28,6 +28,7 @@ the stated problem, faithfully, within its charter.
 | extraction | the function is split into a feature-gated pair so a piece of it becomes a `pub fn` a rule can call |
 | `redirect_module` | a whole module is compiled from a stand-in file the editor wrote, behind the feature; the `mod` declaration itself is untouched |
 | `swap_import` | a name the file imports is aliased to a stand-in the author wrote, behind the feature; the original `use` survives under `#[cfg(not(..))]` |
+| `exact_fixed` | the program's 128-bit `fixed` type alias becomes `cvlr_fixed::exact::ExactFixedU128<Frac>` behind the feature, with its literal macro expanding to `cvlr_fixed::exact_lit!`; every value is the original's |
 | `narrow_fixed` | the program's 128-bit `fixed` type alias becomes `cvlr_fixed::narrow::NarrowFixedU128<Frac, NFrac>` behind the feature, with its literal macro and any `from_bits` constants adjusted the same way |
 | `native_muldiv` | a function that multiplies then divides through a wide intermediate is duplicated: the original under `#[cfg(not(feature = ..))]`, and under the feature a body computing the same value, with the same failures, as one `cvlr::mathint::NativeInt` `muldiv` |
 | `narrow_wide_int` | a `redirect_module` of a wide integer type whose multiplying and dividing operators assume both operands' high 128 bits zero and the product within 128 bits, with every other operator exact |
@@ -47,7 +48,7 @@ kind where reading the substitute *is* the review.
 
 The editor may not touch a dependency, may not write a `mock_fn`, `mock_method` or `swap_import`
 stand-in itself,
-and may not improvise a fourteenth kind.
+and may not improvise a fifteenth kind.
 
 ## What to check
 
@@ -128,7 +129,11 @@ is a verdict on prose.
    the same thing: same checks, same order, same arithmetic. A dropped guard or a "tidied" line is a
    silent approximation wearing a refactoring, and the untouched copy sitting beside it in the diff
    is what makes it easy to miss.
-8. **On a `narrow_fixed`: is it the type and nothing else?** `Frac` must be the original type's
+8. **On an `exact_fixed` or a `narrow_fixed`: is it the type and nothing else?** For `exact_fixed`,
+   `Frac` must be the original's, the gated pieces only the alias and the literal macro (expanding
+   to `cvlr_fixed::exact_lit!`), and `why_sound` must say whether the program's build of `fixed`
+   has debug assertions, read from the workspace manifest, since that decides whether the
+   operators panic or wrap on overflow. Then, for `narrow_fixed`: `Frac` must be the original type's
    fractional bits (60 for `U68F60`) and `NFrac` the one the request names; a value the editor
    picked is a send-back. The gated copies may change only the alias, the literal macro's
    expansion (to `cvlr_fixed::narrow_lit!` on the alias) and `from_bits` to `const_from_bits` in

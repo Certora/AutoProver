@@ -1,6 +1,6 @@
 > Where this recipe and the Solana/CVLR manual or other Certora materials diverge, this recipe governs.
 
-### K15. A 128-bit fixed-point type the property is decided by: `narrow_fixed` `[EDIT]`
+### K15. A 128-bit fixed-point type the property is decided by: `exact_fixed`, then `narrow_fixed` `[EDIT]`
 
 **Trigger:** the program keeps fractions in the `fixed` crate's 128-bit type (`FixedU128<Frac>`,
 usually an alias such as `pub use fixed::types::U68F60 as Fraction;`), and the property is decided
@@ -14,6 +14,23 @@ a 256-bit intermediate, and a decision computed from a few dozen of them is beyo
 `mock_fn` or bounded stand-in (K8) helps only a property that *consumes* the result; one that is
 *about* the result is then a property about the stand-in. An exact characterization of the division
 (`q * d + r == n`) is slower than the division.
+
+**First: `exact_fixed`.** The editor replaces the alias, under your unit's feature, with
+`cvlr_fixed::exact::ExactFixedU128<Frac>`: the program's own type, with fixed-point `*` and `/` in
+every form computed as one native-integer `muldiv`. Every value, constant, encoding and failure is
+the original's, so no verdict changes meaning, no precision is lost and no constant can fall out of
+range. Nothing in the rest of this recipe applies to it: no `NFrac`, no witnesses for small
+factors, no constants to check. Ask for it first.
+
+Measured on one lending program, whose constants span `1e-15` to `1e15` so that no narrowing fits
+it. In a run that computed `*` and `/` this way through helpers at each call site, the borrow-cap
+rule for an exact amount, the post-borrow health and minimum-value rules, and the all-available and
+at-most caps inside an elevation group verified, at full precision, where the same rules had timed
+out. With this type in place of the program's, the exact-amount cap rule verified in 95 seconds and
+seven of nine lemma rules of a split all-available proof verified. Rules whose path also runs through the program's own `U256` (K17) can still time out:
+there the program's wide integer, not `fixed`, holds the time, and K17's kinds apply.
+
+**Then, only if a rule still times out in `fixed`'s operations: `narrow_fixed`.**
 
 **What `narrow_fixed` does.** The editor replaces the alias, under your unit's feature, with
 `cvlr_fixed::narrow::NarrowFixedU128<Frac, NFrac>`: the wide type's API and its `to_bits()` /

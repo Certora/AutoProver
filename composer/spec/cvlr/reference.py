@@ -417,9 +417,10 @@ class ChainReference:
 #: parametric-rule layer with it.
 _CORE = CrateRelease("cvlr", "0.6.3")
 
-#: ``cvlr-fixed`` with its ``fixed`` feature, for a program on the ``fixed`` crate:
-#: ``cvlr_fixed::narrow::NarrowFixedU128``, a 64-bit stand-in for a 128-bit fixed-point type, which
-#: the editor's ``narrow_fixed`` kind swaps in under a unit's feature. Released with the core, so
+#: ``cvlr-fixed`` with its ``fixed`` feature, for a program on the ``fixed`` crate: the two
+#: stand-ins for a 128-bit fixed-point type the editor swaps in under a unit's feature,
+#: ``cvlr_fixed::exact::ExactFixedU128`` (``exact_fixed``, multiplication and division on native
+#: integers) and ``cvlr_fixed::narrow::NarrowFixedU128`` (``narrow_fixed``, 64 bits). Released with the core, so
 #: at its version.
 NARROW_FIXED = ConditionalCrate(
     trigger="fixed", release=CrateRelease("cvlr-fixed", _CORE.version, features=("fixed",))

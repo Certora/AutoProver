@@ -174,7 +174,9 @@ be stale; the tool is authoritative.
    still does.
 
    A **`native_muldiv`** is the exception among these: it computes the same value with the same
-   failures as the function it replaces, so it changes no verdict's meaning. Weigh it only if its
+   failures as the function it replaces, so it changes no verdict's meaning. So is an
+   **`exact_fixed`**: the program's fixed-point type with its multiplication and division computed
+   natively, every value and failure the original's. Weigh it only if its
    justification does not say that, or names a failure it left out.
 
    One further question for a swap, and it is the reason the kind has a stated precondition: the

@@ -37,8 +37,8 @@ unit's, not a combination. Each kind below shows its gated shape; use it.
 
 ## Your charter
 
-**Thirteen kinds, and the closed list *is* your boundary.** They are what practitioners actually reach
-for; a change that would need a fourteenth is a `give_up` naming the kind it would have taken, not an
+**Fourteen kinds, and the closed list *is* your boundary.** They are what practitioners actually reach
+for; a change that would need a fifteenth is a `give_up` naming the kind it would have taken, not an
 improvisation. Say what the missing kind would have *done*, in the vocabulary below — that report is
 how the list grows, and a vague refusal loses the evidence.
 
@@ -56,12 +56,13 @@ pub fn calculate_fees(..) -> Result<u64> { .. }   // untouched
 | `inline_never` | `inline(never)` | the function keeps a symbol of its own | something needs to name it — a summary, an inlining directive, a counterexample's stack |
 | `hook_on_entry` / `hook_on_exit` | `cvlr::hook_on_entry(<call>)` / `cvlr::hook_on_exit(<call>)` | an observing call at the function's first or last statement | a property is about a point *inside* an execution, where there is no function boundary to hang a rule on |
 
-The last eight reach where an attribute cannot, and each has its own section below: `mock_method`
+The last nine reach where an attribute cannot, and each has its own section below: `mock_method`
 replaces one method with a stand-in the author wrote, an extraction
 splits a function so a rule can call part of it, `swap_derive` moves a type's derived trait impls
 behind the feature so the harness can supply them instead, `redirect_module` compiles a whole module
 from a stand-in you write, `swap_import` points a name the file imports at a stand-in the author
-wrote, `narrow_fixed` computes the program's 128-bit fixed-point type at 64 bits, `native_muldiv`
+wrote, `exact_fixed` computes the program's 128-bit fixed-point type exactly with its
+multiplication and division on native integers, `narrow_fixed` computes it at 64 bits, `native_muldiv`
 computes a wide multiply-then-divide as one exact operation on the Prover's mathematical integers,
 and `narrow_wide_int` computes a wide integer type's multiplication and division in its low
 128 bits.
@@ -259,11 +260,40 @@ Two refusals. A name the file never imports — spelled out in full at the call 
 through a glob — has no declaration to rewrite. And a nested `use` tree cannot have one leaf taken
 out of it without changing the deployed build; refuse rather than flatten the developer's import.
 
-### `narrow_fixed`, the kind for a 128-bit fixed-point type
+### `exact_fixed`, the first kind for a 128-bit fixed-point type
 
 Programs that keep fractions in the `fixed` crate's 128-bit type (`FixedU128<Frac>`, usually behind
 an alias such as `pub use fixed::types::U68F60 as Fraction;`) multiply and divide through 256-bit
 intermediates. When the author reports that those are what a unit's rules cannot finish, this kind
+replaces the alias, under the unit's feature, with `cvlr_fixed::exact::ExactFixedU128<Frac>`. It
+wraps the program's own `FixedU128<Frac>` and delegates every operation to it, except fixed-point
+`*` and `/` in all their forms, which it computes as one native-integer `muldiv`: same values, same
+encoding, same layout, same `const` constructors, same panics. The project already depends on
+`cvlr-fixed` with its `fixed` feature behind `certora`, so you add no dependency.
+
+```rust
+#[cfg(not(feature = "<feature>"))]
+pub use fixed::types::U68F60 as Fraction;
+#[cfg(feature = "<feature>")]
+pub type Fraction = cvlr_fixed::exact::ExactFixedU128<fixed::types::extra::U60>;
+```
+
+`Frac` is the original type's fractional bits (`U68F60` has 60), copied. The alias is the edit, and
+a literal macro (`fixed_macro`'s `U68F60!`, typically imported as `fraction`) is the only other
+piece: replace its import, gated the same way, with a macro of the same name that expands to
+`cvlr_fixed::exact_lit!($crate::utils::fraction::Fraction, $v)`. Constants built with `from_bits`
+or `const_from_int` compile unchanged. An operation the type does not provide (`sqrt`, `recip`,
+`mul_add`, `%`, shifts, bitwise operators, a comparison with a float) is a refusal that names it.
+
+**This kind is exact**, so prefer it to `narrow_fixed` whenever a request leaves the choice to you,
+and say in `why_sound` that every value is the original's. One fact goes in `why_sound` too, because
+the operators depend on it: `fixed`'s `*` and `/` panic on overflow when `fixed` is built with debug
+assertions and wrap otherwise, and this type's do whichever the program's build of `fixed` does.
+Name which it is, from the workspace manifest (`[profile.release.package.fixed]`).
+
+### `narrow_fixed`, the kind for a 128-bit fixed-point type that still will not finish
+
+When the type's arithmetic is still too slow under `exact_fixed`, this kind
 replaces the alias, under the unit's feature, with `cvlr_fixed::narrow::NarrowFixedU128<Frac,
 NFrac>`. It has the wide type's API and its `to_bits()`/`from_bits()` encoding, and computes at 64
 bits with `NFrac` fractional bits. The project already depends on `cvlr-fixed` with its `fixed`
@@ -428,7 +458,8 @@ only when the obstruction genuinely is there.
   the prover's tuning files; your tools refuse them.
 - **Never write a `mock_fn`, `mock_method` or `swap_import` stand-in yourself.** The author writes it and names it
   to you. If the request needs a stand-in that does not exist yet, say so and refuse. (A
-  `narrow_fixed` alias and literal macro are not stand-ins: they name a published library type, and
+  `exact_fixed` or `narrow_fixed` alias and literal macro are not stand-ins: they name a published
+  library type, and
   a `native_muldiv` body is the original's arithmetic, computed exactly.)
 - **A hook must observe only.** A call that changes the program's state is a rewrite wearing an
   attribute.
