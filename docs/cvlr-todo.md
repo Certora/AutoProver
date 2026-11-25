@@ -1033,7 +1033,8 @@ lemma split, but nothing pushes it yet: an author has to find the lemmas itself.
   debug assertions in release). A monotonicity lemma over the narrow `*` came back VIOLATED on a
   wrapped product. Fix in cvlr: panic, as `fixed` does with overflow checks on.
 * The lemma split as pushed guidance: when a timed-out rule's statistics show few paths and a
-  handful of degree-4 nonlinear operations.
+  handful of degree-4 nonlinear operations. — **built (2026-11-25)**: the "few paths" timeout
+  symptom pushes K17; see run 14 below.
 
 Run 11 (2026-11-24, the valuation unit on these kinds, about $20, 2h49m) used `native_muldiv` on
 both ratio helpers unprompted by a timeout (it cleared a `[3001]` on the market-value path), and the
@@ -1087,6 +1088,29 @@ did not, and the unsplit all-available and at-most rules, timed out through the 
 stand-in (2^67 to 2^252 paths), which is K17's ground. **Blocked on a cvlr release:** `_CORE` in
 `composer/spec/cvlr/reference.py` stays at 0.6.3 until `cvlr-fixed` with the `exact` module is
 published, and the API corpus has to be rebuilt from the new pin.
+
+Run 13 (2026-11-24, the same unit on all four kinds with the core pinned to the cvlr PR, about $14,
+2h19m) asked for `exact_fixed` up front from K15 (one alias-and-literal hunk, no `narrow_fixed`
+refusal), `native_muldiv` from K17, K16's exact `U256` redirect after a `[3001]`, and `mock_method`
+on `Reserve::freely_available_liquidity_amount` and `ReserveFees::calculate_borrow_fees`. Verified:
+the exact-size cap, liabilities below assets, and borrow and repay no-dust, all at full precision.
+Not established: all-available and at-most, which the mocks took from 2^84 and 2^158 paths to 2^27
+and 2^44 and still timed out three times, with no function holding the time. Nothing pushed the
+lemma split, and the author did not split.
+
+Run 14 (2026-11-25, run 13 plus the "few paths" push; restarted once after a reboot, the resumed
+run about $21-26 and 2h58m) **verified max LTV for all three borrow sizes, with no narrowing and
+no hand edits.** The all-available rule timed out on 2^41 paths, K17 was pushed, and the author
+split it into four lemmas proved for all inputs (market value is monotone; the `Fraction` product
+is monotone; `mv(y / bf) * bf <= mv(y)`; the value of the amount computed for a value is at most
+that value), assumed at the run's values, the monotonicity ones as implications. The third lemma
+timed out on 9 paths, K17 was pushed again, and the author split it at a borrow factor of 1 and
+above 1 (the factor is at least 1 by `get_borrow_factor`). Every piece verified. At-most verified on
+the same lemma instances, without the exact-or-all-available composition the hand probe used.
+Other verdicts as before: the liquidation-threshold edge (low) and the same-reserve rollover rules
+(medium; behaviour judged by design in run 10's triage) violated; the different-reserve rollover
+rules timed out at 2^150 and were dropped. `FEW_PATHS_LOG2 = 64` was right on both sides here: the
+handler-level drafts timed out at 2^65 to 2^320 and got only K8, and both lemma-split pushes landed.
 
 ## Leads from the certora-cvlr-kb ledger
 
