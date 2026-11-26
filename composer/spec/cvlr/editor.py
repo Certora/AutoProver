@@ -48,7 +48,7 @@ from composer.spec.cvlr.scaffold import ENVS_DIR, SPECS_DIR
 from composer.spec.cvlr.state import CvlrGenerationState
 from composer.spec.cvlr.tree import Editable, ProjectSource, check_edit
 from composer.spec.cvlr.tuning import SummaryDirective
-from composer.spec.cvlr.verify import HarnessTarget
+from composer.spec.cvlr.verify import HarnessTarget, batched_with_a_change
 from composer.spec.graph_builder import run_to_completion
 from composer.spec.service_host import ServiceHost, Sort
 from composer.spec.source.live_explorer import LiveEditTools, setup_live_edits
@@ -67,7 +67,14 @@ from composer.spec.source.munge.munge_agent import (
     munge_feedback_judge,
     unapproved,
 )
-from composer.spec.source.munge.tool_names import CODE_EDITOR, GIVE_UP, REQUEST_REVIEW, SUBMIT_EDIT
+from composer.spec.source.munge.tool_names import (
+    CODE_EDITOR,
+    COMMIT_EDIT,
+    GIVE_UP,
+    REQUEST_REVIEW,
+    REVERT_TO_EDIT,
+    SUBMIT_EDIT,
+)
 from composer.spec.source.munge.vfs_diff import edited_paths, summarize_changes
 from composer.spec.util import uniq_thread_id
 from composer.ui.tool_display import tool_display
@@ -378,6 +385,16 @@ class SubmitEdits(
 # the author's side
 
 
+#: The author's tools whose result changes what the editor is handed: the draft it builds against,
+#: the program's applied edits, and the summaries.
+CHANGES_WHAT_THE_EDITOR_READS = frozenset({
+    "put_harness",
+    COMMIT_EDIT,
+    REVERT_TO_EDIT,
+    "summarize_for_prover",
+})
+
+
 @dataclasses.dataclass(frozen=True)
 class EditorDeps:
     """What the author-facing tool needs to run one editor conversation and keep its result."""
@@ -425,6 +442,10 @@ class CodeEditor(
 
     @override
     async def run(self) -> str:
+        if (
+            refusal := batched_with_a_change(self.state, CODE_EDITOR, CHANGES_WHAT_THE_EDITOR_READS)
+        ) is not None:
+            return refusal
         draft = self.state["curr_spec"]
         if draft is None:
             return "No harness written yet — put a draft first, so the editor can build against it."
