@@ -658,23 +658,25 @@ CHANGES_WHAT_IS_CHECKED = frozenset({
 })
 
 
-def batched_with_a_change(state: CvlrGenerationState, tool: str) -> str | None:
-    """The refusal for gate tool ``tool`` called in the same turn as a tool that changes what it
-    checks, or ``None``.
+def batched_with_a_change(
+    state: CvlrGenerationState, tool: str, changes: frozenset[str]
+) -> str | None:
+    """The refusal for ``tool`` called in the same turn as one of ``changes``, the tools that change
+    what it reads, or ``None``.
 
     Every call in one turn runs against the state the turn started from, concurrently. Run anyway,
-    the gate would check the draft from before the change and report it as the current one.
+    ``tool`` would read the draft from before the change and report on it as the current one.
     """
     messages = state["messages"]
     if not messages or not isinstance(last := messages[-1], AIMessage):
         return None
-    changing = sorted({call["name"] for call in last.tool_calls} & CHANGES_WHAT_IS_CHECKED)
+    changing = sorted({call["name"] for call in last.tool_calls} & changes)
     if not changing:
         return None
     named = ", ".join(f"`{name}`" for name in changing)
     return (
         f"`{tool}` was not run: it was called in the same turn as {named}. The calls in one "
-        f"turn all start from the state before any of them, so `{tool}` would have checked the "
+        f"turn all start from the state before any of them, so `{tool}` would have read the "
         f"draft without that change. Call `{tool}` again in a turn of its own."
     )
 
@@ -697,7 +699,7 @@ class CargoCheck(
 
     @override
     async def run(self) -> Command | str:
-        if (refusal := batched_with_a_change(self.state, "cargo_check")) is not None:
+        if (refusal := batched_with_a_change(self.state, "cargo_check", CHANGES_WHAT_IS_CHECKED)) is not None:
             return refusal
         draft = self.state["curr_spec"]
         if draft is None:
@@ -835,7 +837,7 @@ class VerifyRules(
 
     @override
     async def run(self) -> Command | str:
-        if (refusal := batched_with_a_change(self.state, VERIFY_TOOL)) is not None:
+        if (refusal := batched_with_a_change(self.state, VERIFY_TOOL, CHANGES_WHAT_IS_CHECKED)) is not None:
             return refusal
         draft = self.state["curr_spec"]
         if draft is None:
@@ -1048,7 +1050,7 @@ class ExplainVacuity(
 
     @override
     async def run(self) -> str:
-        if (refusal := batched_with_a_change(self.state, "explain_vacuity")) is not None:
+        if (refusal := batched_with_a_change(self.state, "explain_vacuity", CHANGES_WHAT_IS_CHECKED)) is not None:
             return refusal
         draft = self.state["curr_spec"]
         if draft is None:
