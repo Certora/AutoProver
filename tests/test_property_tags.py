@@ -88,6 +88,7 @@ def _write(root: Path, rel: str, text: str) -> None:
 def _project(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(root, "certora/specs/s.spec", SPEC.replace("mint_rounding", "typo_id"))
     _write(root, "certora/suites/rounding.property-suite.json", json.dumps({
+        "component": {"name": "Rounding", "description": "How shares are rounded."},
         "imports": ["common.property-suite.json"],
         "properties": [{"id": "burn_rounding", "description": "burning rounds down"},
                        {"id": "no_round_trip_profit", "description": "d"},
@@ -96,10 +97,11 @@ def _project(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(root, "certora/suites/common.property-suite.json", json.dumps({"properties": []}))
     # Another suite: its properties may be tagged without being remarks, and it defines
     # burn_rounding differently.
-    _write(root, "certora/suites/accounting.property-suite.json", json.dumps({"properties": [
-        {"id": "supply_matches_shares", "description": "d"},
-        {"id": "burn_rounding", "description": "burning rounds up"},
-    ]}))
+    _write(root, "certora/suites/accounting.property-suite.json", json.dumps({
+        "component": {"name": "Accounting", "description": "Minting and burning shares."},
+        "properties": [{"id": "supply_matches_shares", "description": "d"},
+                       {"id": "burn_rounding", "description": "burning rounds up"}],
+    }))
     # Copies a tool wrote: skipped with ``skipped``.
     _write(root, "out-copies/s.spec", SPEC)
     monkeypatch.setattr(pt, "rule_lines", lambda _text: {r: (ln, ln + 1) for r, ln in FIRST_LINES.items()})
@@ -141,7 +143,9 @@ def test_check_suite_lists_each_property_with_its_rules_and_the_problems(
 
 def test_a_suite_file_that_does_not_read_is_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _project(tmp_path, monkeypatch)
-    _write(tmp_path, "certora/suites/broken.property-suite.json", '{"properties": [{"id": "x"}]}')
+    _write(tmp_path, "certora/suites/broken.property-suite.json", json.dumps({
+        "component": {"name": "Broken", "description": "d"}, "properties": [{"id": "x"}],
+    }))
     # A run's own property dumps are named differently, and are not read.
     _write(tmp_path, "certora/properties/Component.properties.json", "[]")
 
