@@ -7,7 +7,7 @@ of the format.
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from composer.spec.source.report.schema import ImpactLevel, LikelihoodLevel, SeverityTier
 from composer.spec.types import PropertyType
@@ -208,7 +208,4 @@ class FindingsFile(_Strict):
     )
     gaps: list[Gap] | None = Field(
         default=None, description="Code paths or properties the prover could not check, and why."
-    )
-    evaluation: dict[str, JsonValue] | None = Field(
-        default=None, description="Added by a later review of the run; the run itself writes null."
     )
