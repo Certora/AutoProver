@@ -56,7 +56,6 @@ def valid() -> dict[str, Any]:
              "status": "dropped", "status_note": "Duplicate of a property of the fee module.",
              "rules": [], "findings": []},
         ],
-        "evaluation": None,
     }
 
 
