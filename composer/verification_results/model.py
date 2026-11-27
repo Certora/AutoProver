@@ -1,7 +1,8 @@
-"""The findings file of one verification run of one main contract, schema
-``certora-autoprover-findings/1``: the repositories, the findings with their justification and
-evidence, and every property with its rules and prover results. The field descriptions are part
-of the format.
+"""The results file of one verification run of one main contract, schema
+``certora-autoprover-results/1``: the repositories, the property suite the run verified, the
+outcome of every property of the suite with its rules and prover results, and the findings with
+their justification and evidence. The statements of the properties are in the suite. The field
+descriptions are part of the format.
 """
 
 from datetime import datetime
@@ -10,9 +11,8 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from composer.spec.source.report.schema import ImpactLevel, LikelihoodLevel, SeverityTier
-from composer.spec.types import PropertyType
 
-SCHEMA_ID = "certora-autoprover-findings/1"
+SCHEMA_ID = "certora-autoprover-results/1"
 
 type TrustClass = Literal["unprivileged", "trusted_party", "self_harm"]
 type RuleOutcome = Literal["verified", "violated", "timeout", "error", "unknown", "sanity_failed"]
@@ -20,6 +20,12 @@ type PropertyStatus = Literal["verified", "violated", "partial", "not_proven", "
 
 #: The statuses whose property needs a ``status_note``.
 NOTED_STATUSES: frozenset[PropertyStatus] = frozenset({"partial", "not_proven", "skipped", "dropped"})
+
+#: The statuses a prover verdict on at least one rule decides.
+RULED_STATUSES: frozenset[PropertyStatus] = frozenset({"verified", "violated", "partial"})
+
+#: The statuses of a property with no rule.
+UNRULED_STATUSES: frozenset[PropertyStatus] = frozenset({"skipped", "dropped"})
 
 _COMMIT = r"^[0-9a-f]{40}$"
 
@@ -51,6 +57,11 @@ class Run(_Strict):
     source: SourceRepository
     results: ResultsRepository
     main_contract: str = Field(pattern=r"^[^:]+\.sol:\w+$", description="path/to/File.sol:Contract")
+    property_suite: str = Field(
+        description="Path in the results repository, under results.certora_dir, of the "
+        "*.property-suite.json the run verified. Its properties are the statements of "
+        "properties[]."
+    )
     skill_version: str
     generated_at: datetime
     property_generator_run_id: str | None = Field(
@@ -143,14 +154,9 @@ class Finding(_Strict):
 
 
 class Property(_Strict):
-    id: str
-    group: str = Field(description="Component the property belongs to.")
-    sort: PropertyType
-    description: str
-    source: Literal["property_generator", "added", "user"] = Field(
-        description="property_generator: from the run in run.property_generator_run_id (or a "
-        "supplied list)."
-    )
+    """The outcome of one property of the suite."""
+
+    id: str = Field(description="The property's id in the suite.")
     status: PropertyStatus
     status_note: str | None = Field(
         default=None,
@@ -160,13 +166,20 @@ class Property(_Strict):
         "property was removed from the input list (duplicate, out of scope, wrong for this "
         "contract, ...).",
     )
-    rules: list[RuleResult]
+    rules: list[RuleResult] = Field(
+        description="Every rule tagged with the property's id (@property), with its result. At "
+        "least one when status is verified, violated or partial; none when skipped or dropped."
+    )
     findings: list[str] = Field(description="Finding ids this property's results show.")
 
     @model_validator(mode="after")
-    def _status_note_is_given(self) -> "Property":
+    def _status_fits(self) -> "Property":
         if self.status in NOTED_STATUSES and len(self.status_note or "") < 20:
             raise ValueError(f"a {self.status} property needs a status_note of at least 20 characters")
+        if self.status in RULED_STATUSES and not self.rules:
+            raise ValueError(f"a {self.status} property needs at least one rule")
+        if self.status in UNRULED_STATUSES and self.rules:
+            raise ValueError(f"a {self.status} property has no rules")
         return self
 
 
@@ -193,16 +206,16 @@ class Gap(_Strict):
     properties: list[str]
 
 
-class FindingsFile(_Strict):
+class VerificationResults(_Strict):
     model_config = ConfigDict(
-        title="Findings and properties of one verification run of one main contract",
+        title="Results of one verification run of one main contract",
         json_schema_extra={"$id": SCHEMA_ID},
     )
 
-    schema_: Literal["certora-autoprover-findings/1"] = Field(alias="schema")
+    schema_: Literal["certora-autoprover-results/1"] = Field(alias="schema")
     run: Run
     findings: list[Finding]
-    properties: list[Property]
+    properties: list[Property] = Field(description="One entry per property of the suite.")
     models: list[Model] | None = Field(
         default=None, description="Models of external contracts the verdicts rest on."
     )

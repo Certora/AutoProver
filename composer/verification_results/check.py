@@ -1,10 +1,13 @@
-"""``certora-findings-check``: checks findings files against the ``certora-autoprover-findings/1``
+"""``certora-results-check``: checks results files against the ``certora-autoprover-results/1``
 format, and prints the format's JSON Schema.
 
-A file is checked in two steps. First its shape: the fields, their types and the values they may
+A file is checked in three steps. First its shape: the fields, their types and the values they may
 take. Then what the shape alone cannot express: ids are unique, every id a finding or property
 names exists, a finding's evidence repeats rule results of the property it names, and every rule
-is under the run's ``certora_dir``. These are errors.
+and the suite are under the run's ``certora_dir``. Then the file against its property suite: the
+suite loads, the file has one entry per property of the suite, and each property's rules are the
+rules the specs tag with its id. These are errors, and so are the errors of the suite's own checks
+(``validate-properties``); its warnings are warnings.
 
 The text of findings and properties is also searched for a run's internal vocabulary (judge
 rounds, unit finding ids, ``CEX``, ...). The patterns can also match ordinary text, e.g. "round 2"
@@ -16,14 +19,15 @@ import json
 import re
 import sys
 from collections import Counter
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from pydantic import ValidationError
 
-from composer.findings.model import FindingsFile, RuleResult
+from composer.pipeline.property_tags import check_suite
+from composer.verification_results.model import RuleResult, VerificationResults
 
 #: Internal vocabulary of a run, each with what to write instead.
 VOCABULARY: tuple[tuple[re.Pattern[str], str], ...] = tuple(
@@ -66,7 +70,7 @@ def _rule_key(r: RuleResult) -> tuple[str, str, str]:
     return (r.rule, r.spec, r.conf)
 
 
-def _texts(data: FindingsFile) -> Iterator[tuple[str, str]]:
+def _texts(data: VerificationResults) -> Iterator[tuple[str, str]]:
     for i, f in enumerate(data.findings):
         at = f"findings[{i}]"
         j = f.justification
@@ -87,12 +91,11 @@ def _texts(data: FindingsFile) -> Iterator[tuple[str, str]]:
         for k, ev in enumerate(f.evidence):
             yield f"{at}.evidence[{k}].how", ev.how
     for i, p in enumerate(data.properties):
-        yield f"properties[{i}].description", p.description
         if p.status_note:
             yield f"properties[{i}].status_note", p.status_note
 
 
-def check_consistency(data: FindingsFile) -> list[Problem]:
+def check_consistency(data: VerificationResults) -> list[Problem]:
     """The errors in ``data`` that its shape does not rule out."""
     problems: list[Problem] = []
 
@@ -133,6 +136,9 @@ def check_consistency(data: FindingsFile) -> list[Problem]:
                                               f"or job_url in property {prop.id!r}")
 
     root = data.run.results.certora_dir.rstrip("/") + "/"
+    if not data.run.property_suite.startswith(root):
+        error("run.property_suite", f"{data.run.property_suite!r} is not under run.results.certora_dir "
+                                    f"{root!r}")
     for i, p in enumerate(data.properties):
         for j, r in enumerate(p.rules):
             at = f"properties[{i}].rules[{j}]"
@@ -143,7 +149,39 @@ def check_consistency(data: FindingsFile) -> list[Problem]:
     return problems
 
 
-def check_vocabulary(data: FindingsFile) -> list[Problem]:
+def check_against_suite(data: VerificationResults, root: Path, skipped: Iterable[str] = ()) -> list[Problem]:
+    """The problems of ``data`` against its property suite, read in the project at ``root`` (the
+    results repository). ``skipped`` holds project-relative directories whose specs are not
+    searched for tags."""
+    result = check_suite(root, data.run.property_suite, skipped)
+    problems = [
+        Problem(p.severity, ":".join(str(x) for x in (p.file, p.line) if x is not None) or "suite",
+                p.message)
+        for p in result.problems if p.severity != "info"
+    ]
+    if any(p.kind == "suite-does-not-load" for p in result.problems):
+        return problems
+    listed = {p.id: i for i, p in enumerate(data.properties)}
+    for pid in result.rules:
+        if pid not in listed:
+            problems.append(Problem("error", "properties", f"suite property {pid!r} has no entry"))
+    for i, p in enumerate(data.properties):
+        if p.id not in result.rules:
+            problems.append(Problem("error", f"properties[{i}].id",
+                                    f"the suite defines no property {p.id!r}"))
+            continue
+        tagged = set(result.rules[p.id])
+        listed_rules = {(r.spec, r.rule) for r in p.rules}
+        for spec, rule in sorted(tagged - listed_rules):
+            problems.append(Problem("error", f"properties[{i}].rules",
+                                    f"rule {rule!r} ({spec}) is tagged with {p.id!r} but not listed"))
+        for spec, rule in sorted(listed_rules - tagged):
+            problems.append(Problem("error", f"properties[{i}].rules",
+                                    f"rule {rule!r} ({spec}) is listed but not tagged with {p.id!r}"))
+    return problems
+
+
+def check_vocabulary(data: VerificationResults) -> list[Problem]:
     """A warning for each passage of ``data``'s text that uses a run's internal vocabulary."""
     problems: list[Problem] = []
     for where, text in _texts(data):
@@ -153,30 +191,34 @@ def check_vocabulary(data: FindingsFile) -> list[Problem]:
     return problems
 
 
-def check(raw: object) -> list[Problem]:
-    """Every problem of a findings file, given as parsed JSON."""
+def check(raw: object, root: Path, skipped: Iterable[str] = ()) -> list[Problem]:
+    """Every problem of a results file, given as parsed JSON, of the project at ``root``."""
     try:
-        data = FindingsFile.model_validate(raw)
+        data = VerificationResults.model_validate(raw)
     except ValidationError as e:
         return _shape_errors(e)
-    return check_consistency(data) + check_vocabulary(data)
+    return check_consistency(data) + check_against_suite(data, root, skipped) + check_vocabulary(data)
 
 
 def schema() -> dict[str, object]:
     """The JSON Schema of the format."""
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        **FindingsFile.model_json_schema(by_alias=True),
+        **VerificationResults.model_json_schema(by_alias=True),
     }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="certora-findings-check",
-        description="Check findings files (certora-autoprover-findings/1), or print the format's "
+        prog="certora-results-check",
+        description="Check results files (certora-autoprover-results/1), or print the format's "
         "JSON Schema.",
     )
     parser.add_argument("files", nargs="*", type=Path, metavar="FILE")
+    parser.add_argument("--root", type=Path, default=Path("."),
+                        help="The project: the results repository's working tree (default: .).")
+    parser.add_argument("--skip", action="append", default=[], metavar="DIR",
+                        help="A project-relative directory whose specs are not searched for tags.")
     parser.add_argument("--schema", action="store_true",
                         help="Print the JSON Schema, with every field's description, and exit.")
     args = parser.parse_args(argv)
@@ -194,7 +236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"error: {path}: {e}", file=sys.stderr)
             errors += 1
             continue
-        problems = check(raw)
+        problems = check(raw, args.root, args.skip)
         for p in problems:
             print(f"{p.severity}: {path}: {p.where}: {p.message}", file=sys.stderr)
         n_err = sum(p.severity == "error" for p in problems)
