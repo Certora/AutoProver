@@ -3,8 +3,8 @@ format, and prints the format's JSON Schema.
 
 A file is checked in two steps. First its shape: the fields, their types and the values they may
 take. Then what the shape alone cannot express: ids are unique, every id a finding or property
-names exists, a finding's evidence repeats rule results of the property it names, every rule is
-under the run's ``certora_dir``, and every job URL is an anonymous link. These are errors.
+names exists, a finding's evidence repeats rule results of the property it names, and every rule
+is under the run's ``certora_dir``. These are errors.
 
 The text of findings and properties is also searched for a run's internal vocabulary (judge
 rounds, unit finding ids, ``CEX``, ...). The patterns can also match ordinary text, e.g. "round 2"
@@ -20,12 +20,10 @@ from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlsplit
 
 from pydantic import ValidationError
 
 from composer.findings.model import FindingsFile, RuleResult
-from composer.prover.cloud import parse_cloud_link
 
 #: Internal vocabulary of a run, each with what to write instead.
 VOCABULARY: tuple[tuple[re.Pattern[str], str], ...] = tuple(
@@ -66,19 +64,6 @@ def _duplicates(ids: Sequence[str]) -> list[str]:
 
 def _rule_key(r: RuleResult) -> tuple[str, str, str]:
     return (r.rule, r.spec, r.conf)
-
-
-def _job_url_problem(url: str) -> str | None:
-    parts = urlsplit(url)
-    if parts.scheme != "https":
-        return "is not an https URL"
-    if parts.path.endswith("/"):
-        return "ends its path with '/', which breaks the anonymous link"
-    try:
-        parse_cloud_link(url)
-    except ValueError as e:
-        return str(e)
-    return None
 
 
 def _texts(data: FindingsFile) -> Iterator[tuple[str, str]]:
@@ -154,8 +139,6 @@ def check_consistency(data: FindingsFile) -> list[Problem]:
             for name, path in (("spec", r.spec), ("conf", r.conf)):
                 if not path.startswith(root):
                     error(f"{at}.{name}", f"{path!r} is not under run.results.certora_dir {root!r}")
-            if (why := _job_url_problem(r.job_url)) is not None:
-                error(f"{at}.job_url", f"{r.job_url!r} {why}")
 
     return problems
 

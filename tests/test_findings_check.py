@@ -7,7 +7,7 @@ import pytest
 
 from composer.findings.check import check, main, schema
 
-JOB = "https://prover.certora.com/output/1/abc?anonymousKey=k1"
+JOB = "https://prover.certora.com/output/1/abc"
 
 RULE = {
     "rule": "withdraw_never_reverts",
@@ -112,20 +112,6 @@ def test_evidence_must_name_a_property_that_lists_the_finding_and_has_its_rules(
     assert "findings[0].evidence[0].property: no property has id 'nowhere'" in messages(raw)
 
 
-@pytest.mark.parametrize(("url", "why"), [
-    ("https://prover.certora.com/output/1/abc", "No anonymousKey"),
-    ("https://prover.certora.com/abc?anonymousKey=k1", "Unexpected cloud link format"),
-    ("https://prover.certora.com/output/1/abc/?anonymousKey=k1", "ends its path with '/'"),
-    ("http://prover.certora.com/output/1/abc?anonymousKey=k1", "not an https URL"),
-])
-def test_job_urls_are_anonymous_links(url: str, why: str) -> None:
-    raw = valid()
-    raw["properties"][0]["rules"][0] = {**RULE, "job_url": url}
-    raw["findings"][0]["evidence"][0]["rules"][0] = {**RULE, "job_url": url}
-    found = messages(raw)
-    assert any(m.startswith("properties[0].rules[0].job_url:") and why in m for m in found)
-
-
 def test_rules_are_under_the_results_directory() -> None:
     raw = valid()
     raw["run"]["results"]["certora_dir"] = "certora/vault"
@@ -162,4 +148,5 @@ def test_schema_describes_the_format() -> None:
     assert s["$id"] == "certora-autoprover-findings/1"
     assert "schema" in s["properties"]
     rule = s["$defs"]["RuleResult"]
-    assert "anonymousKey" in rule["properties"]["job_url"]["description"]
+    assert rule["required"] == ["rule", "spec", "conf", "result", "job_url"]
+    assert rule["properties"]["spec"]["description"] == "Spec path in the results repository."

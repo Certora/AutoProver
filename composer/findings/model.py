@@ -66,8 +66,7 @@ class RuleResult(_Strict):
     conf: str = Field(description="Conf path in the results repository the job ran.")
     result: RuleOutcome
     job_url: str = Field(
-        description="The final prover job for this rule's current text, with its anonymousKey "
-        "query parameter, e.g. https://prover.certora.com/output/<user>/<job>?anonymousKey=<key>. "
+        description="The final prover job for this rule's current text. "
         "Its sources and conf match the results repository at run.results.commit."
     )
 
