@@ -226,6 +226,7 @@ tui-foundry = "composer.cli.tui_foundry:main"
 # and only fails, as an ImportError, when someone runs it.
 autoprove-report-render = "composer.spec.source.report.render:main"
 validate-properties = "composer.pipeline.property_tags:main"
+certora-findings-check = "composer.findings.check:main"
 tui-natspec = "composer.cli.tui_pipeline:main"
 cache-natspec = "composer.cli.cache_natspec:main"
 cache-autoprove = "composer.cli.cache_autoprove:main"
