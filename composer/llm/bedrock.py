@@ -30,13 +30,17 @@ on Bedrock requests, so an account with a small quota can reserve less per reque
 
 Bedrock errors reach the run-wide retry policy as the Anthropic SDK raises them (see
 :meth:`composer.llm.anthropic.AnthropicService.should_retry`): throttling and server errors by
-their HTTP status, like on the Anthropic API.
+their HTTP status, like on the Anthropic API. Bedrock can also end an open response stream with
+an exception frame, which the SDK raises as a plain ``ValueError`` that names the frame's
+``:exception-type``; :func:`is_transient_stream_exception` reads that type, so the transient
+ones are retried too.
 
 Kept free of langchain imports so the registry can use the id predicates cheaply. The chat
 model is langchain-aws's ``ChatAnthropicBedrock``, built in :mod:`composer.llm.anthropic`.
 """
 
 import os
+import re
 from typing import Literal
 
 
@@ -116,6 +120,39 @@ for the rest of the conversation."""
 def base64_size(raw_size: int) -> int:
     """The length of the base64 encoding of ``raw_size`` bytes, padding included."""
     return 4 * ((raw_size + 2) // 3)
+
+
+TRANSIENT_STREAM_EXCEPTIONS: frozenset[str] = frozenset({
+    "internalserverexception",
+    "modelstreamerrorexception",
+    "modeltimeoutexception",
+    "serviceunavailableexception",
+    "throttlingexception",
+})
+"""The exception types, lowercased, with which Bedrock ends a response stream on a failure that
+a later attempt can avoid. The others, such as ``validationException``, fail the same way on
+every attempt."""
+
+_STREAM_EXCEPTION_PREFIX = "Bad response code, expected 200:"
+_STREAM_EXCEPTION_TYPE = re.compile(r"""['"]:exception-type['"]:\s*['"]([A-Za-z]+)['"]""")
+
+
+def stream_exception_type(exc: BaseException) -> str | None:
+    """The ``:exception-type`` of the exception frame that ended a response stream, lowercased,
+    when ``exc`` is the ``ValueError`` the Anthropic SDK raises for one; else ``None``."""
+    if not isinstance(exc, ValueError):
+        return None
+    message = str(exc)
+    if not message.startswith(_STREAM_EXCEPTION_PREFIX):
+        return None
+    match = _STREAM_EXCEPTION_TYPE.search(message)
+    return match.group(1).lower() if match else None
+
+
+def is_transient_stream_exception(exc: BaseException) -> bool:
+    """Whether ``exc`` is an exception frame that ended a response stream with one of
+    :data:`TRANSIENT_STREAM_EXCEPTIONS`."""
+    return stream_exception_type(exc) in TRANSIENT_STREAM_EXCEPTIONS
 
 
 class BedrockDocumentError(ValueError):
