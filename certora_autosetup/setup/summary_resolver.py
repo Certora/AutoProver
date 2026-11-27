@@ -55,6 +55,13 @@ _AST_EXTRACTION_JAR = "ASTExtraction.jar"
 # `range` values still index the original file.
 _IMPORT_LINE_RE = re.compile(r'^\s*import\s+"')
 
+# The standalone syntax-check rejects every CVL `use rule ...` / `use invariant ...` declaration
+# with this error, even one naming a rule of the same file, and reports one per parse. A `use`
+# can span lines (a `preserved` block), so the parser's own range for it is blanked. A `use`
+# only selects which rules run, so the AST without it holds the same rules, invariants, methods
+# and summaries.
+_USE_DECLARATION_ERROR = "'use' declarations of imported rules or invariants are unsupported"
+
 _VISIBILITY_INTERNAL = "INTERNAL"
 _WILDCARD_TARGET = "WildcardTarget"
 
@@ -107,7 +114,7 @@ def _vmtype_to_str(vmtype: dict) -> str:
     return base
 
 
-def _parse_ast_payload(stdout: str, returncode: int, stderr: str) -> Optional[dict]:
+def _decode_ast_payload(stdout: str, returncode: int, stderr: str) -> dict:
     """Parse the JSON AST payload from ``ASTExtraction.jar`` stdout.
 
     The jar prints ``Warning: …`` / ``Error: …``
@@ -115,8 +122,7 @@ def _parse_ast_payload(stdout: str, returncode: int, stderr: str) -> Optional[di
     exactly once as the final output (on both the success and syntax-error paths).
     So we drop the leading diagnostic lines and parse the remainder — rather than
     ``json.loads`` the whole stream, which fails at char 0 on the first warning.
-    Returns the decoded payload, or ``None`` when the jar produced no AST
-    (``ast`` is null — a hard syntax error left for the TypecheckerLoop backstop).
+    Returns the decoded payload, diagnostics included, whether or not it holds an AST.
     """
     lines = stdout.splitlines()
     # Only LEADING diagnostic lines precede the JSON; never strip inside the payload.
@@ -134,17 +140,15 @@ def _parse_ast_payload(stdout: str, returncode: int, stderr: str) -> Optional[di
             f"{_AST_EXTRACTION_JAR} output was not JSON after stripping diagnostics "
             f"(exit {returncode}): {exc}; stdout_head={stdout!r} stderr={stderr.strip()!r}"
         )
-    return payload if payload.get("ast") else None
+    return payload
 
 
-def _ast_extraction(blanked_source: str) -> Optional[dict]:
+def _run_ast_extraction(blanked_source: str) -> dict:
     """Run ``ASTExtraction.jar syntax-check`` on CVL source, return the parsed JSON.
 
     Feeds the (import-blanked) source on stdin via ``--raw``. Returns the decoded
-    payload, or ``None`` if the jar could not produce an AST (``ast`` is null) — which
-    means a hard syntax error the caller should leave for the TypecheckerLoop backstop.
-    Non-fatal diagnostics (e.g. "no reason provided for assumption") still yield an AST
-    and are ignored here.
+    payload with its diagnostics; ``ast`` is null when the jar could not produce one.
+    Non-fatal diagnostics (e.g. "no reason provided for assumption") still yield an AST.
     """
     # find_jar only computes a path; it does not verify the jar is present. Fail loud
     # here rather than letting `java -jar <missing>` die with an opaque JSONDecodeError.
@@ -157,7 +161,30 @@ def _ast_extraction(blanked_source: str) -> Optional[dict]:
         capture_output=True,
         text=True,
     )
-    return _parse_ast_payload(result.stdout, result.returncode, result.stderr)
+    return _decode_ast_payload(result.stdout, result.returncode, result.stderr)
+
+
+def _use_declaration_ranges(payload: dict) -> List[dict]:
+    """The ``range`` of each `use` declaration the parser rejected in ``payload``."""
+    return [
+        d["error"]["range"] for d in payload["diagnostics"]
+        if d["severity"] == "ERROR" and d["error"]["message"].startswith(_USE_DECLARATION_ERROR)
+    ]
+
+
+def _blank_range(source: str, rng: dict) -> str:
+    """``source`` with the text of a parser ``range`` replaced by spaces. Lines count from 0 and
+    ``charByteOffset`` counts UTF-8 bytes within its line, end exclusive. Newlines stay, so every
+    other range still indexes the same text."""
+    lines = source.splitlines(keepends=True)
+    first, last = rng["start"]["line"], rng["end"]["line"]
+    for n in range(first, last + 1):
+        raw = lines[n].encode()
+        body = raw.rstrip(b"\r\n")
+        start = rng["start"]["charByteOffset"] if n == first else 0
+        end = rng["end"]["charByteOffset"] if n == last else len(body)
+        lines[n] = (body[:start] + b" " * (end - start) + body[end:] + raw[len(body):]).decode()
+    return "".join(lines)
 
 
 def extract_cvl_ast(source: str) -> Optional[dict]:
@@ -166,11 +193,22 @@ def extract_cvl_ast(source: str) -> Optional[dict]:
 
     Import lines are blanked first (preserving line numbering, so the AST
     ``range`` values still index the original text) since standalone
-    syntax-check rejects them. Jar-missing / no-JSON failures raise, matching
-    the rest of this module."""
+    syntax-check rejects them. `use` declarations are blanked by the range the
+    parser reports for each (see ``_USE_DECLARATION_ERROR``). Jar-missing /
+    no-JSON failures raise, matching the rest of this module."""
     lines = source.splitlines(keepends=True)
     blanked = "".join("\n" if _IMPORT_LINE_RE.match(line) else line for line in lines)
-    return _ast_extraction(blanked)
+    # Each pass blanks at least one declaration, so there are at most as many passes as lines.
+    for _ in range(len(lines) + 1):
+        payload = _run_ast_extraction(blanked)
+        if payload["ast"]:
+            return payload
+        uses = _use_declaration_ranges(payload)
+        if not uses:
+            return None
+        for rng in uses:
+            blanked = _blank_range(blanked, rng)
+    return None
 
 
 def toplevel_decl_spans(payload: Optional[dict]) -> List[Tuple[Optional[str], int, int]]:
