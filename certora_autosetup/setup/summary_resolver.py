@@ -32,7 +32,6 @@ and ``fullSignature`` parameter types.
 """
 
 import json
-import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,19 +47,6 @@ from certora_autosetup.utils.constants import SUMMARIES_SUBDIR
 LogFn = Callable[[str, str], None]
 
 _AST_EXTRACTION_JAR = "ASTExtraction.jar"
-
-# CVL `import "...";` lines are rejected by ASTExtraction's standalone syntax-check
-# ("'import' declarations of .spec files are unsupported"). We blank them out before
-# parsing — replacing each with an empty line preserves the line numbering so the AST
-# `range` values still index the original file.
-_IMPORT_LINE_RE = re.compile(r'^\s*import\s+"')
-
-# The standalone syntax-check rejects every CVL `use rule ...` / `use invariant ...` declaration
-# with this error, even one naming a rule of the same file, and reports one per parse. A `use`
-# can span lines (a `preserved` block), so the parser's own range for it is blanked. A `use`
-# only selects which rules run, so the AST without it holds the same rules, invariants, methods
-# and summaries.
-_USE_DECLARATION_ERROR = "'use' declarations of imported rules or invariants are unsupported"
 
 _VISIBILITY_INTERNAL = "INTERNAL"
 _WILDCARD_TARGET = "WildcardTarget"
@@ -143,10 +129,10 @@ def _decode_ast_payload(stdout: str, returncode: int, stderr: str) -> dict:
     return payload
 
 
-def _run_ast_extraction(blanked_source: str) -> dict:
+def _run_ast_extraction(source: str) -> dict:
     """Run ``ASTExtraction.jar syntax-check`` on CVL source, return the parsed JSON.
 
-    Feeds the (import-blanked) source on stdin via ``--raw``. Returns the decoded
+    Feeds the source on stdin via ``--raw``. Returns the decoded
     payload with its diagnostics; ``ast`` is null when the jar could not produce one.
     Non-fatal diagnostics (e.g. "no reason provided for assumption") still yield an AST.
     """
@@ -157,58 +143,22 @@ def _run_ast_extraction(blanked_source: str) -> dict:
         raise FileNotFoundError(f"{_AST_EXTRACTION_JAR} not found at {jar} — cannot parse CVL summaries")
     result = subprocess.run(
         ["java", "-jar", str(jar), "syntax-check", "--raw"],
-        input=blanked_source,
+        input=source,
         capture_output=True,
         text=True,
     )
     return _decode_ast_payload(result.stdout, result.returncode, result.stderr)
 
 
-def _use_declaration_ranges(payload: dict) -> List[dict]:
-    """The ``range`` of each `use` declaration the parser rejected in ``payload``."""
-    return [
-        d["error"]["range"] for d in payload["diagnostics"]
-        if d["severity"] == "ERROR" and d["error"]["message"].startswith(_USE_DECLARATION_ERROR)
-    ]
-
-
-def _blank_range(source: str, rng: dict) -> str:
-    """``source`` with the text of a parser ``range`` replaced by spaces. Lines count from 0 and
-    ``charByteOffset`` counts UTF-8 bytes within its line, end exclusive. Newlines stay, so every
-    other range still indexes the same text."""
-    lines = source.splitlines(keepends=True)
-    first, last = rng["start"]["line"], rng["end"]["line"]
-    for n in range(first, last + 1):
-        raw = lines[n].encode()
-        body = raw.rstrip(b"\r\n")
-        start = rng["start"]["charByteOffset"] if n == first else 0
-        end = rng["end"]["charByteOffset"] if n == last else len(body)
-        lines[n] = (body[:start] + b" " * (end - start) + body[end:] + raw[len(body):]).decode()
-    return "".join(lines)
-
-
 def extract_cvl_ast(source: str) -> Optional[dict]:
     """Parse CVL source text via the standalone CVL parser and return the full
     payload, or ``None`` on a hard syntax error.
 
-    Import lines are blanked first (preserving line numbering, so the AST
-    ``range`` values still index the original text) since standalone
-    syntax-check rejects them. `use` declarations are blanked by the range the
-    parser reports for each (see ``_USE_DECLARATION_ERROR``). Jar-missing /
-    no-JSON failures raise, matching the rest of this module."""
-    lines = source.splitlines(keepends=True)
-    blanked = "".join("\n" if _IMPORT_LINE_RE.match(line) else line for line in lines)
-    # Each pass blanks at least one declaration, so there are at most as many passes as lines.
-    for _ in range(len(lines) + 1):
-        payload = _run_ast_extraction(blanked)
-        if payload["ast"]:
-            return payload
-        uses = _use_declaration_ranges(payload)
-        if not uses:
-            return None
-        for rng in uses:
-            blanked = _blank_range(blanked, rng)
-    return None
+    The AST keeps the spec's `import` and `use` declarations; the imported files
+    are not read. Jar-missing / no-JSON failures raise, matching the rest of this
+    module."""
+    payload = _run_ast_extraction(source)
+    return payload if payload["ast"] else None
 
 
 def toplevel_decl_spans(payload: Optional[dict]) -> List[Tuple[Optional[str], int, int]]:
