@@ -33,7 +33,9 @@ from typing import Literal
 from certora_autosetup.setup.summary_resolver import extract_cvl_ast
 from pydantic import ValidationError
 
-from composer.pipeline.user_properties import PROPERTY_FILE_SUFFIX, UserProperty, UserPropertyFile
+from composer.pipeline.user_properties import (
+    PROPERTY_FILE_SUFFIX, PropertySuite, UserProperty, UserPropertyFile,
+)
 
 PROPERTY_TAG = "@property"
 
@@ -371,7 +373,7 @@ def check_suite(root: Path, suite: str, skipped: Iterable[str] = ()) -> SuiteChe
     definitions. ``skipped`` holds project-relative posix paths of directories not to search
     (``iter_files``)."""
     try:
-        loaded = UserPropertyFile.load_suite(root / suite)
+        loaded = PropertySuite.load(root / suite)
     except (OSError, ValueError) as e:
         return SuiteCheck({}, [Problem("error", "suite-does-not-load", str(e), suite)])
     ids = [p.id for p in loaded.properties]

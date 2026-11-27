@@ -105,6 +105,7 @@ AUTOPROVER_USER_PROPERTIES=certora/suites/rounding.property-suite.json \
 
 ```json
 {
+  "component": {"name": "Shares", "description": "Minting and burning vault shares."},
   "imports": ["common.property-suite.json"],
   "groups": [{"name": "Rounding", "description": "How shares are rounded on mint and burn."}],
   "properties": [
@@ -116,23 +117,25 @@ AUTOPROVER_USER_PROPERTIES=certora/suites/rounding.property-suite.json \
 
 | Field | Meaning |
 |---|---|
-| `imports` | Other properties files, as paths relative to this file. Each brings in all of its properties and groups, and those of the files it imports. Optional. |
-| `groups` | Each group's `name` and an optional `description`. Optional. |
-| `properties` | Each property's `id` (its title, unique in the suite), `description`, `sort` (`invariant`, `safety_property` or `attack_vector`; default `safety_property`) and optional `group`. |
+| `component` | The component of the main contract whose properties the file defines: its `name` and `description`, both non-empty. Required when the file defines properties; a file that only imports has none. |
+| `imports` | Other properties files, as paths relative to this file. Each brings in its component and those of the files it imports. Optional. |
+| `groups` | Subgroups of the file's properties: each group's `name` and an optional `description`. Optional. |
+| `properties` | Each property's `id` (its title, unique in the suite), `description`, `sort` (`invariant`, `safety_property` or `attack_vector`; default `safety_property`), optional `group` (a group of the same file) and `source`: where it came from, `property_generator`, `added` (by the suite's author while verifying) or `user` (default). |
 
-Each group becomes one component of the main contract, with the group's description. A property
-without a group goes to the component `Properties`. The system model holds the main contract and
-these components and nothing else: the components have no entry points, state or interactions,
-so a step that reads them (the native per-component prompts) has only the group's name and
-description to go on.
+A property's component is the file that defines it. Each file's component becomes one component
+of the main contract, with the component's description and the file's properties; a component
+with no property is left out. Imports only collect files: a file that defines properties and
+imports others is the component of its own properties only. The system model holds the main
+contract and these components and nothing else: the components have no entry points, state or
+interactions, so a step that reads them (the native per-component prompts) has only the
+component's name and description to go on.
 
 A property is defined in one file. Suites that share properties import the file that defines
 them, and an aggregate suite can be a file with only `imports`. Loading a suite fails on:
 
 * a cycle of imports;
 * an id that two files of the suite define (a file reached along two import paths counts once);
-* a group that two files of the suite describe differently (a group named without a description
-  takes the description another file gives).
+* a component that two files of the suite name.
 
 Name every properties file `*.property-suite.json` (`PROPERTY_FILE_SUFFIX`). A tool that reads a
 repo's other suites finds them by that name, so every file with the name must read as a properties
