@@ -1,0 +1,136 @@
+### Property classes — the questions to work through
+
+Naming a failure mode is not the same as asking a question. "Consider front-running"
+produces nothing. "If an actor sees this call before it lands, what is it worth to place a
+transaction immediately before it?" produces a property, or a reason there is none. Below
+are the questions to work through for every {{ unit_noun }}, whatever the application does.
+Most will not apply, and saying why one does not apply is a real answer.
+
+Work the whole list before you draft. In your `reasoning`, record each class you considered
+with either the property it produced or one line on why this {{ unit_noun }} does not expose
+that surface. A class you never mention reads as a class you never thought about, and that
+is how half a system ends up with no properties while the other half has twenty.
+
+#### Before any property: name who is harmed
+
+Take the property you are about to write and assume it is false. Say who is worse off. If
+the answer is "nobody, the system would just behave differently", you have described the
+implementation rather than stated a property.
+
+The strongest signal that this has happened is that you could have written the property by
+reading one function body. Properties come from what the system owes its participants, not
+from what its code currently does. A property derived from the code cannot fail, because
+the code is its definition. When the code is wrong, a green rule then certifies the bug
+instead of catching it.
+
+#### The questions
+
+**Value conservation.** Can the total of everything the system owes exceed what it holds,
+and who can make that happen? This applies wherever the {{ unit_noun }} records claims
+against a pool of assets: shares, debt, queued payouts, escrowed balances, accrued rewards.
+State it as an invariant relating the backing to the sum of outstanding claims, and as a
+safety property that no external call raises the claims without raising the backing. Watch
+for the claims that live outside the obvious accumulator, such as a pending queue, an
+uncollected fee, or a position mid-settlement.
+
+**Who absorbs a change in value over time.** A flow captures an amount, price, rate or
+exchange ratio at one moment and acts on it later. In between, the backing moves: yield
+accrues, a loss is realized, a fee is charged, a rate is updated. Someone absorbs that
+movement. This applies to every two-step flow, including request then settle, queue then
+finalize, commit then reveal, deposit then redeem, and quote then execute.
+
+The property states the intended attribution: that a decrease in backing between the two
+points reduces what is settled, or that it is borne by the remaining participants rather
+than the leaving one, or whatever the design actually promises. It is not "the settled
+amount equals the amount recorded earlier". That second form is the implementation
+restated. When the attribution is wrong, that form is precisely the bug, and proving it
+green certifies the bug as correct behavior.
+
+**What going first is worth.** If an actor sees a pending call, what is it worth to place a
+transaction immediately before or after it, and can they afford to? This applies wherever
+observable state feeds a price, rate, share count or fee, and some function updates that
+state. Express it as the absence of a profitable sequence: acting, moving the state, and
+acting back leaves the actor no better off than not acting at all. The participant's own
+defense belongs to this class. A call that commits value at a rate the caller cannot bound,
+with no minimum received, no maximum paid and no deadline, is exposed by construction, and
+the missing bound is itself the finding.
+
+**Which way each division rounds, and who gains.** Every division rounds, and rounding
+always favors one side. For each conversion between units, ask which direction it goes and
+whether that direction favors the participant or the system. This applies to any division,
+any truncation to a coarser precision, and any pair of functions that convert in opposite
+directions. State it as: a round trip never returns more than it consumed, a conversion and
+its inverse cannot be repeated for profit, and a remainder lost to truncation is refunded
+or accounted rather than silently dropped. Truncation at a precision boundary deserves its
+own look, because the lost remainder is usually invisible in the arithmetic that follows.
+
+**The empty state and the first participant.** What does the {{ unit_noun }} do when it
+holds nothing, or exactly one unit? Can someone move its holdings directly, without going
+through the accounting that is supposed to track them? This applies wherever a price or
+share is a ratio of two quantities and either quantity can be changed from outside. State
+it as: a non-trivial deposit always mints a non-zero share, and a direct transfer into the
+{{ unit_noun }} cannot move the share price in a way that profits the sender.
+
+**What must not be blocked, and who can block it.** Which operations must succeed, for
+whom, and who is in a position to stop them? Every property of the form "if the call
+succeeds, the effects are correct" is silent about a call that never succeeds, so a system
+can satisfy all of them and still be unusable. This applies wherever the {{ unit_noun }}
+loops over participants, hands control to an address a participant chose, gates an
+operation behind a threshold or a queue position, or depends on an external system that can
+fail. State it as: under stated preconditions, such as a sufficient balance, an authorized
+caller and a well-formed request, the call does not revert. Formalize it with a reverting
+call and an assertion that it did not revert, and model the untrusted callee as free to
+revert, so the property has something to prove.
+
+Two traps here. A reachability or `satisfy` rule shows that some execution succeeds, which
+is not the claim that matters. And a threshold or minimum meant as a guard rail is a
+blocking question in disguise: a participant holding less than the minimum may have no way
+out at all.
+
+**Who the attacker is allowed to be.** For each privileged action, who may perform it, and
+does your rule's adversary respect that? This applies wherever the source checks a role, an
+owner, or a trusted caller. The ordinary half is that an unprivileged caller cannot reach a
+privileged effect, and that a role cannot grant itself more than it has. The other half is
+a discipline on every rule you write about an adversary, whether a re-entering callee, a
+malicious counterparty or an arbitrary caller: constrain that adversary so it does not hold
+the privileges the source grants to trusted parties. A counterexample in which a trusted
+administrator attacks the system it administers is not a finding. It will be rejected
+downstream, and it crowds out the real ones. Privilege transitions belong here too,
+including any handover that can leave the system with no holder of a required role.
+
+**How stale a value from elsewhere may be.** The {{ unit_noun }} reads values produced
+somewhere else: an oracle, another contract, another chain, a cached rate, a balance an
+external process updates. How old may such a value be when it is acted on, and what does
+its age cost? This applies to any read whose source updates independently of the call that
+reads it. State it as: a value older than a stated bound cannot be acted on, two reads
+within one transaction agree, and updating the source and using it within the same block
+does not combine into a profit.
+
+**What a re-entering actor can actually do.** At the moment the {{ unit_noun }} hands
+control to an address someone else controls, which of its own invariants are temporarily
+false, and what can be done while they are? This applies to every external call, value
+transfer and callback that sits before the state updates which follow it. Ask it as a
+question about state, not about code shape. "The transfer happens before the write" is an
+observation about the implementation. The property is that the invariant holds at the
+moment control leaves, or that no re-entrant path can observe or exploit the gap. The two
+differ: a system can have the pattern and no exploitable gap, and a system can follow the
+pattern and still expose one through a second entry point.
+
+**Fees, splits and intermediaries.** Where value is divided, whether as a fee, a split, a
+referral share or a retained portion, does the sum of what every party receives equal what
+was paid? Can a fee be taken twice, skipped through an alternative path, or applied to a
+quantity it was not meant to apply to? This applies wherever a parameter scales an amount
+before it is paid out.
+
+**Lifecycle and the states a system can be in.** Which states can the {{ unit_noun }} be in,
+which transitions exist between them, and which operations must remain available in each?
+This applies wherever there is a pause switch, a phase, a deadline, or a one-way migration.
+The interesting properties connect the halves: an operation that must stay available while
+another is suspended, a transition that must not strand value on either side, and a state
+nothing can leave.
+
+**Two roles, one address.** What happens when two parties in a flow are the same address,
+such as sender and recipient, or an operator acting on their own behalf? What happens at
+the extremes of an amount, zero and the maximum? This applies to any function taking more
+than one address, or an amount with no stated bounds. Keep it short: it is one property
+when the collapse breaks an accounting step, and nothing when it does not.
