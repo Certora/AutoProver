@@ -615,6 +615,16 @@ class EvaluationSummary(BaseModel):
     properties: PropertyCounts = Field(default_factory=PropertyCounts)
 
 
+class EvaluatedInputs(BaseModel):
+    """What an evaluate run evaluated besides the project's specs, as paths relative to the
+    project root."""
+    #: The ``*.property-suite.json`` whose properties the run evaluated. Its components are the
+    #: report's groups.
+    property_suite: str = Field(min_length=1)
+    #: The verification results file the run reviewed, or ``None`` when it reviewed none.
+    verification_results: str | None = None
+
+
 class SpecCoverageScore(BaseModel):
     """A named coverage score with its per-view breakdown, e.g. a static measure of how much of
     the code the specs constrain. The producer names the score and its views."""
@@ -688,7 +698,9 @@ groups."""
 
 class AutoProverReport(BaseModel):
     """Top-level report document — written to ``certora/ap_report/report.json``."""
-    schema_version: Literal["3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8"] = "3.8"
+    schema_version: Literal[
+        "3.0", "3.1", "3.2", "3.3", "3.4", "3.5", "3.6", "3.7", "3.8", "3.9",
+    ] = "3.9"
     backend: ReportBackend = "prover"
     #: How much of the inferred property set the run pursued ("comprehensive", "prioritized", or
     #: "evaluate" for a run that checked the project's own specs). Absent on reports written
@@ -745,6 +757,9 @@ class AutoProverReport(BaseModel):
     #: The counts of an evaluate run's specs, confs, rules and properties. None for any other run
     #: mode.
     evaluation_summary: EvaluationSummary | None = None
+    #: The property suite and the verification results an evaluate run evaluated. ``None`` when the
+    #: run inferred its properties, and on reports written before schema 3.9.
+    evaluated: EvaluatedInputs | None = None
     #: Set only on the report written in place of one the run did not produce — because it ended
     #: before its report phase, or because building its report failed. That report carries the
     #: run's identity and nothing else. ``None`` on every report a run built, and on reports written
