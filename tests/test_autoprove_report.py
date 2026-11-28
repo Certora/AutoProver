@@ -39,7 +39,7 @@ from composer.spec.source.report.grouping import (
 )
 from composer.spec.source.report.render import render_html
 from composer.spec.source.report.schema import (
-    AutoProverReport, ConfCoverage, ConfRunRecord, ConfStatusCounts, CoverageReport, EvaluationSummary, PropertyCounts, RuleOutcomeCounts, SpecStatusCounts, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
+    AutoProverReport, ConfCoverage, ConfRunRecord, ConfStatusCounts, CoverageReport, EvaluatedInputs, EvaluationSummary, PropertyCounts, RuleOutcomeCounts, SpecStatusCounts, CurtailedComponent, CurtailedSkip, DraftedProperty, Finding, FindingProvenance, FormalizedProperty,
     GaveUpComponent, GroupStatus, ImpactLevel, IssueContent, LikelihoodLevel, Mutant, MutationReport, Outcome,
     PropertyCoverage, PropertyGroup, RuleFeedback, RuleVerdict, SeverityTier, SkippedClaim,
     SpecCoverageScore, DeprioritizedProperty, Prioritization, PursuedProperty,
@@ -1357,7 +1357,7 @@ def _evaluate_report() -> AutoProverReport:
 
 def test_evaluate_statuses_and_summary_round_trip():
     report = _evaluate_report()
-    assert report.schema_version == "3.8"
+    assert report.schema_version == "3.9"
     reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
     assert reloaded == report
     # The orphan survives the round trip: a rule with no property pointing at it.
@@ -1371,6 +1371,17 @@ def test_evaluate_statuses_and_summary_round_trip():
     assert reloaded.evaluation_summary is not None
     assert reloaded.evaluation_summary.confs == ConfStatusCounts(in_scope=1, ran=1)
 
+
+
+def test_a_report_states_what_its_evaluate_run_evaluated() -> None:
+    assert _evaluate_report().evaluated is None
+    evaluated = EvaluatedInputs(property_suite="certora/properties/full.property-suite.json",
+                                verification_results="certora/report/verification-results.json")
+    report = _evaluate_report().model_copy(update={"evaluated": evaluated})
+    reloaded = AutoProverReport.model_validate_json(report.model_dump_json())
+    assert reloaded.evaluated == evaluated
+    with pytest.raises(PydanticValidationError):
+        EvaluatedInputs.model_validate({"verification_results": "certora/report/verification-results.json"})
 
 def test_conf_coverage_states_its_statuses() -> None:
     with pytest.raises(PydanticValidationError):
